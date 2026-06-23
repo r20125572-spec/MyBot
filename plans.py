@@ -5,10 +5,9 @@ import random
 import string
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, ContextTypes
+from telegram.ext import CommandHandler, MessageHandler, filters, ContextTypes
 from config import OWNER_ID
 
-# Fallback in case SUPPORT_LINK is missing in config
 try:
     from config import SUPPORT_LINK
 except ImportError:
@@ -67,17 +66,25 @@ def get_user_ui_text(user_id: int) -> str:
     credits_txt = "∞ Uɴʟɪᴍɪᴛᴇᴅ" if is_premium(user_id) else str(user['credits'])
     return f"Aᴄᴄᴇꜱꜱ ➺ {plan}\nCʀᴇᴅɪᴛꜱ ➺ {credits_txt}"
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FIXED /sub COMMAND (Handles spaces correctly) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not context.args: await update.message.reply_text("❌ Usage: /sub<userid>Elite"); return
-    match = re.match(r"(\d+)(Elite|Root)", context.args[0])
+    if not context.args: await update.message.reply_text("❌ Usage: /sub <id>Elite\nExample: /sub 123456789 Elite"); return
+    
+    # Join all args to fix issue if user types "/sub 123456789 Elite" with a space
+    raw = "".join(context.args)
+    match = re.match(r"(\d+)(Elite|Root)", raw)
     if not match: await update.message.reply_text("❌ Use /sub<id>Elite or /sub<id>Root"); return
+    
     target_id, plan_name = match.group(1), match.group(2)
     days = 15 if plan_name == "Elite" else 30
     now = datetime.now()
     db = load_db(DB_FILE)
     db[target_id] = {"plan": plan_name, "credits": 999999, "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "receipt_id": "PAY-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}
     save_db(DB_FILE, db)
+    
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
     txt = f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\nUꜱᴇʀ ➺ {target_id}\nAᴄᴄᴇꜱꜱ ➺ {plan_name}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nRᴇᴄᴇɪᴘᴛ ID ➺ {db[target_id]['receipt_id']}\n\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
     try:
@@ -107,9 +114,12 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt += f"\nUꜱᴇʀ ID ➺ <code>{uid}</code>\nAᴄᴄᴇꜱꜱ ➺ {u['plan']}\nBᴏᴜɢʜᴛ ➺ {u.get('activated_at', 'N/A')}\nExᴘɪʀᴇꜱ ➺ {u.get('expires_at', 'N/A')}\n━━━━━━━━━━━━━━━━━━━━"
     await update.message.reply_text(txt, parse_mode="HTML")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FIXED /gen COMMAND (Any number of credits) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not context.args or not context.args[0].isdigit(): await update.message.reply_text("❌ Usage: /gen300"); return
+    if not context.args or not context.args[0].isdigit(): await update.message.reply_text("❌ Usage: /gen100\nExample: /gen1000"); return
     amount = context.args[0]
     code = f"CR-{amount}-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     db = load_db(CODES_FILE)
@@ -117,51 +127,59 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_db(CODES_FILE, db)
     await update.message.reply_text(f"🔑 Cʀᴇᴅɪᴛ Cᴏᴅᴇ ({amount}):\n\n<code>{code}</code>", parse_mode="HTML")
 
-async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 NEW /key<n> COMMAND (Replaces oneday/threeday) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    code = "1D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    
+    # Extract number of days from the command (e.g., /key5 -> 5)
+    match = re.match(r"^/key(\d+)$", update.message.text)
+    if not match: return
+    
+    days = int(match.group(1))
+    code = f"KEY-{days}D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     db = load_db(CODES_FILE)
-    db[code] = {"type": "days", "value": 1}
+    db[code] = {"type": "days", "value": days}
     save_db(CODES_FILE, db)
-    await update.message.reply_text(f"🔑 1 Dᴀʏ Aᴄᴄᴇꜱꜱ Cᴏᴅᴇ:\n\n<code>{code}</code>", parse_mode="HTML")
-
-async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    code = "3D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-    db = load_db(CODES_FILE)
-    db[code] = {"type": "days", "value": 3}
-    save_db(CODES_FILE, db)
-    await update.message.reply_text(f"🔑 3 Dᴀʏꜱ Aᴄᴄᴇꜱꜱ Cᴏᴅᴇ:\n\n<code>{code}</code>", parse_mode="HTML")
+    await update.message.reply_text(f"🔑 {days} Dᴀʏꜱ Pʀᴇᴍɪᴜᴍ Kᴇʏ:\n\n<code>{code}</code>", parse_mode="HTML")
 
 async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /rm <code>"); return
     code = context.args[0]
     db = load_db(CODES_FILE)
     if code not in db: await update.message.reply_text("❌ Iɴᴠᴀʟɪᴅ ᴏʀ ᴜꜱᴇᴅ ᴄᴏᴅᴇ."); return
+    
     code_data = db[code]
-    del db[code]
+    del db[code] # Delete immediately
     save_db(CODES_FILE, db)
     user_db = load_db(DB_FILE)
     uid = str(update.effective_user.id)
     
+    # TYPE 1: Credit Code (from /gen)
     if code_data["type"] == "credits":
         user = get_user(update.effective_user.id)
         user['credits'] += code_data["value"]
         user_db[uid] = user
         save_db(DB_FILE, user_db)
         await update.message.reply_text(f"✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ!\n\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ {code_data['value']}\nTᴏᴛᴀʟ Cʀᴇᴅɪᴛꜱ ➺ {user['credits']}", parse_mode="HTML")
+        
+    # TYPE 2: Premium Key Code (from /key)
     else:
         days = code_data["value"]
         now = datetime.now()
-        user_db[uid] = {"plan": f"Code ({days}D)", "credits": 999999, "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "receipt_id": "CODE-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}
+        user_db[uid] = {"plan": f"Key ({days}D)", "credits": 999999, "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "receipt_id": "KEY-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}
         save_db(DB_FILE, user_db)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
-        await update.message.reply_text(f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\nUꜱᴇʀ ➺ {uid}\nAᴄᴄᴇꜱꜱ ➺ {days} Dᴀʏꜱ Cᴏᴅᴇ\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nRᴇᴄᴇɪᴘᴛ ID ➺ {user_db[uid]['receipt_id']}\n\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.", parse_mode="HTML", reply_markup=kb)
+        await update.message.reply_text(f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\nUꜱᴇʀ ➺ {uid}\nAᴄᴄᴇꜱꜱ ➺ {days} Dᴀʏꜱ Kᴇʏ\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nRᴇᴄᴇɪᴘᴛ ID ➺ {user_db[uid]['receipt_id']}\n\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.", parse_mode="HTML", reply_markup=kb)
 
 def get_plans_handler():
     return [
-        CommandHandler("sub", cmd_sub), CommandHandler("resub", cmd_resub),
-        CommandHandler("allplans", cmd_allplans), CommandHandler("gen", cmd_gen),
-        CommandHandler("oneday", cmd_oneday), CommandHandler("threeday", cmd_threeday),
+        CommandHandler("sub", cmd_sub), 
+        CommandHandler("resub", cmd_resub),
+        CommandHandler("allplans", cmd_allplans), 
+        CommandHandler("gen", cmd_gen),
+        # Catches /key1, /key2, /key30 etc dynamically
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^/key\d+$"), cmd_key),
         CommandHandler("rm", cmd_rm)
     ]
