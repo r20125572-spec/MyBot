@@ -10,6 +10,7 @@ from chk import get_chk_handler
 from pp import get_pp_handler
 from sh import get_sh_handler
 from pyu import get_pyu_handler
+from plans import get_plans_handler, get_user_ui_text
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -63,11 +64,14 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
 def ui_profile(user):
     d = datetime.now().strftime("%Y-%m-%d")
     u = user.username or "None"
+    
+    # Get dynamic access and credits from plans.py
+    plan_credits_txt = get_user_ui_text(user.id)
+    
     return (
         f"Uꜱᴇʀ ➺ {u}\n"
         f"Uꜱᴇʀ ID ➺ <code>{user.id}</code>\n"
-        f"Aᴄᴄᴇꜱꜱ ➺ Tʀɪᴀʟ\n"
-        f"Cʀᴇᴅɪᴛꜱ ➺ 150\n"
+        f"{plan_credits_txt}\n"
         f"Jᴏɪɴᴇᴅ ➺ {d}\n"
         f"Dᴇᴠ ➺ <a href='{DEV_LINK}'>Batman</a>"
     )
@@ -206,9 +210,9 @@ async def cmd_allcommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     commands_list = (
         "BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {ver}\n━━━━━━━━━━━━━━━━━━━━\n\n"
         "USER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "▸ /start - Start the bot\n▸ /chk - Stripe charge check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n\n"
+        "▸ /start - Start the bot\n▸ /chk - Stripe charge check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem access code\n\n"
         "OWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "▸ /info - Get user info\n▸ /allcommand - Show this\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━".format(ver=VERSION)
+        "▸ /info - Get user info\n▸ /allcommand - Show this\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /oneday - Gen 1D code\n▸ /threeday - Gen 3D code\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━".format(ver=VERSION)
     )
     await update.message.reply_text(commands_list, parse_mode="HTML")
 
@@ -322,19 +326,29 @@ def main():
     # Anti-Ad System (Deletes user messages with links)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
     
-    # Commands
+    # User Commands
     app.add_handler(CommandHandler("start", cmd_start))
+    
+    # Owner Commands
     app.add_handler(CommandHandler("info", cmd_info))
     app.add_handler(CommandHandler("allcommand", cmd_allcommand))
     
-    # Gates
+    # Gate Handlers (chk, pp, sh, pyu)
     app.add_handler(get_chk_handler())
     app.add_handler(get_pp_handler())
     app.add_handler(get_sh_handler())
     app.add_handler(get_pyu_handler())
     
-    for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
+    # Gate Toggle Commands
+    for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), 
+                ("onpp", cmd_onpp), ("offpp", cmd_offpp), 
+                ("onsh", cmd_onsh), ("offsh", cmd_offsh), 
+                ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd[0], cmd[1]))
+        
+    # Plans & Credits System (sub, resub, allplans, oneday, threeday, rm)
+    for handler in get_plans_handler():
+        app.add_handler(handler)
         
     app.add_handler(CallbackQueryHandler(on_callback))
     
