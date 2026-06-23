@@ -1,5 +1,7 @@
 import aiohttp
 import asyncio
+import time
+import re
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 from config import PP_API, PP_SITE, API_TIMEOUT, get_bin_info, ui_result, kb_result
@@ -12,23 +14,19 @@ async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     card = None
-    # Method 1: Get card from command text
     if context.args:
         card = context.args[0]
-    # Method 2: Get card from replied message
     elif update.message.reply_to_message and update.message.reply_to_message.text:
         card = update.message.reply_to_message.text.strip()
         
-    # If no card details provided at all
     if not card:
-        await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pp cc|mm|yy|cvv",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pp cc|mm|yy|cvv", parse_mode="HTML")
         return
     
     bin_num = card[:6]
     msg = await update.message.reply_text("⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
+    
+    start_time = time.time()
     
     try:
         timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
@@ -42,7 +40,11 @@ async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if isinstance(api_resp, Exception): raise api_resp
         
         data = await api_resp.json()
-        raw = data.get("response", "ERROR")
+        raw = str(data.get("response", "ERROR"))
+        raw = re.sub(r'https?://t\.me/\S+', '', raw)
+        raw = re.sub(r'https?://\S+', '', raw).strip()
+        if not raw: raw = "NO RESPONSE"
+        
         approved = "approved" in raw.lower()
         
         bin_txt, country, flag = "N/A", "N/A", ""
@@ -53,8 +55,11 @@ async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             country = str(bin_data.get("country", "N/A")).upper()
             flag = bin_data.get("country_emoji", "")
             bin_txt = f"{s} - {t} - {b}"
+            
+        end_time = time.time()
+        time_taken = f"{end_time - start_time:.2f}"
         
-        await msg.edit_text(ui_result(card, GATE_NAME, bin_txt, country, flag, raw, update.effective_user, approved), parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+        await msg.edit_text(ui_result(card, GATE_NAME, bin_txt, country, flag, raw, update.effective_user, approved, time_taken), parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
         
     except aiohttp.ClientTimeout:
         await msg.edit_text("⏳ Tɪᴍᴇᴏᴜᴛ", parse_mode="HTML")
