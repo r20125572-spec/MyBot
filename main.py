@@ -16,7 +16,7 @@ from plans import get_plans_handler, get_user_ui_text
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
-SUPPORT_LINK = "https://t.me/failurefr_07" # ✅ CHANGED TO OLDER LINK
+SUPPORT_LINK = "https://t.me/cardchkSupport"
 
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
@@ -88,9 +88,13 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$"
     await update.message.reply_text(t, parse_mode="HTML", reply_markup=kb_price())
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FIXED /info COMMAND (Uses EXACT Bot Database ID) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     target_id = target_input = None
+    
     if update.message.reply_to_message: 
         target_id = update.message.reply_to_message.from_user.id
         target_input = str(target_id)
@@ -98,13 +102,14 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_input = context.args[0]
         target_id = await resolve_user(target_input, context)
     else: 
-        await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n   /info username\n\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
+        await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
         return
 
     if target_id is None: 
         await update.message.reply_text(f"❌ USER NOT FOUND\n\n━━━━━━━━━━━━━━━━━━━━\nCould not resolve: <code>{target_input}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
         return
 
+    # Uses bot's internal database strictly to show exact same ID as /start
     all_users = context.bot_data.get('user_data', {})
     user_info = all_users.get(str(target_id))
     
