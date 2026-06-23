@@ -6,73 +6,54 @@ import string
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
-from config import OWNER_ID, SUPPORT_LINK
+from config import OWNER_ID
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 DATABASE FILES 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Fallback in case SUPPORT_LINK is missing in config
+try:
+    from config import SUPPORT_LINK
+except ImportError:
+    SUPPORT_LINK = "https://t.me/cardchkSupport"
+
 DB_FILE = "plans_db.json"
 CODES_FILE = "codes_db.json"
 
 def load_db(file):
-    if not os.path.exists(file):
-        return {}
-    with open(file, 'r') as f:
-        return json.load(f)
+    if not os.path.exists(file): return {}
+    try:
+        with open(file, 'r') as f: return json.load(f)
+    except Exception: return {}
 
 def save_db(file, data):
-    with open(file, 'w') as f:
-        json.dump(data, f, indent=4)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CORE LOGIC FUNCTIONS 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    with open(file, 'w') as f: json.dump(data, f, indent=4)
 
 def get_user(user_id: int) -> dict:
-    """Get user data. Creates new user with 150 Trial credits if not exists."""
     db = load_db(DB_FILE)
     uid = str(user_id)
     if uid not in db:
-        db[uid] = {
-            "plan": "Trial",
-            "credits": 150,  # ✅ UPDATED TO 150
-            "expires_at": None,
-            "activated_at": None,
-            "receipt_id": None
-        }
+        db[uid] = {"plan": "Trial", "credits": 150, "expires_at": None, "activated_at": None, "receipt_id": None}
         save_db(DB_FILE, db)
     return db[uid]
 
 def is_premium(user_id: int) -> bool:
-    """Check if user has active premium. Auto-reverts to Trial with 0 credits if expired."""
     db = load_db(DB_FILE)
     uid = str(user_id)
     if uid not in db: return False
-    
     user = db[uid]
     if user['plan'] == "Trial": return False
-    
-    # Check expiration
     if user.get('expires_at'):
-        exp_time = datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S")
-        if datetime.now() > exp_time:
-            # Premium Expired -> Revert to Trial with 0 credits
-            user['plan'] = "Trial"
-            user['credits'] = 0 
-            user['expires_at'] = None
-            db[uid] = user
-            save_db(DB_FILE, db)
-            return False
+        try:
+            if datetime.now() > datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S"):
+                db[uid] = {"plan": "Trial", "credits": 0, "expires_at": None, "activated_at": None, "receipt_id": None}
+                save_db(DB_FILE, db)
+                return False
+        except ValueError: pass
     return True
 
 def deduct_credit(user_id: int) -> bool:
-    """Deducts 1 credit. Returns False if out of credits (and not premium)."""
     if is_premium(user_id): return True
-    
     db = load_db(DB_FILE)
     uid = str(user_id)
     user = db[uid]
-    
     if user['credits'] > 0:
         user['credits'] -= 1
         db[uid] = user
@@ -81,113 +62,66 @@ def deduct_credit(user_id: int) -> bool:
     return False
 
 def get_user_ui_text(user_id: int) -> str:
-    """Returns the specific Access and Credits text for profile UI."""
     user = get_user(user_id)
     plan = user['plan']
-    
-    if is_premium(user_id):
-        credits_txt = "∞ Uɴʟɪᴍɪᴛᴇᴅ"
-    else:
-        credits_txt = str(user['credits'])
-        
+    credits_txt = "∞ Uɴʟɪᴍɪᴛᴇᴅ" if is_premium(user_id) else str(user['credits'])
     return f"Aᴄᴄᴇꜱꜱ ➺ {plan}\nCʀᴇᴅɪᴛꜱ ➺ {credits_txt}"
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 OWNER COMMANDS 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /sub<userid>Elite\nExample: /sub123456789Root", parse_mode="HTML")
-        return
-
-    raw = context.args[0]
-    match = re.match(r"(\d+)(Elite|Root)", raw)
-    if not match:
-        await update.message.reply_text("❌ Invalid format. Use /sub<userid>Elite or /sub<userid>Root", parse_mode="HTML")
-        return
-
-    target_id = match.group(1)
-    plan_name = match.group(2)
+    if not context.args: await update.message.reply_text("❌ Usage: /sub<userid>Elite"); return
+    match = re.match(r"(\d+)(Elite|Root)", context.args[0])
+    if not match: await update.message.reply_text("❌ Use /sub<id>Elite or /sub<id>Root"); return
+    target_id, plan_name = match.group(1), match.group(2)
     days = 15 if plan_name == "Elite" else 30
-    
-    db = load_db(DB_FILE)
     now = datetime.now()
-    expire = now + timedelta(days=days)
-    receipt = "PAY-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    
-    db[target_id] = {
-        "plan": plan_name,
-        "credits": 999999, # Represents unlimited
-        "expires_at": expire.strftime("%Y-%m-%d %H:%M:%S"),
-        "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "receipt_id": receipt
-    }
+    db = load_db(DB_FILE)
+    db[target_id] = {"plan": plan_name, "credits": 999999, "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "receipt_id": "PAY-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}
     save_db(DB_FILE, db)
-
-    # Send Congrats Message to User
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
-    congrats = (
-        "Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\n"
-        f"Uꜱᴇʀ ➺ {target_id}\n"
-        f"Aᴄᴄᴇꜱꜱ ➺ {plan_name}\n"
-        f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
-        f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\n"
-        f"Rᴇᴄᴇɪᴘᴛ ID ➺ {receipt}\n\n"
-        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
-    )
+    txt = f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\nUꜱᴇʀ ➺ {target_id}\nAᴄᴄᴇꜱꜱ ➺ {plan_name}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nRᴇᴄᴇɪᴘᴛ ID ➺ {db[target_id]['receipt_id']}\n\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
     try:
-        await context.bot.send_message(chat_id=int(target_id), text=congrats, parse_mode="HTML", reply_markup=kb)
-        await update.message.reply_text(f"✅ {plan_name} activated for {target_id}.", parse_mode="HTML")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Failed to message user. Error: {str(e)[:50]}", parse_mode="HTML")
+        await context.bot.send_message(chat_id=int(target_id), text=txt, parse_mode="HTML", reply_markup=kb)
+        await update.message.reply_text(f"✅ {plan_name} activated for {target_id}.")
+    except Exception as e: await update.message.reply_text(f"❌ Error: {str(e)[:50]}")
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("❌ Usage: /resub<userid>", parse_mode="HTML")
-        return
-
-    target_id = context.args[0]
+    if not context.args or not context.args[0].isdigit(): await update.message.reply_text("❌ Usage: /resub<userid>"); return
+    tid = context.args[0]
     db = load_db(DB_FILE)
-    if target_id in db:
-        db[target_id] = {"plan": "Trial", "credits": 0, "expires_at": None, "activated_at": None, "receipt_id": None}
+    if tid in db:
+        db[tid] = {"plan": "Trial", "credits": 0, "expires_at": None, "activated_at": None, "receipt_id": None}
         save_db(DB_FILE, db)
-        await update.message.reply_text(f"✅ Premium cancelled for {target_id}. Reverted to Trial.", parse_mode="HTML")
-    else:
-        await update.message.reply_text("❌ User not found in database.", parse_mode="HTML")
+        await update.message.reply_text(f"✅ Premium cancelled for {tid}.")
+    else: await update.message.reply_text("❌ User not found.")
 
 async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     db = load_db(DB_FILE)
-    active_plans = [uid for uid, data in db.items() if data['plan'] != "Trial"]
-    
-    if not active_plans:
-        await update.message.reply_text("❌ No active plans running.", parse_mode="HTML")
-        return
-
-    text = "Aᴄᴛɪᴠᴇ Pʟᴀɴꜱ\n━━━━━━━━━━━━━━━━━━━━\n"
-    for uid in active_plans:
+    active = [uid for uid, d in db.items() if d['plan'] != "Trial"]
+    if not active: await update.message.reply_text("❌ No active plans."); return
+    txt = "Aᴄᴛɪᴠᴇ Pʟᴀɴꜱ\n━━━━━━━━━━━━━━━━━━━━\n"
+    for uid in active:
         u = db[uid]
-        text += (
-            f"\nUꜱᴇʀ ID ➺ <code>{uid}</code>\n"
-            f"Aᴄᴄᴇꜱꜱ ➺ {u['plan']}\n"
-            f"Bᴏᴜɢʜᴛ ➺ {u.get('activated_at', 'N/A')}\n"
-            f"Exᴘɪʀᴇꜱ ➺ {u.get('expires_at', 'N/A')}\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
-    await update.message.reply_text(text, parse_mode="HTML")
+        txt += f"\nUꜱᴇʀ ID ➺ <code>{uid}</code>\nAᴄᴄᴇꜱꜱ ➺ {u['plan']}\nBᴏᴜɢʜᴛ ➺ {u.get('activated_at', 'N/A')}\nExᴘɪʀᴇꜱ ➺ {u.get('expires_at', 'N/A')}\n━━━━━━━━━━━━━━━━━━━━"
+    await update.message.reply_text(txt, parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 ACCESS CODE GENERATOR 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args or not context.args[0].isdigit(): await update.message.reply_text("❌ Usage: /gen300"); return
+    amount = context.args[0]
+    code = f"CR-{amount}-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    db = load_db(CODES_FILE)
+    db[code] = {"type": "credits", "value": int(amount)}
+    save_db(CODES_FILE, db)
+    await update.message.reply_text(f"🔑 Cʀᴇᴅɪᴛ Cᴏᴅᴇ ({amount}):\n\n<code>{code}</code>", parse_mode="HTML")
 
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     code = "1D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     db = load_db(CODES_FILE)
-    db[code] = {"days": 1}
+    db[code] = {"type": "days", "value": 1}
     save_db(CODES_FILE, db)
     await update.message.reply_text(f"🔑 1 Dᴀʏ Aᴄᴄᴇꜱꜱ Cᴏᴅᴇ:\n\n<code>{code}</code>", parse_mode="HTML")
 
@@ -195,64 +129,39 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     code = "3D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     db = load_db(CODES_FILE)
-    db[code] = {"days": 3}
+    db[code] = {"type": "days", "value": 3}
     save_db(CODES_FILE, db)
     await update.message.reply_text(f"🔑 3 Dᴀʏꜱ Aᴄᴄᴇꜱꜱ Cᴏᴅᴇ:\n\n<code>{code}</code>", parse_mode="HTML")
 
 async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /rm <code>", parse_mode="HTML")
-        return
-
+    if not context.args: await update.message.reply_text("❌ Usage: /rm <code>"); return
     code = context.args[0]
     db = load_db(CODES_FILE)
-    
-    if code not in db:
-        await update.message.reply_text("❌ Iɴᴠᴀʟɪᴅ ᴏʀ ᴜꜱᴇᴅ ᴄᴏᴅᴇ.", parse_mode="HTML")
-        return
-
-    days = db[code]['days']
-    del db[code]  # Delete code so it can't be reused
+    if code not in db: await update.message.reply_text("❌ Iɴᴠᴀʟɪᴅ ᴏʀ ᴜꜱᴇᴅ ᴄᴏᴅᴇ."); return
+    code_data = db[code]
+    del db[code]
     save_db(CODES_FILE, db)
-
-    # Activate Code Plan
     user_db = load_db(DB_FILE)
     uid = str(update.effective_user.id)
-    now = datetime.now()
-    expire = now + timedelta(days=days)
-    receipt = "CODE-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     
-    user_db[uid] = {
-        "plan": f"Code ({days}D)",
-        "credits": 999999,
-        "expires_at": expire.strftime("%Y-%m-%d %H:%M:%S"),
-        "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "receipt_id": receipt
-    }
-    save_db(DB_FILE, user_db)
-
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
-    congrats = (
-        "Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\n"
-        f"Uꜱᴇʀ ➺ {uid}\n"
-        f"Aᴄᴄᴇꜱꜱ ➺ {days} Dᴀʏꜱ Cᴏᴅᴇ\n"
-        f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
-        f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\n"
-        f"Rᴇᴄᴇɪᴘᴛ ID ➺ {receipt}\n\n"
-        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
-    )
-    await update.message.reply_text(congrats, parse_mode="HTML", reply_markup=kb)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 REGISTER HANDLERS 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if code_data["type"] == "credits":
+        user = get_user(update.effective_user.id)
+        user['credits'] += code_data["value"]
+        user_db[uid] = user
+        save_db(DB_FILE, user_db)
+        await update.message.reply_text(f"✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ!\n\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ {code_data['value']}\nTᴏᴛᴀʟ Cʀᴇᴅɪᴛꜱ ➺ {user['credits']}", parse_mode="HTML")
+    else:
+        days = code_data["value"]
+        now = datetime.now()
+        user_db[uid] = {"plan": f"Code ({days}D)", "credits": 999999, "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "receipt_id": "CODE-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}
+        save_db(DB_FILE, user_db)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
+        await update.message.reply_text(f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\nUꜱᴇʀ ➺ {uid}\nAᴄᴄᴇꜱꜱ ➺ {days} Dᴀʏꜱ Cᴏᴅᴇ\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nRᴇᴄᴇɪᴘᴛ ID ➺ {user_db[uid]['receipt_id']}\n\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.", parse_mode="HTML", reply_markup=kb)
 
 def get_plans_handler():
     return [
-        CommandHandler("sub", cmd_sub),      # /sub123456789Elite
-        CommandHandler("resub", cmd_resub),  # /resub123456789
-        CommandHandler("allplans", cmd_allplans),
-        CommandHandler("oneday", cmd_oneday),
-        CommandHandler("threeday", cmd_threeday),
-        CommandHandler("rm", cmd_rm)         # /rm <code>
+        CommandHandler("sub", cmd_sub), CommandHandler("resub", cmd_resub),
+        CommandHandler("allplans", cmd_allplans), CommandHandler("gen", cmd_gen),
+        CommandHandler("oneday", cmd_oneday), CommandHandler("threeday", cmd_threeday),
+        CommandHandler("rm", cmd_rm)
     ]
