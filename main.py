@@ -16,15 +16,18 @@ from plans import get_plans_handler, get_user_ui_text
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
-SUPPORT_LINK = "https://t.me/cardchkSupport"
+SUPPORT_LINK = "https://t.me/failurefr_07" # ✅ CHANGED TO OLDER LINK
 
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    text = update.message.text
+    text = update.message.text.lower()
     if update.effective_user.id == OWNER_ID: return
-    if "t.me/" in text or "http://" in text or "https://" in text:
-        try: await update.message.delete()
-        except Exception: pass
+    banned_words = ["t.me", "http://", "https://", "www.", "join our channel", "join channel", "subscribe", "telegram.me"]
+    for word in banned_words:
+        if word in text:
+            try: await update.message.delete()
+            except Exception: pass
+            return
 
 async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     async def check(chat_id):
@@ -88,24 +91,46 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     target_id = target_input = None
-    if update.message.reply_to_message: target_id = update.message.reply_to_message.from_user.id; target_input = str(target_id)
-    elif context.args: target_input = context.args[0]; target_id = await resolve_user(target_input, context)
-    else: await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n   /info username\n\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); return
-    if target_id is None: await update.message.reply_text(f"❌ USER NOT FOUND\n\n━━━━━━━━━━━━━━━━━━━━\nCould not resolve: <code>{target_input}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); return
-    try:
-        chat = await context.bot.get_chat(target_id)
-        full_name = f"{chat.first_name} {chat.last_name}".strip() if chat.last_name else chat.first_name
-        username = f"@{chat.username}" if chat.username else "None"
-        all_users = context.bot_data.get('user_data', {})
-        user_info = all_users.get(str(target_id))
-        join_date = user_info.get('joined', 'N/A') if user_info else "Never interacted"
-        info_text = "USER INFORMATION\n━━━━━━━━━━━━━━━━━━━━\n\n" f"Name: {full_name}\nUsername: {username}\nUser ID: <code>{target_id}</code>\n\n" "━━━━━━━━━━━━━━━━━━━━\nBOT DATA\n━━━━━━━━━━━━━━━━━━━━\n\n" f"First Interacted: {join_date}\nAccess Level: Trial\nCredits: 150\n\n━━━━━━━━━━━━━━━━━━━━"
-        await update.message.reply_text(info_text, parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ ERROR\n\n━━━━━━━━━━━━━━━━━━━━\n<code>{str(e)}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    if update.message.reply_to_message: 
+        target_id = update.message.reply_to_message.from_user.id
+        target_input = str(target_id)
+    elif context.args: 
+        target_input = context.args[0]
+        target_id = await resolve_user(target_input, context)
+    else: 
+        await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n   /info username\n\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
+        return
+
+    if target_id is None: 
+        await update.message.reply_text(f"❌ USER NOT FOUND\n\n━━━━━━━━━━━━━━━━━━━━\nCould not resolve: <code>{target_input}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
+        return
+
+    all_users = context.bot_data.get('user_data', {})
+    user_info = all_users.get(str(target_id))
+    
+    if user_info:
+        join_date = user_info.get('joined', 'N/A')
+        stored_name = user_info.get('name', 'N/A')
+    else:
+        join_date = "Never interacted"
+        stored_name = "N/A"
+        
+    info_text = (
+        "USER INFORMATION\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Name: {stored_name}\n"
+        f"User ID: <code>{target_id}</code>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "BOT DATA\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"First Interacted: {join_date}\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+    await update.message.reply_text(info_text, parse_mode="HTML")
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /start - Start the bot\n▸ /plan - View pricing plans\n▸ /chk - Stripe check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem code\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /info - Get user info\n▸ /allcm - Show this\n▸ /gen - Gen credit code\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /oneday - Gen 1D code\n▸ /threeday - Gen 3D code\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /start - Start the bot\n▸ /plan - View pricing plans\n▸ /chk - Stripe check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem code\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /info - Get user info\n▸ /allcm - Show this\n▸ /gen - Gen credit code\n▸ /key<n> - Gen premium key\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return; context.bot_data['chk_on'] = True; await update.message.reply_text("STRIPE → ON", parse_mode="HTML")
