@@ -13,7 +13,7 @@ from subs import get_subs_handlers
 # 🦇 GOTHAM CONFIGURATION 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BOT_TOKEN = "8813507423:AAFWkdkk8Je4kB93AB5fu6qQ0-8eo-jlRKE"
+BOT_TOKEN = "8774596040:AAFGArSQUWOu5k_xRLyShiYy2y04uYzlPG4"
 
 CHANNEL_1_USERNAME = "@Batcardchk" 
 GROUP_1_USERNAME = "@batcardchkGroup" 
