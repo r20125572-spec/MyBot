@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import time
 import re
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
@@ -25,6 +26,8 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bin_num = card[:6]
     msg = await update.message.reply_text("⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
     
+    start_time = time.time()
+    
     try:
         timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -38,11 +41,8 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = await api_resp.json()
         raw = str(data.get("response", "ERROR"))
-        
-        # 🛡️ BLOCK EXTERNAL ADS & LINKS FROM API
         raw = re.sub(r'https?://t\.me/\S+', '', raw)
-        raw = re.sub(r'https?://\S+', '', raw)
-        raw = raw.strip()
+        raw = re.sub(r'https?://\S+', '', raw).strip()
         if not raw: raw = "NO RESPONSE"
         
         approved = "approved" in raw.lower()
@@ -55,8 +55,11 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             country = str(bin_data.get("country", "N/A")).upper()
             flag = bin_data.get("country_emoji", "")
             bin_txt = f"{s} - {t} - {b}"
+            
+        end_time = time.time()
+        time_taken = f"{end_time - start_time:.2f}"
         
-        await msg.edit_text(ui_result(card, GATE_NAME, bin_txt, country, flag, raw, update.effective_user, approved), parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+        await msg.edit_text(ui_result(card, GATE_NAME, bin_txt, country, flag, raw, update.effective_user, approved, time_taken), parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
         
     except aiohttp.ClientTimeout:
         await msg.edit_text("⏳ Tɪᴍᴇᴏᴜᴛ", parse_mode="HTML")
@@ -64,4 +67,4 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Eʀʀᴏʀ ➤ <code>{str(e)[:100]}</code>", parse_mode="HTML")
 
 def get_chk_handler():
-    return CommandHandler("chk", cmd
+    return CommandHandler("chk", cmd_chk)
