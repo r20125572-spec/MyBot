@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
@@ -11,31 +12,32 @@ from pyu import get_pyu_handler
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# 🦇 YOUR BATMAN PHOTO (ONLY SHOWS ON WELCOME SCREEN) 🦇
+# 🦇 YOUR BATMAN PHOTO 🦇
 BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FORCE JOIN CHECK 🦇
+# 🦇 ULTRA FAST FORCE JOIN CHECK 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    try:
-        c = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        if c.status in ['left', 'kicked']: return False
-        g = await context.bot.get_chat_member(GROUP_USERNAME, user_id)
-        if g.status in ['left', 'kicked']: return False
-        return True
-    except Exception:
-        return False
+    async def check(chat_id):
+        try:
+            m = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+            return m.status not in ['left', 'kicked']
+        except Exception:
+            return False
+            
+    # 🚀 Checks Group AND Channel at the exact same time (2x Faster)
+    results = await asyncio.gather(check(CHANNEL_USERNAME), check(GROUP_USERNAME))
+    return all(results)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CLEAN UI GENERATORS (NO PHOTO, EASY COPY ID) 🦇
+# 🦇 CLEAN UI GENERATORS 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def ui_profile(user):
     d = datetime.now().strftime("%Y-%m-%d")
     u = user.username or "None"
-    # Note: There is a space after {user.id} inside <code> so you only copy the numbers
     return (
         f"Uꜱᴇʀ ➺ {u}\n"
         f"Uꜱᴇʀ ID ➺ <code>{user.id} </code>\n"
@@ -69,7 +71,6 @@ def kb_force():
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # Save user join date for /info
     if 'user_data' not in context.bot_data:
         context.bot_data['user_data'] = {}
     if str(user.id) not in context.bot_data['user_data']:
@@ -79,15 +80,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
     if await is_joined(user.id, context):
-        # ALREADY JOINED: Send ONLY text, NO photo
-        await update.message.reply_text(
-            text=ui_profile(user), 
-            parse_mode="HTML", 
-            reply_markup=kb_main(), 
-            disable_web_page_preview=True
-        )
+        await update.message.reply_text(text=ui_profile(user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
     else:
-        # NOT JOINED: Send photo + buttons
         cap = (
             "🦇 ⚫ 𝐁𝐀𝐓𝐌𝐀𝐍 𝐂𝐀𝐑𝐃 𝐂𝐇𝐄𝐂𝐊𝐄𝐑 ⚫ 🦇\n\n"
             "🔐 𝐀𝐜𝐜𝐞𝐬𝐬 𝐑𝐞𝐪𝐮𝐢𝐫𝐞𝐝\n"
@@ -97,50 +91,34 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━━━━"
         )
         try:
-            await update.message.reply_photo(
-                photo=BOT_PHOTO, 
-                caption=cap, 
-                parse_mode="HTML", 
-                reply_markup=kb_force()
-            )
+            await update.message.reply_photo(photo=BOT_PHOTO, caption=cap, parse_mode="HTML", reply_markup=kb_force())
         except Exception:
             await update.message.reply_text(text=cap, parse_mode="HTML", reply_markup=kb_force())
 
-# 🦇 OWNER /info COMMAND (STRICTLY OWNER, SHOWS USERNAME) 🦇
+# 🦇 OWNER /info COMMAND 🦇
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # RESTRICTED: If not owner, completely ignore the command (no error shown to user)
     if update.effective_user.id != OWNER_ID:
         return
     
     target_id = None
     
-    # Check if owner replied to a user's message
     if update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
-    # Check if owner provided a user ID manually
     elif context.args and context.args[0].lstrip('-').isdigit():
         target_id = int(context.args[0])
     else:
-        # Only show error text to the OWNER if they typed it wrong
         await update.message.reply_text("❌ Usage: <code>/info [UserID]</code>\n_or reply to a user's message_", parse_mode="HTML")
         return
 
     try:
-        # Get fresh user data from Telegram
         chat = await context.bot.get_chat(target_id)
         name = chat.first_name
         username = f"@{chat.username}" if chat.username else "None"
         
-        # Get join date from bot memory
         all_users = context.bot_data.get('user_data', {})
         user_info = all_users.get(str(target_id))
-        
-        if user_info and 'joined' in user_info:
-            join_date = user_info['joined'].split(" ")[0]
-        else:
-            join_date = "N/A"
+        join_date = user_info['joined'].split(" ")[0] if user_info and 'joined' in user_info else "N/A"
             
-        # Exact UI with Name and Username included
         info_text = (
             f"Uꜱᴇʀ ➺ {name}\n"
             f"Uꜱᴇʀɴᴀᴍᴇ ➺ {username}\n"
@@ -154,7 +132,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(info_text, parse_mode="HTML")
         
     except Exception as e:
-        await update.message.reply_text(f"❌ Error fetching user: <code>{str(e)}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"❌ Error: <code>{str(e)}</code>", parse_mode="HTML")
 
 # Owner Gate Controls
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,7 +176,7 @@ async def cmd_offpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⬛ <b>PAYU → OFF</b>", parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CALLBACK HANDLER 🦇
+# 🦇 CALLBACK HANDLER (FIXED VARIFY) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,21 +184,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     d = q.data
     
-    # Using edit_message_text automatically removes the photo when they verify!
+    if d == "verify_join":
+        if await is_joined(q.from_user.id, context):
+            try:
+                # 🚀 FIX: Delete photo message completely and send fresh text
+                if q.message.photo:
+                    await q.message.delete()
+                    await context.bot.send_message(
+                        chat_id=q.message.chat_id,
+                        text=ui_profile(q.from_user), 
+                        parse_mode="HTML", 
+                        reply_markup=kb_main(), 
+                        disable_web_page_preview=True
+                    )
+                else:
+                    await q.edit_message_text(text=ui_profile(q.from_user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+            except Exception as e:
+                logging.error(f"Verify error: {e}")
+        else:
+            await q.answer("❌ Join Group & Channel first!", show_alert=True)
+        return
+    
     async def edit(t, kb):
         try:
             await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
         except Exception:
             pass
-    
-    if d == "verify_join":
-        if await is_joined(q.from_user.id, context):
-            await q.answer("✅ Access Granted!", show_alert=True)
-            # This changes the photo message into pure text
-            await edit(ui_profile(q.from_user), kb_main())
-        else:
-            await q.answer("❌ Error: Join Group & Channel first!", show_alert=True)
-        return
     
     if d == "bmain":
         await edit(ui_profile(q.from_user), kb_main())
@@ -254,9 +243,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def on_start(app):
-    print("🦇 Batman Card Checker Starting...")
+    print("🦇 Batman Starting...")
     await app.bot.delete_webhook(drop_pending_updates=True)
-    print("⬛ Webhooks Cleared - Ready!")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
@@ -264,19 +252,17 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("info", cmd_info))
     
-    # Gate Handlers
     app.add_handler(get_chk_handler())
     app.add_handler(get_pp_handler())
     app.add_handler(get_sh_handler())
     app.add_handler(get_pyu_handler())
     
-    # Owner Controls
     for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd[0], cmd[1]))
         
     app.add_handler(CallbackQueryHandler(on_callback))
     
-    print("🦇 Batman Card Checker Online!")
+    print("🦇 Online!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
