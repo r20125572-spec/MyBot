@@ -3,13 +3,16 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
 
-from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, CHANNEL_USERNAME, GROUP_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK, BOT_PHOTO
+from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, CHANNEL_USERNAME, GROUP_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK
 from chk import get_chk_handler
 from pp import get_pp_handler
 from sh import get_sh_handler
 from pyu import get_pyu_handler
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+# ⚠️ PASTE YOUR PHOTO FILE ID OR IMAGE URL HERE ⚠️
+BOT_PHOTO = "YOUR_PHOTO_FILE_ID_OR_URL"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 FORCE JOIN CHECK 🦇
@@ -30,27 +33,15 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def ui_profile(user):
-    d = datetime.now().strftime("%Y - %m - %d")
+    d = datetime.now().strftime("%Y-%m-%d")
     u = user.username or "None"
     return (
-        f"╔══════════════════════════════╗\n"
-        f"║    🦇 𝐁𝐀𝐓𝐌𝐀𝐍 𝐂𝐇𝐊 🦇       ║\n"
-        f"╚══════════════════════════════╝\n\n"
-        f"┌──────────────────────────┐\n"
-        f"│ 𝗨𝗦𝗘𝗥𝗡𝗔𝗠𝗘 ➤ {u}\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗨𝗦𝗘𝗥 𝗜𝗗   ➤ <code>{user.id}</code>\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗔𝗖𝗖𝗘𝗦𝗦   ➤ ⚡ 𝗘𝗟𝗜𝗧𝗘\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗖𝗥𝗘𝗗𝗜𝗧𝗦  ➤ ∞\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗝𝗢𝗜𝗡𝗘𝗗    ➤ {d}\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗗𝗘𝗩      ➤ <a href='{DEV_LINK}'>Batman</a> 🦇\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗩𝗘𝗥𝗦𝗜𝗢𝗡  ➤ {VERSION}\n"
-        f"└──────────────────────────┘"
+        f"Uꜱᴇʀ ➺ {u}\n"
+        f"Uꜱᴇʀ ID ➺ <code>{user.id}</code>\n"
+        f"Aᴄᴄᴇꜱꜱ ➺ Tʀɪᴀʟ\n"
+        f"Cʀᴇᴅɪᴛꜱ ➺ 150\n"
+        f"Jᴏɪɴᴇᴅ ➺ {d}\n"
+        f"Dᴇᴠ ➺ <a href='{DEV_LINK}'>Batman</a>"
     )
 
 def kb_main():
@@ -65,9 +56,9 @@ def kb_back(cb):
 
 def kb_force():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 𝗝𝗢𝗜𝗡 𝗖𝗛𝗔𝗡𝗡𝗘𝗟", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("👥 𝗝𝗢𝗜𝗡 𝗚𝗥𝗢𝗨𝗣", url=GROUP_LINK)],
-        [InlineKeyboardButton("✅ 𝗩𝗘𝗥𝗜𝗙𝗬", callback_data="vjoin")]
+        [InlineKeyboardButton("JOIN GROUP", url="https://t.me/batcardchkGroup")],
+        [InlineKeyboardButton("JOIN CHANNEL", url="https://t.me/Batcardchk")],
+        [InlineKeyboardButton("VARIFY", callback_data="verify_join")]
     ])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -76,16 +67,99 @@ def kb_force():
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if await is_joined(user.id, context):
-        await update.message.reply_text(ui_profile(user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-    else:
-        cap = "🦇 <b>BATMAN CARD CHECKER</b>\n\n━━━━━━━━━━━━━━━━━━━━━━\n🔒 Access Required\n\n1️⃣ Join <b>CHANNEL</b>\n2️⃣ Join <b>GROUP</b>\n3️⃣ Click <b>✅ VERIFY</b>\n━━━━━━━━━━━━━━━━━━━━━━"
-        try:
-            await update.message.reply_photo(photo=BOT_PHOTO, caption=cap, parse_mode="HTML", reply_markup=kb_force())
-        except Exception:
-            await update.message.reply_text(cap, parse_mode="HTML", reply_markup=kb_force())
+    
+    # 🦇 SAVE USER JOIN DATE FOR /info COMMAND 🦇
+    if 'user_data' not in context.bot_data:
+        context.bot_data['user_data'] = {}
+    if str(user.id) not in context.bot_data['user_data']:
+        context.bot_data['user_data'][str(user.id)] = {
+            "name": user.first_name,
+            "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
 
-# Owner Controls
+    # If user ALREADY joined, show profile directly with photo
+    if await is_joined(user.id, context):
+        try:
+            await update.message.reply_photo(
+                photo=BOT_PHOTO, 
+                caption=ui_profile(user), 
+                parse_mode="HTML", 
+                reply_markup=kb_main(), 
+                disable_web_page_preview=True
+            )
+        except Exception:
+            await update.message.reply_text(
+                text=ui_profile(user), 
+                parse_mode="HTML", 
+                reply_markup=kb_main(), 
+                disable_web_page_preview=True
+            )
+    else:
+        # If user DID NOT join, show photo with 3 Force Join buttons
+        cap = "🦇 <b>Welcome to Batman Card Checker!</b>\n\n🔒 Join both channels to access the bot."
+        try:
+            await update.message.reply_photo(
+                photo=BOT_PHOTO, 
+                caption=cap, 
+                parse_mode="HTML", 
+                reply_markup=kb_force()
+            )
+        except Exception:
+            await update.message.reply_text(
+                text=cap, 
+                parse_mode="HTML", 
+                reply_markup=kb_force()
+            )
+
+# 🦇 OWNER /info COMMAND (EXACT REQUESTED UI) 🦇
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Only owner can use this
+    if update.effective_user.id != OWNER_ID:
+        return
+    
+    target_id = None
+    
+    # Check if owner replied to a user's message
+    if update.message.reply_to_message:
+        target_id = update.message.reply_to_message.from_user.id
+    # Check if owner provided a user ID manually
+    elif context.args and context.args[0].isdigit():
+        target_id = int(context.args[0])
+    else:
+        await update.message.reply_text("❌ Usage: <code>/info [UserID]</code>\n_or reply to a user's message_", parse_mode="HTML")
+        return
+
+    try:
+        # Get fresh user data from Telegram
+        chat = await context.bot.get_chat(target_id)
+        name = chat.first_name
+        
+        # Get join date from bot memory
+        all_users = context.bot_data.get('user_data', {})
+        user_info = all_users.get(str(target_id))
+        
+        # Extract only the date (YYYY-MM-DD) if time is saved
+        if user_info and 'joined' in user_info:
+            join_date = user_info['joined'].split(" ")[0]
+        else:
+            join_date = "N/A"
+            
+        # Exact UI requested by owner
+        info_text = (
+            f"Uꜱᴇʀ ➺ {name}\n"
+            f"Uꜱᴇʀ ID ➺ <code>{target_id}</code>\n"
+            f"Aᴄᴄᴇꜱꜱ ➺ Tʀɪᴀʟ\n"
+            f"Pᴜʀᴄʜᴀꜱᴇᴅ Oɴ ➺ N/A\n"
+            f"Eɴᴅɪɴɢ Oɴ ➺ N/A\n"
+            f"Cʀᴇᴅɪᴛꜱ ➺ 150\n"
+            f"Jᴏɪɴᴇᴅ ➺ {join_date}"
+        )
+        await update.message.reply_text(info_text, parse_mode="HTML")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error fetching user: <code>{str(e)}</code>", parse_mode="HTML")
+
+# Owner Gate Controls
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['chk_on'] = True
@@ -144,12 +218,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     
-    if d == "vjoin":
+    if d == "verify_join":
         if await is_joined(q.from_user.id, context):
-            await q.answer("🦇 Access Granted!", show_alert=True)
+            await q.answer("✅ Access Granted!", show_alert=True)
             await edit(ui_profile(q.from_user), kb_main())
         else:
-            await q.answer("❌ Join channels first!", show_alert=True)
+            await q.answer("❌ Error: Join Group & Channel first!", show_alert=True)
         return
     
     if d == "bmain":
@@ -169,7 +243,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit("━━━━━━━━━━━━━━━━━━━━━━\n🦇 <b>GATE</b> ➤ Braintree Auth\n📋 <b>CMD</b> ➤ /b3\n🌐 <b>SITES</b> ➤ 2\n💚 <b>HEALTH</b> ➤ 100%\n━━━━━━━━━━━━━━━━━━━━━━", kb_back("mauth"))
     elif d == "mcharge":
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚡ Stripe", callback_data="ichk"), InlineKeyboardButton("💰 PayPal", callback_data="ipp")],[InlineKeyboardButton("🛒 Shopify", callback_data="ish"), InlineKeyboardButton("💸 PayU", callback_data="ipyu")],[InlineKeyboardButton("◀️ 𝗕𝗔𝗖𝗞", callback_data="mgates")]])
-        await edit("╔══════════════════════════════╗\n║    💀 𝗖𝗛𝗔𝗥𝗚𝗘 𝗚𝗔𝗧𝗘𝗦 💀    ║\n╚════════════════════════════╝", kb)
+        await edit("╔══════════════════════════════╗\n║    💀 𝗖𝗛𝗔𝗥𝗚𝗘 𝗚𝗔𝗧𝗘𝗦 💀    ║\n╚══════════════════════════════╝", kb)
     elif d == "ichk":
         await edit("━━━━━━━━━━━━━━━━━━━━━━\n⚡ <b>GATE</b> ➤ Stripe\n💵 <b>PRICE</b> ➤ $0.50\n📋 <b>CMD</b> ➤ /chk\n🌐 <b>SITES</b> ➤ 4\n💚 <b>HEALTH</b> ➤ 100%\n━━━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
     elif d == "ipp":
@@ -192,6 +266,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("info", cmd_info)) # Added /info command
     
     # Gate Handlers
     app.add_handler(get_chk_handler())
