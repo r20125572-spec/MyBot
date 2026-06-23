@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import re
+from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime
@@ -103,7 +104,7 @@ def kb_price():
 # 🦇 HELPER: RESOLVE USERNAME TO USER ID 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     target = target.lstrip('@')
     if target.lstrip('-').isdigit():
         return int(target)
@@ -208,11 +209,11 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_allcommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     commands_list = (
-        "BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {ver}\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\n"
         "USER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n"
         "▸ /start - Start the bot\n▸ /chk - Stripe charge check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem access code\n\n"
         "OWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "▸ /info - Get user info\n▸ /allcommand - Show this\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /oneday - Gen 1D code\n▸ /threeday - Gen 3D code\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━".format(ver=VERSION)
+        "▸ /info - Get user info\n▸ /allcommand - Show this\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /oneday - Gen 1D code\n▸ /threeday - Gen 3D code\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(commands_list, parse_mode="HTML")
 
@@ -285,11 +286,38 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t = ("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$")
         await edit(t, kb_price())
     elif d == "pay10":
-        await edit(f"PAYMENT - 10$\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: 10$\nTaxes: Included\nTotal: 10$\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.".format(DEV_LINK=DEV_LINK), kb_back("mprice"))
+        await edit(
+            f"PAYMENT - 10$\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Base Amount: 10$\nTaxes: Included\nTotal: 10$\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏳ Soon the payment\naddress will be added\nwith taxes included.\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Contact <a href='{DEV_LINK}'>Batman</a> for manual payment.", 
+            kb_back("mprice")
+        )
     elif d == "pay20":
-        await edit(f"PAYMENT - 20$\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: 20$\nTaxes: Included\nTotal: 20$\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.".format(DEV_LINK=DEV_LINK), kb_back("mprice"))
+        await edit(
+            f"PAYMENT - 20$\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Base Amount: 20$\nTaxes: Included\nTotal: 20$\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏳ Soon the payment\naddress will be added\nwith taxes included.\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Contact <a href='{DEV_LINK}'>Batman</a> for manual payment.", 
+            kb_back("mprice")
+        )
     elif d == "pay30":
-        await edit(f"PAYMENT - 30$\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: 30$\nTaxes: Included\nTotal: 30$\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.".format(DEV_LINK=DEV_LINK), kb_back("mprice"))
+        await edit(
+            f"PAYMENT - 30$\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Base Amount: 30$\nTaxes: Included\nTotal: 30$\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏳ Soon the payment\naddress will be added\nwith taxes included.\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Contact <a href='{DEV_LINK}'>Batman</a> for manual payment.", 
+            kb_back("mprice")
+        )
     elif d == "mgates":
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],[InlineKeyboardButton("◀ BACK", callback_data="bmain")]])
         await edit("SELECT GATE", kb)
