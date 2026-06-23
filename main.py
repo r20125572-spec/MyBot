@@ -1,6 +1,9 @@
+import os
+import signal
 import logging
 import asyncio
 import re
+import time
 from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -12,6 +15,7 @@ from pp import get_pp_handler
 from sh import get_sh_handler
 from pyu import get_pyu_handler
 from plans import get_plans_handler, get_user_ui_text
+from bin import get_bin_handler
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -72,7 +76,7 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     try: return (await context.bot.get_chat(f"@{target}")).id
     except Exception: return None
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_start(update: Update, context: ContextTypes DEFAULT_TYPE):
     user = update.effective_user
     if 'user_data' not in context.bot_data: context.bot_data['user_data'] = {}
     if str(user.id) not in context.bot_data['user_data']:
@@ -85,57 +89,39 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: await update.message.reply_text(text=cap, parse_mode="HTML", reply_markup=kb_force())
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t = "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$"
+    t = "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$"
     await update.message.reply_text(t, parse_mode="HTML", reply_markup=kb_price())
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FIXED /info COMMAND (Uses EXACT Bot Database ID) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     target_id = target_input = None
-    
-    if update.message.reply_to_message: 
-        target_id = update.message.reply_to_message.from_user.id
-        target_input = str(target_id)
-    elif context.args: 
-        target_input = context.args[0]
-        target_id = await resolve_user(target_input, context)
-    else: 
-        await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
-        return
+    if update.message.reply_to_message: target_id = update.message.reply_to_message.from_user.id; target_input = str(target_id)
+    elif context.args: target_input = context.args[0]; target_id = await resolve_user(target_input, context)
+    else: await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); return
 
-    if target_id is None: 
-        await update.message.reply_text(f"❌ USER NOT FOUND\n\n━━━━━━━━━━━━━━━━━━━━\nCould not resolve: <code>{target_input}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
-        return
+    if target_id is None: await update.message.reply_text(f"❌ USER NOT FOUND\n━━━━━━━━━━━━━━━━━━━━\nCould not resolve: <code>{target_input}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); return
 
-    # Uses bot's internal database strictly to show exact same ID as /start
     all_users = context.bot_data.get('user_data', {})
     user_info = all_users.get(str(target_id))
-    
-    if user_info:
-        join_date = user_info.get('joined', 'N/A')
-        stored_name = user_info.get('name', 'N/A')
-    else:
-        join_date = "Never interacted"
-        stored_name = "N/A"
+    join_date = user_info.get('joined', 'Never interacted') if user_info else "Never interacted"
+    stored_name = user_info.get('name', 'N/A') if user_info else "N/A"
         
     info_text = (
         "USER INFORMATION\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Name: {stored_name}\n"
         f"User ID: <code>{target_id}</code>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
         "BOT DATA\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"First Interacted: {join_date}\n"
-        "━━━━━━━━━━━━━━━━━━━━"
+        "━━━━━━━━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(info_text, parse_mode="HTML")
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /start - Start the bot\n▸ /plan - View pricing plans\n▸ /chk - Stripe check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem code\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /info - Get user info\n▸ /allcm - Show this\n▸ /gen - Gen credit code\n▸ /key<n> - Gen premium key\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /start - Start the bot\n▸ /plan - View pricing plans\n▸ /bin - Check BIN details\n▸ /chk - Stripe check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem code\n\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /info - Get user info\n▸ /allcm - Show this\n▸ /gen - Gen credit code\n▸ /key<n> - Gen premium key\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return; context.bot_data['chk_on'] = True; await update.message.reply_text("STRIPE → ON", parse_mode="HTML")
@@ -168,7 +154,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
         except Exception: pass
     if d == "bmain": await edit(ui_profile(q.from_user), kb_main())
-    elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
+    elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
     elif d == "pay10": await edit(f"PAYMENT - 10$\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: 10$\nTaxes: Included\nTotal: 10$\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
     elif d == "pay20": await edit(f"PAYMENT - 20$\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: 20$\nTaxes: Included\nTotal: 20$\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
     elif d == "pay30": await edit(f"PAYMENT - 30$\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: 30$\nTaxes: Included\nTotal: 30$\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
@@ -182,27 +168,68 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
     elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: $0.30\nCMD: /pyu\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 SAFE STARTUP & CONFLICT FIX 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 async def on_start(app):
     print("Batman Starting...")
     await app.bot.delete_webhook(drop_pending_updates=True)
 
+async def cmd_killbot(update: update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner command to safely kill the bot process"""
+    if update.effective_user.id != OWNER_ID: return
+    
+    await update.message.reply_text("🛑 Killing old bot process...", parse_mode="HTML")
+    
+    # Send kill signal to current process
+    os.kill(os.getpid(), signal.SIGTERM)
+    await asyncio.sleep(3) # Wait 3 seconds for process to die
+    
+    await update.message.reply_text("✅ Old process killed! Please wait 5 seconds and type /start again.", parse_mode="HTML")
+
 def main():
+    # Safety: Kill any leftover python processes from old crashes to avoid conflicts
+    try:
+        import psutil
+        for proc in psutil.process_iter(['python', 'main.py']):
+            if 'main.py' in ' '.join(proc.cmdline):
+                os.kill(proc.pid, signal.SIGTERM)
+    except Exception:
+        pass
+    
+    # Start the application
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
+    
+    # Register all handlers here...
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
+    app.add_handler(CommandHandler("killbot", cmd_killbot)) # NEW: Manual kill switch command
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("info", cmd_info))
     app.add_handler(CommandHandler("allcm", cmd_allcm))
+    
     app.add_handler(get_chk_handler())
     app.add_handler(get_pp_handler())
     app.add_handler(get_sh_handler())
-    app.add_handler(get_pyu_handler())
+    app.add_handler(get_bin_handler()) # NEW
+    
     for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd[0], cmd[1]))
     for handler in get_plans_handler(): app.add_handler(handler)
     app.add_handler(CallbackQueryHandler(on_callback))
+    
     print("Online!")
-    app.run_polling(drop_pending_updates=True)
+    
+    # Use run_polling with conflict handling - if it crashes, it will auto-restart
+    while True:
+        try:
+            print("⚡ Running bot...")
+            await app.run_polling(drop_pending_updates=True)
+        except Conflict:
+            print("⚠️ Conflict detected! Restarting in 3s...")
+            await asyncio.sleep(3)
+            continue
 
 if __name__ == "__main__":
     main()
