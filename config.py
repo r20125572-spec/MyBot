@@ -61,30 +61,30 @@ async def get_bin_info(bin_num: str) -> dict:
     return {"error": True}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SHARED CHECK UI 🦇
+# 🦇 SHARED CHECK UI (NEW CLEAN STYLE) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def ui_result(card, gate, bin_txt, country, flag, raw, user, approved):
-    icon = "✅" if approved else "❌"
-    status = "CHARGED 💎" if approved else "DECLINED ❌"
+def ui_result(card, gate, bin_txt, country, flag, raw, user, approved, time_taken="0.00"):
     u = user.username or user.first_name
+    status = "Cᴀʀᴅ Cʜᴀʀɢᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
+    
+    # Combine BIN info and Country cleanly
+    if bin_txt and bin_txt != "N/A":
+        info = f"{bin_txt} - {country}{flag}"
+    else:
+        info = f"{country}{flag}"
+        
     return (
-        f"╔══════════════════════════════╗\n"
-        f"║  [{icon}] {status}\n"
-        f"╚══════════════════════════════╝\n\n"
-        f"┌──────────────────────────┐\n"
-        f"│ 𝗖𝗔𝗥𝗗     ➤ <code>{card}</code>\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗚𝗔𝗧𝗘     ➤ {gate}\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗕𝗜𝗡      ➤ {bin_txt}\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗖𝗢𝗨𝗡𝗧𝗥𝗬  ➤ {flag} {country}\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗥𝗔𝗪      ➤ {raw}\n"
-        f"├──────────────────────────┤\n"
-        f"│ 𝗨𝗦𝗘𝗥     ➤ {u}\n"
-        f"└──────────────────────────┘"
+        f"Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\n"
+        f"Tɪᴍᴇ ➺ {time_taken}s\n"
+        f"Uꜱᴇʀ ➺ {u}\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"<code>{card}</code>\n"
+        f"{status}\n"
+        f"Iɴꜰᴏ ➺ {info}\n"
+        f"━━━━━━━━━━━━━━━━\n\n"
+        f"✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ."
     )
 
 def kb_result():
