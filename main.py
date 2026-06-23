@@ -12,10 +12,10 @@ from pyu import get_pyu_handler
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# 🦇 WELCOME PHOTO 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 LINKS & MEDIA 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
-
-# 🦇 SUPPORT LINK 🦇
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -30,6 +30,7 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
         except Exception:
             return False
             
+    # Checks Group AND Channel at the exact same time (2x Faster)
     results = await asyncio.gather(check(CHANNEL_USERNAME), check(GROUP_USERNAME))
     return all(results)
 
@@ -77,6 +78,7 @@ def kb_price():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Resolve a username or user ID to a user ID."""
     target = target.lstrip('@')
     if target.lstrip('-').isdigit():
         return int(target)
@@ -132,7 +134,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 OWNER /info COMMAND 🦇
+# 🦇 OWNER /info COMMAND (SUPPORTS USERNAME & ID) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -142,9 +144,11 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id = None
     target_input = None
     
+    # Method 1: Reply to message
     if update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
         target_input = str(target_id)
+    # Method 2: Command argument (username or ID)
     elif context.args:
         target_input = context.args[0]
         target_id = await resolve_user(target_input, context)
@@ -346,7 +350,10 @@ async def cmd_allcommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(commands_list, parse_mode="HTML", disable_web_page_preview=True)
 
-# Owner Gate Controls
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 OWNER GATE CONTROLS 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['chk_on'] = True
@@ -399,6 +406,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d == "verify_join":
         if await is_joined(q.from_user.id, context):
             try:
+                # Delete photo and send clean text profile
                 if q.message.photo:
                     await q.message.delete()
                     await context.bot.send_message(
@@ -503,12 +511,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
         ])
         await edit("SELECT GATE", kb)
+        
     elif d == "mauth":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("Stripe", callback_data="iau"), InlineKeyboardButton("Braintree", callback_data="ib3")],
             [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
         ])
         await edit("AUTH GATES", kb)
+        
     elif d == "iau":
         await edit(
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -529,6 +539,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━━",
             kb_back("mauth")
         )
+        
     elif d == "mcharge":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("Stripe", callback_data="ichk"), InlineKeyboardButton("PayPal", callback_data="ipp")],
@@ -536,6 +547,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
         ])
         await edit("CHARGE GATES", kb)
+        
     elif d == "ichk":
         await edit(
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -592,15 +604,20 @@ async def on_start(app):
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     
+    # User commands
     app.add_handler(CommandHandler("start", cmd_start))
+    
+    # Owner commands
     app.add_handler(CommandHandler("info", cmd_info))
     app.add_handler(CommandHandler("allcommand", cmd_allcommand))
     
+    # Gate handlers (Imported from your files)
     app.add_handler(get_chk_handler())
     app.add_handler(get_pp_handler())
     app.add_handler(get_sh_handler())
     app.add_handler(get_pyu_handler())
     
+    # Gate toggle commands
     for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), 
                 ("onpp", cmd_onpp), ("offpp", cmd_offpp), 
                 ("onsh", cmd_onsh), ("offsh", cmd_offsh), 
