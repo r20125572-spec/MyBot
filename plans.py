@@ -1,168 +1,255 @@
-import logging
-import asyncio
+import json
+import os
 import re
-from typing import Optional
+import random
+import string
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from datetime import datetime
+from telegram.ext import CommandHandler, MessageHandler, filters, ContextTypes
+from config import OWNER_ID
 
-from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, CHANNEL_USERNAME, GROUP_USERNAME, CHANNEL_LINK, GROUP_LINK
-from chk import get_chk_handler
-from pp import get_pp_handler
-from sh import get_sh_handler
-from pyu import get_pyu_handler
-from plans import get_plans_handler, get_user_ui_text
-
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-
-BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
+# 🦇 SUPPORT LINK 🦇
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
-async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
-    text = update.message.text.lower()
-    if update.effective_user.id == OWNER_ID: return
-    banned_words = ["t.me", "http://", "https://", "www.", "join our channel", "join channel", "subscribe", "telegram.me"]
-    for word in banned_words:
-        if word in text:
-            try: await update.message.delete()
-            except Exception: pass
-            return
+DB_FILE = "plans_db.json"
+CODES_FILE = "codes_db.json"
 
-async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    async def check(chat_id):
+def load_db(file):
+    if not os.path.exists(file): return {}
+    try:
+        with open(file, 'r') as f: return json.load(f)
+    except Exception: return {}
+
+def save_db(file, data):
+    with open(file, 'w') as f: json.dump(data, f, indent=4)
+
+def get_user(user_id: int) -> dict:
+    db = load_db(DB_FILE)
+    uid = str(user_id)
+    if uid not in db:
+        db[uid] = {"plan": "Trial", "credits": 150, "expires_at": None, "activated_at": None, "receipt_id": None}
+        save_db(DB_FILE, db)
+    return db[uid]
+
+def is_premium(user_id: int) -> bool:
+    db = load_db(DB_FILE)
+    uid = str(user_id)
+    if uid not in db: return False
+    user = db[uid]
+    if user['plan'] == "Trial": return False
+    if user.get('expires_at'):
         try:
-            m = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-            return m.status not in ['left', 'kicked']
-        except Exception: return False
-    results = await asyncio.gather(check(CHANNEL_USERNAME), check(GROUP_USERNAME))
-    return all(results)
+            if datetime.now() > datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S"):
+                db[uid] = {"plan": "Trial", "credits": 0, "expires_at": None, "activated_at": None, "receipt_id": None}
+                save_db(DB_FILE, db)
+                return False
+        except ValueError: pass
+    return True
 
-def ui_profile(user):
-    d = datetime.now().strftime("%Y-%m-%d")
-    u = user.username or "None"
-    plan_credits_txt = get_user_ui_text(user.id)
-    return f"Uꜱᴇʀ ➺ {u}\nUꜱᴇʀ ID ➺ <code>{user.id}</code>\n{plan_credits_txt}\nJᴏɪɴᴇᴅ ➺ {d}\nDᴇᴠ ➺ <a href='{DEV_LINK}'>Batman</a>"
+def deduct_credit(user_id: int) -> bool:
+    if is_premium(user_id): return True
+    db = load_db(DB_FILE)
+    uid = str(user_id)
+    user = db[uid]
+    if user['credits'] > 0:
+        user['credits'] -= 1
+        db[uid] = user
+        save_db(DB_FILE, db)
+        return True
+    return False
 
-def kb_main():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("CHECKER", callback_data="mgates"), InlineKeyboardButton("BUY NOW", callback_data="mprice")],
-        [InlineKeyboardButton("UPDATES", url=CHANNEL_LINK), InlineKeyboardButton("GROUP", url=GROUP_LINK)],
-        [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]
-    ])
-
-def kb_back(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("◀ BACK", callback_data=cb)]])
-
-def kb_force():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("JOIN GROUP", url="https://t.me/batcardchkGroup")],
-        [InlineKeyboardButton("JOIN CHANNEL", url="https://t.me/Batcardchk")],
-        [InlineKeyboardButton("VERIFY", callback_data="verify_join")]
-    ])
-
-def kb_price():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("10$ PAY", callback_data="pay10"), InlineKeyboardButton("20$ PAY", callback_data="pay20"), InlineKeyboardButton("30$ PAY", callback_data="pay30")],
-        [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
-    ])
-
-async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
-    target = target.lstrip('@')
-    if target.lstrip('-').isdigit(): return int(target)
-    try: return (await context.bot.get_chat(f"@{target}")).id
-    except Exception: return None
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if 'user_data' not in context.bot_data: context.bot_data['user_data'] = {}
-    if str(user.id) not in context.bot_data['user_data']:
-        context.bot_data['user_data'][str(user.id)] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    if await is_joined(user.id, context):
-        await update.message.reply_text(text=ui_profile(user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-    else:
-        cap = "BATMAN CARD CHECKER\n\nAccess Required\n━━━━━━━━━━━━━━━━━━━━\nJoin both channels to\nunlock the bot.\n━━━━━━━━━━━━━━━━━━━━"
-        try: await update.message.reply_photo(photo=BOT_PHOTO, caption=cap, parse_mode="HTML", reply_markup=kb_force())
-        except Exception: await update.message.reply_text(text=cap, parse_mode="HTML", reply_markup=kb_force())
-
-async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t = "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$"
-    await update.message.reply_text(t, parse_mode="HTML", reply_markup=kb_price())
+def get_user_ui_text(user_id: int) -> str:
+    user = get_user(user_id)
+    plan = user['plan']
+    credits_txt = "∞ Uɴʟɪᴍɪᴛᴇᴅ" if is_premium(user_id) else str(user['credits'])
+    return f"Aᴄᴄᴇꜱꜱ ➺ {plan}\nCʀᴇᴅɪᴛꜱ ➺ {credits_txt}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FIXED /info COMMAND (Uses EXACT Bot Database ID) 🦇
+# 🦇 100% FIXED /sub COMMAND 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    target_id = target_input = None
     
-    if update.message.reply_to_message: 
-        target_id = update.message.reply_to_message.from_user.id
-        target_input = str(target_id)
-    elif context.args: 
-        target_input = context.args[0]
-        target_id = await resolve_user(target_input, context)
-    else: 
-        await update.message.reply_text("❌ INVALID USAGE\n\n━━━━━━━━━━━━━━━━━━━━\nUsage Methods:\n\n1. Reply to user's message:\n   /info (reply to msg)\n\n2. By Username:\n   /info @username\n\n3. By User ID:\n   /info 123456789\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
+    if not context.args:
+        await update.message.reply_text("❌ Usage: /sub <userid> Elite\nExample: /sub 123456789 Elite")
         return
-
-    if target_id is None: 
-        await update.message.reply_text(f"❌ USER NOT FOUND\n\n━━━━━━━━━━━━━━━━━━━━\nCould not resolve: <code>{target_input}</code>\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"); 
-        return
-
-    # Uses bot's internal database strictly to show exact same ID as /start
-    all_users = context.bot_data.get('user_data', {})
-    user_info = all_users.get(str(target_id))
     
-    if user_info:
-        join_date = user_info.get('joined', 'N/A')
-        stored_name = user_info.get('name', 'N/A')
-    else:
-        join_date = "Never interacted"
-        stored_name = "N/A"
+    # Join everything together to handle spaces perfectly
+    full_text = "".join(context.args)
+    
+    # Extract User ID (first set of digits)
+    id_match = re.search(r"(\d+)", full_text)
+    if not id_match:
+        await update.message.reply_text("❌ No User ID found!")
+        return
         
-    info_text = (
-        "USER INFORMATION\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Name: {stored_name}\n"
-        f"User ID: <code>{target_id}</code>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "BOT DATA\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"First Interacted: {join_date}\n"
-        "━━━━━━━━━━━━━━━━━━━━"
-    )
-    await update.message.reply_text(info_text, parse_mode="HTML")
-
-async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /start - Start the bot\n▸ /plan - View pricing plans\n▸ /chk - Stripe check\n▸ /pp - PayPal check\n▸ /sh - Shopify check\n▸ /pyu - PayU check\n▸ /rm - Redeem code\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n\n▸ /info - Get user info\n▸ /allcm - Show this\n▸ /gen - Gen credit code\n▸ /key<n> - Gen premium key\n▸ /sub - Grant premium\n▸ /resub - Remove premium\n▸ /allplans - View active plans\n▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
-
-async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['chk_on'] = True; await update.message.reply_text("STRIPE → ON", parse_mode="HTML")
-async def cmd_offchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['chk_on'] = False; await update.message.reply_text("STRIPE → OFF", parse_mode="HTML")
-async def cmd_onpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['pp_on'] = True; await update.message.reply_text("PAYPAL → ON", parse_mode="HTML")
-async def cmd_offpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['pp_on'] = False; await update.message.reply_text("PAYPAL → OFF", parse_mode="HTML")
-async def cmd_onsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['sh_on'] = True; await update.message.reply_text("SHOPIFY → ON", parse_mode="HTML")
-async def cmd_offsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['sh_on'] = False; await update.message.reply_text("SHOPIFY → OFF", parse_mode="HTML")
-async def cmd_onpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['pyu_on'] = True; await update.message.reply_text("PAYU → ON", parse_mode="HTML")
-async def cmd_offpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return; context.bot_data['pyu_on'] = False; await update.message.reply_text("PAYU → OFF", parse_mode="HTML")
-
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer(); d = q.data
-    if d == "verify_join":
-        if await is_joined(q.from_user.id, context):
-            try:
-                if q.message.photo: await q.message.delete(); await context.bot.send_message(chat_id=q.message.chat_id, text=ui_profile(q.from_user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-                else: await q.edit_message_text(text=ui_profile(q.from_user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-            except Exception as e: logging.error(f"Verify error: {e}")
-        else: await q.answer("❌ Join Group & Channel first!", show_alert=True)
+    target_id = id_match.group(1)
+    
+    # Extract Plan Name (Elite or Root)
+    plan_name = None
+    if "elite" in full_text.lower():
+        plan_name = "Elite"
+    elif "root" in full_text.lower():
+        plan_name = "Root"
+    else:
+        await update.message.reply_text("❌ Use /sub <id> Elite or /sub <id> Root")
         return
-    async def edit(t, kb):
-        try: await q.edit_message_text(text=t, parse_mode="HTML
+
+    days = 15 if plan_name == "Elite" else 30
+    now = datetime.now()
+    db = load_db(DB_FILE)
+    db[target_id] = {
+        "plan": plan_name, 
+        "credits": 999999, 
+        "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), 
+        "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), 
+        "receipt_id": "PAY-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    }
+    save_db(DB_FILE, db)
+    
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
+    txt = (
+        f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\n"
+        f"Uꜱᴇʀ ➺ {target_id}\n"
+        f"Aᴄᴄᴇꜱꜱ ➺ {plan_name}\n"
+        f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
+        f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\n"
+        f"Rᴇᴄᴇɪᴘᴛ ID ➺ {db[target_id]['receipt_id']}\n\n"
+        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
+    )
+    
+    try:
+        await context.bot.send_message(chat_id=int(target_id), text=txt, parse_mode="HTML", reply_markup=kb)
+        await update.message.reply_text(f"✅ {plan_name} activated for {target_id}.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)[:50]}")
+
+async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args or not context.args[0].isdigit(): 
+        await update.message.reply_text("❌ Usage: /resub <userid>") 
+        return
+    tid = context.args[0]
+    db = load_db(DB_FILE)
+    if tid in db:
+        db[tid] = {"plan": "Trial", "credits": 0, "expires_at": None, "activated_at": None, "receipt_id": None}
+        save_db(DB_FILE, db)
+        await update.message.reply_text(f"✅ Premium cancelled for {tid}.")
+    else: 
+        await update.message.reply_text("❌ User not found.")
+
+async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    db = load_db(DB_FILE)
+    active = [uid for uid, d in db.items() if d['plan'] != "Trial"]
+    if not active: 
+        await update.message.reply_text("❌ No active plans.") 
+        return
+    txt = "Aᴄᴄᴛɪᴠᴇ Pʟᴀɴꜱ\n━━━━━━━━━━━━━━━━━━━━\n"
+    for uid in active:
+        u = db[uid]
+        txt += (
+            f"\nUꜱᴇʀ ID ➺ <code>{uid}</code>\n"
+            f"Aᴄᴄᴇꜱꜱ ➺ {u['plan']}\n"
+            f"Bᴏᴜɢʜᴛ ➺ {u.get('activated_at', 'N/A')}\n"
+            f"Exᴘɪʀᴇꜱ ➺ {u.get('expires_at', 'N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+    await update.message.reply_text(txt, parse_mode="HTML")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FIXED /gen COMMAND (Owner can do ANY number) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args or not context.args[0].isdigit(): 
+        await update.message.reply_text("❌ Usage: /gen100\nExample: /gen1000") 
+        return
+    amount = context.args[0]
+    code = f"CR-{amount}-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    db = load_db(CODES_FILE)
+    db[code] = {"type": "credits", "value": int(amount)}
+    save_db(CODES_FILE, db)
+    await update.message.reply_text(f"🔑 Cʀᴇᴅɪᴛ Cᴏᴅᴇ ({amount}):\n\n<code>{code}</code>", parse_mode="HTML")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 NEW /key<n> COMMAND (Replaces oneday/threeday) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    # Extract number from command (e.g., /key5 -> 5 days)
+    match = re.match(r"^/key(\d+)$", update.message.text)
+    if not match: return
+    
+    days = int(match.group(1))
+    code = f"KEY-{days}D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    db = load_db(CODES_FILE)
+    db[code] = {"type": "days", "value": days}
+    save_db(CODES_FILE, db)
+    await update.message.reply_text(f"🔑 {days} Dᴀʏꜱ Pʀᴇᴍɪᴜᴍ Kᴇʏ:\n\n<code>{code}</code>", parse_mode="HTML")
+
+async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args: 
+        await update.message.reply_text("❌ Usage: /rm <code>") 
+        return
+    code = context.args[0]
+    db = load_db(CODES_FILE)
+    
+    if code not in db: 
+        await update.message.reply_text("❌ Iɴᴠᴀʟɪᴅ ᴏʀ ᴜꜱᴇᴅ ᴄᴏᴅᴇ.") 
+        return
+    
+    code_data = db[code]
+    del db[code] # Delete immediately
+    save_db(CODES_FILE, db)
+    user_db = load_db(DB_FILE)
+    uid = str(update.effective_user.id)
+    
+    # TYPE 1: Credit Code (from /gen)
+    if code_data["type"] == "credits":
+        user = get_user(update.effective_user.id)
+        user['credits'] += code_data["value"]
+        user_db[uid] = user
+        save_db(DB_FILE, user_db)
+        await update.message.reply_text(
+            f"✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ!\n\n"
+            f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ {code_data['value']}\n"
+            f"Tᴏᴛᴀʟ Cʀᴇᴅɪᴛꜱ ➺ {user['credits']}", 
+            parse_mode="HTML"
+        )
+        
+    # TYPE 2: Premium Key Code (from /key)
+    else:
+        days = code_data["value"]
+        now = datetime.now()
+        user_db[uid] = {
+            "plan": f"Key ({days}D)", 
+            "credits": 999999, 
+            "expires_at": (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"), 
+            "activated_at": now.strftime("%Y-%m-%d %H:%M:%S"), 
+            "receipt_id": "KEY-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        }
+        save_db(DB_FILE, user_db)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]])
+        await update.message.reply_text(
+            f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\n"
+            f"Uꜱᴇʀ ➺ {uid}\n"
+            f"Aᴄᴄᴇꜱꜱ ➺ {days} Dᴀʏꜱ Kᴇʏ\n"
+            f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
+            f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\n"
+            f"Rᴇᴄᴇɪᴘᴛ ID ➺ {user_db[uid]['receipt_id']}\n\n"
+            "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.", 
+            parse_mode="HTML", 
+            reply_markup=kb
+        )
+
+def get_plans_handler():
+    return [
+        CommandHandler("sub", cmd_sub), 
+        CommandHandler("resub", cmd_resub),
+        CommandHandler("allplans", cmd_allplans), 
+        CommandHandler("gen", cmd_gen),
+        # Catches /key1, /key2, /key30 etc dynamically
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^/key\d+$"), cmd_key),
+        CommandHandler("rm", cmd_rm)
+    ]
