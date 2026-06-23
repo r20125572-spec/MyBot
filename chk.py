@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import re
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 from config import STRIPE_API, STRIPE_SITE, API_TIMEOUT, get_bin_info, ui_result, kb_result
@@ -12,19 +13,13 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     card = None
-    # Method 1: Get card from command text
     if context.args:
         card = context.args[0]
-    # Method 2: Get card from replied message
     elif update.message.reply_to_message and update.message.reply_to_message.text:
         card = update.message.reply_to_message.text.strip()
         
-    # If no card details provided at all
     if not card:
-        await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/chk cc|mm|yy|cvv",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/chk cc|mm|yy|cvv", parse_mode="HTML")
         return
     
     bin_num = card[:6]
@@ -42,7 +37,14 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if isinstance(api_resp, Exception): raise api_resp
         
         data = await api_resp.json()
-        raw = data.get("response", "ERROR")
+        raw = str(data.get("response", "ERROR"))
+        
+        # 🛡️ BLOCK EXTERNAL ADS & LINKS FROM API
+        raw = re.sub(r'https?://t\.me/\S+', '', raw)
+        raw = re.sub(r'https?://\S+', '', raw)
+        raw = raw.strip()
+        if not raw: raw = "NO RESPONSE"
+        
         approved = "approved" in raw.lower()
         
         bin_txt, country, flag = "N/A", "N/A", ""
@@ -62,4 +64,4 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Eʀʀᴏʀ ➤ <code>{str(e)[:100]}</code>", parse_mode="HTML")
 
 def get_chk_handler():
-    return CommandHandler("chk", cmd_chk)
+    return CommandHandler("chk", cmd
