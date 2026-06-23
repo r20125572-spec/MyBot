@@ -8,10 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, MessageHandler, filters, ContextTypes
 from config import OWNER_ID
 
-try:
-    from config import SUPPORT_LINK
-except ImportError:
-    SUPPORT_LINK = "https://t.me/cardchkSupport"
+SUPPORT_LINK = "https://t.me/failurefr_07" # ✅ CHANGED TO OLDER LINK
 
 DB_FILE = "plans_db.json"
 CODES_FILE = "codes_db.json"
@@ -66,14 +63,10 @@ def get_user_ui_text(user_id: int) -> str:
     credits_txt = "∞ Uɴʟɪᴍɪᴛᴇᴅ" if is_premium(user_id) else str(user['credits'])
     return f"Aᴄᴄᴇꜱꜱ ➺ {plan}\nCʀᴇᴅɪᴛꜱ ➺ {credits_txt}"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FIXED /sub COMMAND (Handles spaces correctly) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args: await update.message.reply_text("❌ Usage: /sub <id>Elite\nExample: /sub 123456789 Elite"); return
     
-    # Join all args to fix issue if user types "/sub 123456789 Elite" with a space
     raw = "".join(context.args)
     match = re.match(r"(\d+)(Elite|Root)", raw)
     if not match: await update.message.reply_text("❌ Use /sub<id>Elite or /sub<id>Root"); return
@@ -114,9 +107,6 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt += f"\nUꜱᴇʀ ID ➺ <code>{uid}</code>\nAᴄᴄᴇꜱꜱ ➺ {u['plan']}\nBᴏᴜɢʜᴛ ➺ {u.get('activated_at', 'N/A')}\nExᴘɪʀᴇꜱ ➺ {u.get('expires_at', 'N/A')}\n━━━━━━━━━━━━━━━━━━━━"
     await update.message.reply_text(txt, parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FIXED /gen COMMAND (Any number of credits) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args or not context.args[0].isdigit(): await update.message.reply_text("❌ Usage: /gen100\nExample: /gen1000"); return
@@ -127,16 +117,10 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_db(CODES_FILE, db)
     await update.message.reply_text(f"🔑 Cʀᴇᴅɪᴛ Cᴏᴅᴇ ({amount}):\n\n<code>{code}</code>", parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 NEW /key<n> COMMAND (Replaces oneday/threeday) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    
-    # Extract number of days from the command (e.g., /key5 -> 5)
     match = re.match(r"^/key(\d+)$", update.message.text)
     if not match: return
-    
     days = int(match.group(1))
     code = f"KEY-{days}D-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     db = load_db(CODES_FILE)
@@ -151,20 +135,17 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if code not in db: await update.message.reply_text("❌ Iɴᴠᴀʟɪᴅ ᴏʀ ᴜꜱᴇᴅ ᴄᴏᴅᴇ."); return
     
     code_data = db[code]
-    del db[code] # Delete immediately
+    del db[code]
     save_db(CODES_FILE, db)
     user_db = load_db(DB_FILE)
     uid = str(update.effective_user.id)
     
-    # TYPE 1: Credit Code (from /gen)
     if code_data["type"] == "credits":
         user = get_user(update.effective_user.id)
         user['credits'] += code_data["value"]
         user_db[uid] = user
         save_db(DB_FILE, user_db)
         await update.message.reply_text(f"✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ!\n\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ {code_data['value']}\nTᴏᴛᴀʟ Cʀᴇᴅɪᴛꜱ ➺ {user['credits']}", parse_mode="HTML")
-        
-    # TYPE 2: Premium Key Code (from /key)
     else:
         days = code_data["value"]
         now = datetime.now()
@@ -179,7 +160,6 @@ def get_plans_handler():
         CommandHandler("resub", cmd_resub),
         CommandHandler("allplans", cmd_allplans), 
         CommandHandler("gen", cmd_gen),
-        # Catches /key1, /key2, /key30 etc dynamically
         MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^/key\d+$"), cmd_key),
         CommandHandler("rm", cmd_rm)
     ]
