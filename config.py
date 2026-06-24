@@ -18,35 +18,46 @@ GROUP_USERNAME = "@batcardchkGroup"
 CHANNEL_LINK = "https://t.me/Batcardchk"
 GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/failurefr_07"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 BATMAN PHOTO — URL WORKS DIRECTLY, NO FILE NEEDED
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
 
-# Gate APIs
-STRIPE_API = "https://stripe-auth-test-production.up.railway.app/st0"
-STRIPE_SITE = "fashionspicex.com"
-PP_API = "https://pp-auth-test-production.up.railway.app/pp"
-PP_SITE = "example.com"
-SH_API = "https://shopify-auth-test-production.up.railway.app/sh"
-SH_SITE = "example.com"
-PYU_API = "https://payu-auth-test-production.up.railway.app/pyu"
-PYU_SITE = "example.com"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 GATE API URLs — USED DIRECTLY BY main.py
+#    No /seturl needed. Bot reads these on startup.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE_URLS = {
+    "chk": "https://stripe-auth-test-production.up.railway.app/st0",
+    "pp":  "https://pp-auth-test-production.up.railway.app/pp",
+    "sh":  "https://shopify-auth-test-production.up.railway.app/sh",
+    "pyu": "https://payu-auth-test-production.up.railway.app/pyu",
+    "b3":  "",
+}
+
+GATE_SITES = {
+    "chk": "fashionspicex.com",
+    "pp":  "example.com",
+    "sh":  "example.com",
+    "pyu": "example.com",
+    "b3":  "example.com",
+}
 
 API_TIMEOUT = 120
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BIN LOOKUP (Fixed: No aiohttp needed) 🦇
+# 🦇 BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def get_bin_info(bin_num: str) -> dict:
     try:
         url = f"https://lookup.binlist.net/{bin_num}"
         req = urllib.request.Request(url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"})
-        
         def fetch():
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode('utf-8'))
-                
         data = await asyncio.get_running_loop().run_in_executor(None, fetch)
-        
         bank_name = "N/A"
         if data.get("bank"):
             bank_name = data["bank"].get("name", "N/A")
@@ -68,18 +79,16 @@ async def get_bin_info(bin_num: str) -> dict:
     return {"error": True}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SHARED CHECK UI (NEW CLEAN STYLE) 🦇
+# 🦇 SHARED CHECK UI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def ui_result(card, gate, bin_txt, country, flag, raw, user, approved, time_taken="0.00"):
     u = user.username or user.first_name
     status = "Cᴀʀᴅ Cʜᴀʀɢᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
-    
     if bin_txt and bin_txt != "N/A":
         info = f"{bin_txt} - {country}{flag}"
     else:
         info = f"{country}{flag}"
-        
     return (
         f"Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\n"
         f"Tɪᴍᴇ ➺ {time_taken}s\n"
