@@ -20,13 +20,15 @@ GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/failurefr_07"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BATMAN PHOTO — URL WORKS DIRECTLY, NO FILE NEEDED
+# 🦇 BATMAN PHOTO
+#    Bot downloads this URL itself (Telegram can't access
+#    chatglm.cn directly, so we download it for Telegram)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
+BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
+BOT_PHOTO = "batman.jpg"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE API URLs — USED DIRECTLY BY main.py
-#    No /seturl needed. Bot reads these on startup.
+# 🦇 GATE API URLs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS = {
     "chk": "https://stripe-auth-test-production.up.railway.app/st0",
