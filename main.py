@@ -14,30 +14,28 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict
 
-from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, BOT_PHOTO
+from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, BOT_PHOTO, GATE_URLS, GATE_SITES, API_TIMEOUT
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 HARDCODED LINKS — NO A_ToolsX ANYWHERE
+# 🦇 HARDCODED LINKS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CHANNEL_USERNAME = "@Batcardchk"
 GROUP_USERNAME = "@batcardchkGroup"
 CHANNEL_LINK = "https://t.me/Batcardchk"
 GROUP_LINK = "https://t.me/batcardchkGroup"
-SUPPORT_LINK = "https://t.me/cardchkSupport"
+SUPPORT_LINK = "https://t.me/failurefr_07"
 
 GATE_COST = {"chk": 1, "pp": 1, "sh": 2, "pyu": 1, "b3": 1}
 GATE_NAMES = {"chk": "Stripe", "pp": "PayPal", "sh": "Shopify", "pyu": "PayU", "b3": "Braintree"}
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BLOCKED WORDS — A_ToolsX FULLY BLOCKED
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BLOCK_WORDS = (
     "http://", "https://", "www.", "t.me", ".com", ".net", ".org",
     ".io", ".me", ".xyz", ".tk", ".ml", ".cf", ".ga", ".ru", ".in",
     ".pw", "telegram.me", "joinchat", "://",
-    "a_toolsx", "a-tools", "atoolsx", "a tools x", "a-tools x", "a_tools"
+    "a_toolsx", "a-tools", "atoolsx", "a tools x", "a-tools x", "a_tools",
+    "toolsx"
 )
 
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -62,9 +60,6 @@ def is_premium_active(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     ud = context.bot_data.get('user_data', {}).get(str(user_id), {})
     return ud.get('plan', 'FREE') != 'FREE' and ud.get('expires', 0) > time.time()
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 REAL-TIME PROFILE — TEXT ONLY, NO PHOTO
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
     uid_str = str(user.id)
@@ -103,9 +98,6 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     except: pass
     return receipt
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 KEYBOARDS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("CHECKER", callback_data="mgates"), InlineKeyboardButton("BUY NOW", callback_data="mprice")],
@@ -143,9 +135,7 @@ async def fetch_bin(url: str) -> dict:
     except: return {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 /start — BATMAN PHOTO ONLY ON JOINING PAGE
-#    First time user → sees photo + join buttons
-#    After joining → sees text profile only (NO photo)
+# 🦇 /start — PHOTO FROM config.py URL ON JOIN PAGE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -153,13 +143,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ud: ud[uid] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "FREE", "expires": 0}
 
     if await is_joined(user.id, context):
-        # ✅ ALREADY JOINED — TEXT ONLY, NO PHOTO
-        await update.message.reply_text(
-            text=ui_profile(user, context), parse_mode="HTML",
-            reply_markup=kb_main(), disable_web_page_preview=True
-        )
+        await update.message.reply_text(text=ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
     else:
-        # ✅ NOT JOINED YET — BATMAN PHOTO + JOIN BUTTONS
         caption = (
             "🦇 BATMAN CARD CHECKER 🦇\n\n"
             "Access Required\n"
@@ -168,37 +153,29 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "unlock the bot.\n"
             "━━━━━━━━━━━━━━━━━━━━"
         )
-
         photo_sent = False
 
-        # Method 1: Try as local file path (e.g. "batman.jpg" or "/app/batman.jpg")
+        # Try BOT_PHOTO as URL from config.py
         if BOT_PHOTO:
             try:
-                with open(BOT_PHOTO, 'rb') as f:
-                    await update.message.reply_photo(
-                        photo=f, caption=caption, parse_mode="HTML",
-                        reply_markup=kb_force()
-                    )
+                await update.message.reply_photo(photo=BOT_PHOTO, caption=caption, parse_mode="HTML", reply_markup=kb_force())
                 photo_sent = True
-            except (FileNotFoundError, IOError, TypeError, OSError):
-                pass
+                print(f"🦇 Photo sent via URL: {BOT_PHOTO[:60]}...")
+            except Exception as e:
+                print(f"⚠️ URL photo failed: {e}")
 
-        # Method 2: Try as Telegram file_id or URL string
+        # Try as local file
         if not photo_sent and BOT_PHOTO:
             try:
-                await update.message.reply_photo(
-                    photo=BOT_PHOTO, caption=caption, parse_mode="HTML",
-                    reply_markup=kb_force()
-                )
+                with open(BOT_PHOTO, 'rb') as f:
+                    await update.message.reply_photo(photo=f, caption=caption, parse_mode="HTML", reply_markup=kb_force())
                 photo_sent = True
-            except:
-                pass
+                print(f"🦇 Photo sent via file: {BOT_PHOTO}")
+            except: pass
 
-        # Method 3: Fallback to text only if photo fails
         if not photo_sent:
-            await update.message.reply_text(
-                text=caption, parse_mode="HTML", reply_markup=kb_force()
-            )
+            print("❌ Photo failed, sending text only")
+            await update.message.reply_text(text=caption, parse_mode="HTML", reply_markup=kb_force())
 
 async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /bin <BIN>\nExample: /bin 453201", parse_mode="HTML"); return
@@ -225,12 +202,12 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━\n/start - Start the bot\n/plan - View pricing plans\n/bin - Check BIN details\n/chk - Stripe check\n/pp - PayPal check\n/sh - Shopify check\n/pyu - PayU check\n/b3 - Braintree Auth\n/rm - Redeem code\n\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━\n/info - Get user info\n/allcm - Show this\n/gen - Gen credit code\n/key10 - Gen premium key 10$\n/key20 - Gen premium key 20$\n/key30 - Gen premium key 30$\n/sub - Grant premium\n/resub - Remove premium\n/allplans - View active plans\n/oneday - Grant 1 day access\n/threeday - Grant 3 days access\n/seturl - Set gate API URL\n/geturl - View gate URLs\n/onchk /offchk - Stripe gate\n/onpp /offpp - PayPal gate\n/onsh /offsh - Shopify gate\n/onpyu /offpyu - PayU gate\n━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━\n\nUSER COMMANDS\n━━━━━━━━━━━━━━━━━━\n/start /plan /bin\n/chk /pp /sh /pyu /b3 /rm\n\nOWNER COMMANDS\n━━━━━━━━━━━━━━━━━━\n/info /allcm /gen\n/key10 /key20 /key30\n/sub /resub /allplans\n/oneday /threeday\n/seturl /geturl\n/onchk /offchk /onpp /offpp\n/onsh /offsh /onpyu /offpyu\n/killbot\n━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not update.message.reply_to_message and not context.args:
-        await update.message.reply_text("❌ INVALID USAGE\n\nHow to get User ID:\n1. Ask user to send /start\n2. Copy the 'USER ID' from menu\n3. Then type: /info 123456789\n\nOr simply reply to their message with /info", parse_mode="HTML"); return
+        await update.message.reply_text("❌ Usage: /info <user_id>\nOr reply to a message with /info", parse_mode="HTML"); return
     if update.message.reply_to_message: target_id = update.message.reply_to_message.from_user.id
     else: target_id = await resolve_user(context.args[0], context)
     if not target_id: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
@@ -292,13 +269,13 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 2:
-        await update.message.reply_text("❌ INVALID USAGE\n\nCorrect Usage:\n/sub 123456789 30\n\nNote: Second parameter MUST be a number (days).", parse_mode="HTML"); return
+        await update.message.reply_text("❌ Usage: /sub <user_id> <days>", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
     try:
         days = int(context.args[1]); plan = "root" if days >= 30 else "elite" if days >= 15 else "core"
         await _grant_premium(uid, plan, days, update, context)
-    except ValueError: await update.message.reply_text("❌ INVALID DAYS\nThe second parameter must be a number.\nExample: /sub 123456789 30", parse_mode="HTML")
+    except ValueError: await update.message.reply_text("❌ Invalid days number.", parse_mode="HTML")
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -371,28 +348,32 @@ async def cmd_offpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 2:
-        await update.message.reply_text("❌ INVALID USAGE\n\nSet gate API URL:\n/seturl chk https://your-api.com/check\n/seturl pp https://your-api.com/check\n/seturl sh https://your-api.com/check\n/seturl pyu https://your-api.com/check\n/seturl b3 https://your-api.com/check\n\nRemove gate URL:\n/seturl chk remove", parse_mode="HTML"); return
+        await update.message.reply_text("❌ Usage: /seturl <gate> <url>\n/seturl chk remove", parse_mode="HTML"); return
     gate = context.args[0].lower(); url = " ".join(context.args[1:])
     if gate not in GATE_NAMES:
-        await update.message.reply_text(f"❌ Unknown gate: {gate}\n\nValid: chk, pp, sh, pyu, b3", parse_mode="HTML"); return
+        await update.message.reply_text(f"❌ Unknown gate. Valid: chk, pp, sh, pyu, b3", parse_mode="HTML"); return
     if url.lower() == "remove":
         context.bot_data.pop(f'gate_url_{gate}', None)
-        await update.message.reply_text(f"✅ Removed {GATE_NAMES[gate]} URL.", parse_mode="HTML"); return
+        await update.message.reply_text(f"✅ Removed {GATE_NAMES[gate]} override. Using config.py URL.", parse_mode="HTML"); return
     context.bot_data[f'gate_url_{gate}'] = url
-    await update.message.reply_text(f"✅ {GATE_NAMES[gate]} URL set to:\n<code>{url}</code>", parse_mode="HTML")
+    await update.message.reply_text(f"✅ {GATE_NAMES[gate]} override set.\n<code>{url}</code>", parse_mode="HTML")
 
 async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     txt = "🦇 GATE API URLs\n━━━━━━━━━━━━━━━━━━━━\n\n"
     for gate, name in GATE_NAMES.items():
-        url = context.bot_data.get(f'gate_url_{gate}', '❌ Not set')
+        override = context.bot_data.get(f'gate_url_{gate}', '')
+        config_url = GATE_URLS.get(gate, '')
+        active = override if override else config_url
+        source = "⚡ Override" if override else "📝 Config"
         status = "🟢 ON" if context.bot_data.get(f'{gate}_on', True) else "🔴 OFF"
-        txt += f"{name} [{status}]\nURL: <code>{url}</code>\n\n"
-    txt += "━━━━━━━━━━━━━━━━━━━━\n\nSet URL: /seturl <gate> <url>\nToggle: /on<gate> /off<gate>"
+        txt += f"{name} [{status}] [{source}]\n<code>{active or '❌ Not set'}</code>\n\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━"
     await update.message.reply_text(txt, parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇🦇🦇 GATE COMMANDS — ALL USERS CAN USE
+# 🦇🦇🦇 GATE COMMANDS — USES config.py URLs DIRECTLY
+#     Flow: /seturl override → config.py GATE_URLS → error
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_card(text: str) -> Optional[dict]:
     text = text.strip()
@@ -407,17 +388,34 @@ def parse_card(text: str) -> Optional[dict]:
     return None
 
 async def run_gate_api(gate: str, card: dict, context: ContextTypes.DEFAULT_TYPE) -> dict:
+    # Priority 1: /seturl override in bot_data
     api_url = context.bot_data.get(f'gate_url_{gate}', '')
+    # Priority 2: config.py GATE_URLS
     if not api_url:
-        return {"status": "error", "message": f"{GATE_NAMES[gate]} gate is not configured yet. Contact @cardchkSupport to get it enabled."}
+        api_url = GATE_URLS.get(gate, '')
+
+    if not api_url:
+        return {"status": "error", "message": f"{GATE_NAMES[gate]} gate is not configured."}
     if not context.bot_data.get(f'{gate}_on', True):
         return {"status": "error", "message": f"{GATE_NAMES[gate]} gate is temporarily disabled."}
-    payload = json.dumps({"cc": card["cc"], "mm": card["mm"], "yy": card["yy"], "cvv": card["cvv"], "gate": gate}).encode('utf-8')
-    req = urllib.request.Request(api_url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "BatCardChk/2.0", "Accept": "application/json"})
+
+    site = GATE_SITES.get(gate, "")
+    payload = json.dumps({
+        "cc": card["cc"], "mm": card["mm"],
+        "yy": card["yy"], "cvv": card["cvv"],
+        "gate": gate, "site": site
+    }).encode('utf-8')
+
+    req = urllib.request.Request(api_url, data=payload, headers={
+        "Content-Type": "application/json",
+        "User-Agent": "BatCardChk/4.1",
+        "Accept": "application/json"
+    })
+
     try:
         loop = asyncio.get_running_loop()
         def do_req():
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=API_TIMEOUT) as r:
                 raw = r.read().decode('utf-8', errors='ignore')
                 try: return json.loads(raw)
                 except: return {"status": "unknown", "message": raw[:500]}
@@ -430,7 +428,7 @@ async def run_gate_api(gate: str, card: dict, context: ContextTypes.DEFAULT_TYPE
         except: pass
         try:
             err_json = json.loads(body)
-            return {"status": "error", "message": err_json.get("message", err_json.get("msg", err_json.get("error", body)))}
+            return {"status": "error", "message": err_json.get("message", err_json.get("msg", body))}
         except: return {"status": "error", "message": f"API Error {e.code}"}
     except urllib.error.URLError as e:
         return {"status": "error", "message": f"Cannot reach server — {str(e.reason)[:150]}"}
@@ -446,24 +444,23 @@ def format_gate_result(gate: str, data: dict, card: dict) -> str:
     if not status: status = str(data.get("code", "")).lower()
     msg = data.get("message", "") or data.get("msg", "") or data.get("info", "") or data.get("description", "") or ""
     if isinstance(msg, (dict, list)): msg = json.dumps(msg, ensure_ascii=False)
-    approved_words = ("approved", "live", "charged", "success", "1", "true", "approved_charged", "valid", "alive")
-    declined_words = ("declined", "dead", "rejected", "fail", "0", "false", "declined_dead", "invalid", "die")
-    cvv_words = ("cvv_mismatch", "cvv2_mismatch")
-    if any(w == status for w in approved_words) or status.startswith("approv"):
+
+    if any(w == status for w in ("approved", "live", "charged", "success", "1", "true", "approved_charged", "valid", "alive")) or status.startswith("approv"):
         icon, result = "✅", "APPROVED ✅"
-    elif any(w == status for w in declined_words) or status.startswith("declin") or status.startswith("reject"):
+    elif any(w == status for w in ("declined", "dead", "rejected", "fail", "0", "false", "declined_dead", "invalid", "die")) or status.startswith("declin") or status.startswith("reject"):
         icon, result = "❌", "DECLINED ❌"
-    elif any(w in status for w in cvv_words):
+    elif "cvv" in status and "mismatch" in status:
         icon, result = "⚠️", "CVV MISMATCH ⚠️"
     elif status == "error":
         masked = f"{card['cc'][:6]}******{card['cc'][-4:]}"
         return (f"❌ {GATE_NAMES[gate].upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\nCard ➺ <code>{masked}</code>\nResult ➺ FAILED ❌\nReason ➺ {msg if msg else 'Unknown error'}\n\n━━━━━━━━━━━━━━━━━━━━")
     else:
         icon, result = "⚠️", f"RESPONSE: {(status or 'UNKNOWN').upper()}"
+
     masked = f"{card['cc'][:6]}******{card['cc'][-4:]}"
     txt = (f"{icon} {GATE_NAMES[gate].upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\nCard ➺ <code>{masked}</code>\nResult ➺ {result}\n")
     if msg and msg.lower() not in ("none", "", "null"): txt += f"Info ➺ {msg[:300]}\n"
-    for key in ["bin_info", "charge_id", "transaction_id", "bank", "country", "type", "brand", "funding"]:
+    for key in ["bin_info", "charge_id", "transaction_id", "bank", "country", "type", "brand", "funding", "site"]:
         val = data.get(key)
         if val and str(val).lower() not in ("none", "null", ""): txt += f"{key.title()} ➺ {val}\n"
     txt += "\n━━━━━━━━━━━━━━━━━━━━"
@@ -477,12 +474,12 @@ async def handle_gate_cmd(gate: str, update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(f"❌ Usage: /{gate} cc|mm|yy|cvv\n\nExample: /{gate} 4532010123456789|03|28|353", parse_mode="HTML"); return
     card = parse_card(" ".join(context.args))
     if not card:
-        await update.message.reply_text("❌ Invalid card format!\n\nCorrect formats:\ncc|mm|yy|cvv\ncc/mm/yy/cvv\ncc mm yy cvv\n\nExample: 4532010123456789|03|28|353", parse_mode="HTML"); return
+        await update.message.reply_text("❌ Invalid card format!\n\ncc|mm|yy|cvv\ncc/mm/yy/cvv\ncc mm yy cvv\n\nExample: 4532010123456789|03|28|353", parse_mode="HTML"); return
     if not is_premium_active(user.id, context):
         ud = context.bot_data.setdefault('user_data', {}).get(uid_str, {})
         cost = GATE_COST.get(gate, 1); credits = ud.get('credits', 150)
         if credits < cost:
-            await update.message.reply_text(f"❌ Not enough credits!\n\nNeeded: {cost} credit(s)\nBalance: {credits} credits\n\nUse /rm <code> to add credits\nor buy premium for ∞ credits.", parse_mode="HTML"); return
+            await update.message.reply_text(f"❌ Not enough credits!\n\nNeeded: {cost}\nBalance: {credits}\n\nUse /rm <code> or buy premium.", parse_mode="HTML"); return
         ud['credits'] = credits - cost
     masked = f"{card['cc'][:6]}******{card['cc'][-4:]}"
     status_msg = await update.message.reply_text(f"⏳ Checking <code>{masked}</code> on {GATE_NAMES[gate]}...\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
@@ -525,7 +522,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
     elif d in ("pay10", "pay20", "pay30"):
         amt = d.replace("pay", "$")
-        await edit(f"PAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: {amt}\nTaxes: Included\nTotal: {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
+        await edit(f"PAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: {amt}\nTaxes: Included\nTotal: {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
     elif d == "mgates":
         await edit("SELECT GATE", InlineKeyboardMarkup([[InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],[InlineKeyboardButton("◀ BACK", callback_data="bmain")]]))
     elif d == "mauth":
@@ -554,6 +551,8 @@ async def _check_and_kick_if_not_joined(user_id, chat_id, context: ContextTypes.
 
 async def on_start(app):
     print("🦇 Batman Bot Initializing...")
+    print(f"🦇 Gate URLs loaded: {list(GATE_URLS.keys())}")
+    print(f"🦇 Photo: {BOT_PHOTO[:60] if BOT_PHOTO else 'NONE'}...")
     await app.bot.delete_webhook(drop_pending_updates=True)
 
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -563,7 +562,7 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict):
-        logging.warning("⚠️ Conflict caught! Ignoring ghost instance...")
+        logging.warning("⚠️ Conflict caught! Ignoring...")
         await asyncio.sleep(15)
         return
     logging.error(f"Exception: {context.error}")
@@ -608,7 +607,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, anti_ad_filter))
 
-    print("🦇 Online! All Commands & Buttons Hyper-Fast.")
+    print("🦇 Online!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
