@@ -7,7 +7,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime
 
-from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, CHANNEL_USERNAME, GROUP_USERNAME, CHANNEL_LINK, GROUP_LINK
+from config import (
+    BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, 
+    CHANNEL_USERNAME, GROUP_USERNAME, CHANNEL_LINK, GROUP_LINK, 
+    SUPPORT_LINK, BOT_PHOTO
+)
 from chk import get_chk_handler
 from pp import get_pp_handler
 from sh import get_sh_handler
@@ -17,17 +21,14 @@ from bincheck import get_bin_handler
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
-SUPPORT_LINK = "https://t.me/cardchkSupport"
-
-# ENHANCED: Strictly block ALL outer links
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 STRICT LINK BLOCKER 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     if update.effective_user.id == OWNER_ID: return
     
     text = update.message.text.lower()
-    
-    # Comprehensive list to block any link
     link_patterns = [
         "http://", "https://", "www.", "t.me", ".com", ".net", ".org", 
         ".io", ".me", ".xyz", ".tk", ".ml", ".cf", ".ga", ".ru", ".in", ".pw",
@@ -66,7 +67,6 @@ def kb_main():
 
 def kb_back(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("◀ BACK", callback_data=cb)]])
 
-# Uses variables from config.py to avoid wrong links
 def kb_force():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("JOIN GROUP", url=GROUP_LINK)],
@@ -175,53 +175,4 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "mcharge": await edit("CHARGE GATES", InlineKeyboardMarkup([[InlineKeyboardButton("Stripe", callback_data="ichk"), InlineKeyboardButton("PayPal", callback_data="ipp")],[InlineKeyboardButton("Shopify", callback_data="ish"), InlineKeyboardButton("PayU", callback_data="ipyu")],[InlineKeyboardButton("◀ BACK", callback_data="mgates")]]))
     elif d == "ichk": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe\nPRICE: $0.50\nCMD: /chk\nSITES: 4\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
     elif d == "ipp": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayPal\nPRICE: $0.10\nCMD: /pp\nSITES: 7\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-    elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-    elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: $0.30\nCMD: /pyu\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-
-async def on_start(app):
-    print("Batman Starting...")
-    await app.bot.delete_webhook(drop_pending_updates=True)
-
-async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text("🛑 Killing bot process...", parse_mode="HTML")
-    os.kill(os.getpid(), signal.SIGTERM)
-
-# FIX: Normal synchronous function to stop "Cannot close a running event loop"
-def main():
-    try:
-        import psutil
-        for proc in psutil.process_iter(['python', 'main.py']):
-            if 'main.py' in ' '.join(proc.cmdline()):
-                if proc.pid != os.getpid():
-                    os.kill(proc.pid, signal.SIGTERM)
-    except Exception:
-        pass
-    
-    app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
-    
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
-    app.add_handler(CommandHandler("killbot", cmd_killbot))
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("plan", cmd_plan))
-    app.add_handler(CommandHandler("info", cmd_info))
-    app.add_handler(CommandHandler("allcm", cmd_allcm))
-    
-    app.add_handler(get_chk_handler())
-    app.add_handler(get_pp_handler())
-    app.add_handler(get_sh_handler())
-    app.add_handler(get_pyu_handler())
-    app.add_handler(get_bin_handler())
-    
-    for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
-        app.add_handler(CommandHandler(cmd[0], cmd[1]))
-    for handler in get_plans_handler(): app.add_handler(handler)
-    app.add_handler(CallbackQueryHandler(on_callback))
-    
-    print("Online! Bot is running perfectly.")
-    
-    # FIX: app.run_polling handles its own loop and auto-restarts automatically!
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+    elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh\nSITES:
