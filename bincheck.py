@@ -1,4 +1,7 @@
-import requests
+import urllib.request
+import urllib.error
+import urllib.parse
+import json
 import asyncio
 import logging
 from telegram import Update
@@ -8,7 +11,53 @@ logger = logging.getLogger(__name__)
 
 # BIN Lookup API
 BIN_API_URL = "https://lookup.binlist.net/{bin}"
-BIN_API_HEADERS = {"Accept-Version": "3", "User-Agent": "Mozilla/5.0"}
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+async def fetch_url(url: str, timeout: int = 15) -> tuple:
+    """
+    Fetch URL using urllib (built-in, no requests needed)
+    Returns (status_code, json_data or error_message)
+    """
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept-Version": "3",
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json"
+            }
+        )
+        
+        loop = asyncio.get_event_loop()
+        
+        def do_request():
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                data = response.read().decode('utf-8')
+                return response.status, json.loads(data)
+        
+        status_code, data = await loop.run_in_executor(None, do_request)
+        return status_code, data
+        
+    except urllib.error.HTTPError as e:
+        try:
+            error_body = e.read().decode('utf-8')
+            return e.code, json.loads(error_body)
+        except:
+            return e.code, {"error": f"HTTP {e.code}"}
+            
+    except urllib.error.URLError as e:
+        return 0, {"error": f"Connection failed: {str(e.reason)[:50]}"}
+        
+    except TimeoutError:
+        return 0, {"error": "Request timeout!"}
+        
+    except json.JSONDecodeError:
+        return 0, {"error": "Invalid JSON response"}
+        
+    except Exception as e:
+        logger.error(f"Fetch error: {e}")
+        return 0, {"error": f"Error: {str(e)[:50]}"}
 
 
 async def lookup_bin(bin_number: str) -> dict:
@@ -31,49 +80,30 @@ async def lookup_bin(bin_number: str) -> dict:
         
         logger.info(f"Looking up BIN: {bin_lookup}")
         
-        # Async HTTP request
-        loop = asyncio.get_event_loop()
+        # Fetch data
+        url = BIN_API_URL.format(bin=bin_lookup)
+        status_code, data = await fetch_url(url)
         
-        def fetch():
-            return requests.get(
-                BIN_API_URL.format(bin=bin_lookup),
-                headers=BIN_API_HEADERS,
-                timeout=15
-            )
-        
-        response = await loop.run_in_executor(None, fetch)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
+        if status_code == 200:
             # Extract data safely with defaults
             scheme = data.get("scheme", "N/A")
-            if scheme:
-                scheme = scheme.upper()
-            else:
-                scheme = "N/A"
-                
+            scheme = scheme.upper() if scheme else "N/A"
+            
             card_type = data.get("type", "N/A")
-            if card_type:
-                card_type = card_type.upper()
-            else:
-                card_type = "N/A"
-                
+            card_type = card_type.upper() if card_type else "N/A"
+            
             brand = data.get("brand", "N/A")
-            if brand:
-                brand = brand.upper()
-            else:
-                brand = "N/A"
+            brand = brand.upper() if brand else "N/A"
             
-            country_data = data.get("country", {})
-            country_name = country_data.get("name", "N/A") if country_data else "N/A"
-            country_emoji = country_data.get("emoji", "🌍") if country_data else "🌍"
-            country_code = country_data.get("alpha2", "??") if country_data else "??"
+            country_data = data.get("country") or {}
+            country_name = country_data.get("name", "N/A")
+            country_emoji = country_data.get("emoji", "🌍")
+            country_code = country_data.get("alpha2", "??")
             
-            bank_data = data.get("bank", {})
-            bank_name = bank_data.get("name", "N/A") if bank_data else "N/A"
-            bank_url = bank_data.get("url", "N/A") if bank_data else "N/A"
-            bank_phone = bank_data.get("phone", "N/A") if bank_data else "N/A"
+            bank_data = data.get("bank") or {}
+            bank_name = bank_data.get("name", "N/A")
+            bank_url = bank_data.get("url", "N/A")
+            bank_phone = bank_data.get("phone", "N/A")
             
             return {
                 "success": True,
@@ -87,51 +117,31 @@ async def lookup_bin(bin_number: str) -> dict:
                 "bank": bank_name,
                 "bank_url": bank_url,
                 "bank_phone": bank_phone,
-                "prepaid": data.get("prepaid", False),
-                "number": data.get("number", {})
+                "prepaid": data.get("prepaid", False)
             }
             
-        elif response.status_code == 404:
+        elif status_code == 404:
             return {
                 "success": False,
                 "error": "BIN not found in database."
             }
-        elif response.status_code == 429:
+        elif status_code == 429:
             return {
                 "success": False,
                 "error": "Rate limited! Try again in a few seconds."
             }
         else:
+            error_msg = data.get("error", f"API Error: {status_code}") if isinstance(data, dict) else f"API Error: {status_code}"
             return {
                 "success": False,
-                "error": f"API Error: {response.status_code}"
+                "error": error_msg
             }
             
-    except asyncio.TimeoutError:
-        return {
-            "success": False,
-            "error": "Request timeout! Please try again."
-        }
-    except requests.exceptions.Timeout:
-        return {
-            "success": False,
-            "error": "Connection timeout! Please try again."
-        }
-    except requests.exceptions.ConnectionError:
-        return {
-            "success": False,
-            "error": "Connection failed! Check internet."
-        }
-    except requests.exceptions.RequestException as e:
-        return {
-            "success": False,
-            "error": f"Network error: {str(e)[:50]}"
-        }
     except Exception as e:
         logger.error(f"BIN lookup error: {e}")
         return {
             "success": False,
-            "error": f"Internal error occurred."
+            "error": "Internal error occurred."
         }
 
 
@@ -243,7 +253,6 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Failed to edit BIN message: {e}")
-        # If edit fails, send new message
         try:
             await status_msg.delete()
             await update.message.reply_text(
@@ -260,26 +269,3 @@ def get_bin_handler():
     Return the bin command handler for registration
     """
     return CommandHandler("bin", cmd_bin)
-
-
-# Test function (for local testing only)
-if __name__ == "__main__":
-    import sys
-    
-    async def test():
-        test_bins = ["453201", "542543", "371449", "601100"]
-        
-        for test_bin in test_bins:
-            print(f"\nTesting BIN: {test_bin}")
-            print("-" * 30)
-            result = await lookup_bin(test_bin)
-            if result["success"]:
-                print(f"Scheme: {result['scheme']}")
-                print(f"Type: {result['type']}")
-                print(f"Brand: {result['brand']}")
-                print(f"Country: {result['country_flag']} {result['country']}")
-                print(f"Bank: {result['bank']}")
-            else:
-                print(f"Error: {result['error']}")
-    
-    asyncio.run(test())
