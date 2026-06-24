@@ -114,11 +114,6 @@ async def init_photo():
     if not DOWNLOADED_PHOTO_PATH:
         print("No photo available")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 ui_profile — REWRITTEN TO FIX SYNTAX ERROR
-#    The old version had datetime.now().strftime('%Y-%m-%d') inside an f-string
-#    which caused invisible character corruption. Now uses a variable beforehand.
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     try:
         u = user.username or "None"
@@ -182,7 +177,7 @@ async def send_activation_msg(user_id, plan, days, context):
     ud["expires"] = time.time() + (days * 86400)
     exp_date = datetime.fromtimestamp(ud["expires"]).strftime('%Y-%m-%d %H:%M')
     txt = (
-        "Cᴏɴɢʀᴀᴛᴜᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴛᴀᴛᴇᴅ.\n"
+        "Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Uꜱᴇʀ ➺ {name}\n"
         f"Uꜱᴇʀɴᴀᴍᴇ ➺ @{username}\n"
@@ -190,9 +185,9 @@ async def send_activation_msg(user_id, plan, days, context):
         f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
         f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ INF\n"
         f"Exᴘɪʀᴇꜱ ➺ {exp_date}\n"
-        f"Rᴇᴄᴇɪᴘᴘᴛ ID ➺ <code>{receipt}</code>\n\n"
+        f"Rᴇᴄᴇɪᴘᴛ ID ➺ <code>{receipt}</code>\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴘᴛᴛ ID."
+        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
     )
     try:
         await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
@@ -223,10 +218,11 @@ def kb_price():
         [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
     ])
 
+# FIX 1: Added missing '[' bracket here
 def kb_gate_info(cmd, back_cb):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ USE GATE", callback_data=f"use_{cmd}")],
-         InlineKeyboardButton("◀ BACK", callback_data=back_cb)]
+        [InlineKeyboardButton("◀ BACK", callback_data=back_cb)]
     ])
 
 async def resolve_user(target, context):
@@ -369,17 +365,17 @@ async def cmd_plan(update, context):
     await update.message.reply_text(
         "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\n"
         "Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]\n"
-        "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛɪᴛᴇᴅ\n"
-        "Pʀɪᴄᴄᴇ ➺ 10$\n"
+        "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
+        "Pʀɪᴄᴇ ➺ 10$\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\n"
         "Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]\n"
-        "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴍɪᴛɪᴛᴇᴅ\n"
+        "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
         "Pʀɪᴄᴇ ➺ 15$\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\n"
         "Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]\n"
-        "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\n"
+        "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
         "Pʀɪᴄᴇ ➺ 30$",
         parse_mode="HTML",
         reply_markup=kb_price()
@@ -519,7 +515,7 @@ async def cmd_threeday(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
-        await update.message_reply_text("❌ /threeday <user_id>")
+        await update.message.reply_text("❌ /threeday <user_id>")
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
@@ -531,37 +527,37 @@ async def cmd_sub(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     if len(context.args) < 2:
-        await update.message_reply_text("❌ /sub <user_id> <days>")
+        await update.message.reply_text("❌ /sub <user_id> <days>")
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message_reply_text("❌ Not found.")
+        await update.message.reply_text("❌ Not found.")
         return
     try:
         days = int(context.args[1])
         plan = "root" if days >= 30 else "elite" if days >= 15 else "core"
         await _grant_premium(uid, plan, days, update, context)
     except ValueError:
-        await update.message_reply_text("❌ Invalid days number.")
+        await update.message.reply_text("❌ Invalid days number.")
 
 async def cmd_resub(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
-        await update.message_reply_text("❌ /resub <user_id>")
+        await update.message.reply_text("❌ /resub <user_id>")
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message_reply_text("❌ Not found.")
+        await update.message.reply_text("❌ Not found.")
         return
     ud = context.bot_data.setdefault('user_data', {})
     uid_str = str(uid)
     if uid_str in ud:
         ud[uid_str]["plan"] = "FREE"
         ud[uid_str]["expires"] = 0
-        await update.message_reply_text(f"✅ Removed premium from <code>{uid}</code>")
+        await update.message.reply_text(f"✅ Removed premium from <code>{uid}</code>", parse_mode="HTML")
     else:
-        await update.message_reply_text("❌ Not found.")
+        await update.message.reply_text("❌ Not found.")
 
 async def cmd_allplans(update, context):
     if update.effective_user.id != OWNER_ID:
@@ -578,29 +574,29 @@ async def cmd_allplans(update, context):
             txt += f"<code>{uid}</code> | {data.get('plan', 'FREE').upper()} | {r}d left\n"
     if not found:
         txt += "❌ No active plans."
-    await update.message_reply_text(txt, parse_mode="HTML")
+    await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_delcode(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
-        await update.message_reply_text("❌ /delcode <code>")
+        await update.message.reply_text("❌ /delcode <code>")
         return
     code = context.args[0]
     codes = context.bot_data.get('codes', {})
     keys = context.bot_data.get('keys', {})
     if code in codes:
         del codes[code]
-        await update.message_reply_text("✅ Deleted.")
+        await update.message.reply_text("✅ Deleted.")
     elif code in keys:
         del keys[code]
-        await update.message_reply_text("✅ Deleted.")
+        await update.message.reply_text("✅ Deleted.")
     else:
-        await update.message_reply_text("❌ Not found.")
+        await update.message.reply_text("❌ Not found.")
 
 async def cmd_rm(update, context):
     if not context.args:
-        await update.message_reply_text("❌ /rm <code>")
+        await update.message.reply_text("❌ /rm <code>")
         return
     code = context.args[0].upper()
     codes = context.bot_data.get('codes', {})
@@ -612,7 +608,7 @@ async def cmd_rm(update, context):
     if code in codes and not codes[code]['used']:
         codes[code]['used'] = True
         ud[uid]["credits"] += codes[code]['value']
-        await update.message_reply_text(f"✅ +{codes[code]['value']} credits.\nBalance: {ud[uid]['credits']}", parse_mode="HTML")
+        await update.message.reply_text(f"✅ +{codes[code]['value']} credits.\nBalance: {ud[uid]['credits']}", parse_mode="HTML")
     elif code in keys and not keys[code]['used']:
         keys[code]['used'] = True
         p = keys[code]['plan']
@@ -620,85 +616,75 @@ async def cmd_rm(update, context):
         ud[uid]["plan"] = p
         ud[uid]["expires"] = time.time() + (d * 86400)
         receipt = await send_activation_msg(int(uid), p, d, context)
-        await update.message_reply_text(f"✅ {p.upper()} {d}d activated.\nReceipt: <code>{receipt}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"✅ {p.upper()} {d}d activated.\nReceipt: <code>{receipt}</code>", parse_mode="HTML")
     else:
-        await update.message_reply_text("❌ Invalid or used code.")
+        await update.message.reply_text("❌ Invalid or used code.")
 
 async def cmd_onchk(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['chk_on'] = True
-    await update.message_reply_text("STRIPE → ON ✅")
+    await update.message.reply_text("STRIPE → ON ✅")
 
 async def cmd_offchk(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['chk_on'] = False
-    await update.message_reply_text("STRIPE → OFF ❌")
+    await update.message.reply_text("STRIPE → OFF ❌")
 
 async def cmd_onpp(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['pp_on'] = True
-    await update.message_reply_text("PAYPAL → ON ✅")
+    await update.message.reply_text("PAYPAL → ON ✅")
 
 async def cmd_offpp(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['pp_on'] = False
-    await update.message_reply_text("PAYPAL → OFF ❌")
+    await update.message.reply_text("PAYPAL → OFF ❌")
 
 async def cmd_onsh(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['sh_on'] = True
-    await update.message_reply_text("SHOPIFY → ON ✅")
+    await update.message.reply_text("SHOPIFY → ON ✅")
 
 async def cmd_offsh(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['sh_on'] = False
-    await update.message_reply_text("SHOPIFY → OFF ❌")
+    await update.message.reply_text("SHOPIFY → OFF ❌")
 
 async def cmd_onpyu(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['pyu_on'] = True
-    await update.message_reply_text("PAYU → ON ✅")
+    await update.message.reply_text("PAYU → ON ✅")
 
 async def cmd_offpyu(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     context.bot_data['pyu_on'] = False
-    await update.message_reply_text("PAYU → OFF ❌")
+    await update.message.reply_text("PAYU → OFF ❌")
 
 async def cmd_seturl(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 2:
-        await update.message_reply_text("❌ /seturl <gate> <url>")
+        await update.message.reply_text("❌ /seturl <gate> <url>")
         return
     gate = context.args[0].lower()
     url = " ".join(context.args[1:])
     if gate not in GATE_NAMES:
-        await update.message_reply_text("❌ Unknown gate.")
+        await update.message.reply_text("❌ Unknown gate.")
         return
     if url.lower() == "remove":
         context.bot_data.pop(f'gate_url_{gate}', None)
-        await update.message_reply_text("✅ Removed.")
+        await update.message.reply_text("✅ Removed.")
         return
     context.bot_data[f'gate_url_{gate}'] = url
-    await update.message_reply_text(f"✅ {GATE_NAMES[gate]} set.")
+    await update.message.reply_text(f"✅ {GATE_NAMES[gate]} set.")
 
 async def cmd_geturl(update, context):
-    if update.effective_user.id != OWNER_ID:
-        return
+    if update.effective_user.id != OWNER_ID: return
     txt = "🦇 GATE URLs\n\n"
     for g, n in GATE_NAMES.items():
         u = context.bot_data.get(f'gate_url_{g}', '') or GATE_URLS.get(g, '')
         s = "🟢" if context.bot_data.get(f'{g}_on', True) else "🔴"
         txt += f"{s} {n}: <code>{u or '❌'}</code>\n"
-    await update.message_reply_text(txt, parse_mode="HTML")
+    await update.message.reply_text(txt, parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 GATE COMMANDS
@@ -751,7 +737,7 @@ async def run_gate_api(gate, card, context):
             pass
         try:
             j = json.loads(body)
-            return {"status": "error", "message": j.get("message", j.get("msg", j.get("error", body))}
+            return {"status": "error", "message": j.get("message", j.get("msg", j.get("error", body)))}
         except:
             return {"status": "error", "message": f"HTTP {e.code}"}
     except urllib.error.URLError as e:
@@ -825,16 +811,16 @@ async def handle_gate_cmd(gate, update, context):
     uid_str = str(user.id)
 
     if not context.bot_data.get(f'{gate}_on', True):
-        await update.message_reply_text(f"❌ {GATE_NAMES[gate]} is OFF.")
+        await update.message.reply_text(f"❌ {GATE_NAMES[gate]} is OFF.")
         return
 
     if not context.args:
-        await update.message_reply_text(f"❌ /{gate} cc|mm|yy|cvv\n\nExample: /{gate} 4532010123456789|03|28|353")
+        await update.message.reply_text(f"❌ /{gate} cc|mm|yy|cvv\n\nExample: /{gate} 4532010123456789|03|28|353")
         return
 
     card = parse_card(" ".join(context.args))
     if not card:
-        await update.message_reply_text("❌ Invalid format!\n\ncc|mm|yy|cvv\ncc/mm/yy/cvv\ncc mm yy cvv")
+        await update.message.reply_text("❌ Invalid format!\n\ncc|mm|yy|cvv\ncc/mm/yy/cvv\ncc mm yy cvv")
         return
 
     if not is_premium_active(user.id, context):
@@ -842,12 +828,12 @@ async def handle_gate_cmd(gate, update, context):
         cost = GATE_COST.get(gate, 1)
         credits = ud.get('credits', 150)
         if credits < cost:
-            await update.message_reply_text(f"❌ Need {cost} credits, have {credits}.\nUse /rm <code> or buy premium.")
+            await update.message.reply_text(f"❌ Need {cost} credits, have {credits}.\nUse /rm <code> or buy premium.", parse_mode="HTML")
             return
         ud['credits'] = credits - cost
 
     masked = f"{card['cc'][:6]}******{card['cc'][-4:]}"
-    status_msg = await update.message_reply_text(
+    status_msg = await update.message.reply_text(
         f"⏳ Checking <code>{masked}</code> on {GATE_NAMES[gate]}...",
         parse_mode="HTML"
     )
@@ -864,7 +850,7 @@ async def handle_gate_cmd(gate, update, context):
             await status_msg.delete()
         except:
             pass
-        await update.message_reply_text(text=txt, parse_mode="HTML")
+        await update.message.reply_text(text=txt, parse_mode="HTML")
 
 async def cmd_chk(update, context):
     await handle_gate_cmd("chk", update, context)
@@ -882,7 +868,7 @@ async def cmd_b3(update, context):
     await handle_gate_cmd("b3", update, context)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CALLBACKS — SAFE_EDIT WITH 3 FALLBACK METHODS
+# 🦇 CALLBACKS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update, context):
     try:
@@ -901,7 +887,6 @@ async def on_callback(update, context):
         except:
             pass
 
-        # VERIFY JOIN
         if d == "verify_join":
             try:
                 await q.edit_message_text(
@@ -931,39 +916,22 @@ async def on_callback(update, context):
             asyncio.ensure_future(_check_and_kick_if_not_joined(q.from_user.id, context, q.message.chat_id))
             return
 
-        # SAFE EDIT — 3 fallback methods, never silent
         async def safe_edit(text, kb):
-            # Method 1: Edit in place
             try:
-                await q.edit_message_text(
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=kb,
-                    disable_web_page_preview=True
-                )
+                await q.edit_message_text(text=text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
                 return True
             except:
                 pass
-
-            # Method 2: Delete old, send new message
             try:
                 if q.message:
                     await q.message.delete()
             except:
                 pass
             try:
-                await context.bot.send_message(
-                    chat_id=q.message.chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=kb,
-                    disable_web_page_preview=True
-                )
+                await context.bot.send_message(chat_id=q.message.chat_id, text=text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
                 return True
             except:
                 pass
-
-            # Method 3: Plain text fallback
             try:
                 clean = text.replace("<code>", "").replace("</a>", "").replace("</b>", "")
                 await context.bot.send_message(chat_id=q.message.chat_id, text=clean)
@@ -971,7 +939,6 @@ async def on_callback(update, context):
                 pass
             return False
 
-        # ROUTE ALL CALLBACKS
         if d.startswith("use_"):
             cmd = d.replace("use_", "")
             gn = GATE_NAMES.get(cmd, cmd.upper())
@@ -994,17 +961,17 @@ async def on_callback(update, context):
             await safe_edit(
                 "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\n"
                 "Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]\n"
-                "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛɪᴛᴇᴅ\n"
-                "Pʀɪᴄᴄᴇ ➺ 10$\n"
+                "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
+                "Pʀɪᴄᴇ ➺ 10$\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 "Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\n"
-                "Sᴘᴘᴀɴ ➺ [15 Dᴀʏꜱ]\n"
-                "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛɪᴛᴇᴅ\n"
+                "Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]\n"
+                "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
                 "Pʀɪᴄᴇ ➺ 15$\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 "Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\n"
                 "Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]\n"
-                "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴍɪᴛᴇᴅ\n"
+                "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
                 "Pʀɪᴄᴇ ➺ 30$",
                 kb_price()
             )
@@ -1033,6 +1000,7 @@ async def on_callback(update, context):
                 ])
             )
 
+        # FIX 2: Fixed missing '[' and ')' here for Braintree
         elif d == "mauth":
             await safe_edit(
                 "AUTH GATES",
@@ -1040,7 +1008,7 @@ async def on_callback(update, context):
                     [InlineKeyboardButton("Stripe", callback_data="iau"),
                      InlineKeyboardButton("Braintree", callback_data="ib3")],
                     [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
-                ]
+                ])
             )
 
         elif d == "iau":
@@ -1063,16 +1031,17 @@ async def on_callback(update, context):
                 kb_gate_info("b3", "mauth")
             )
 
+        # FIX 3: Fixed missing '[' here for PayU
         elif d == "mcharge":
             await safe_edit(
                 "CHARGE GATES",
                 InlineKeyboardMarkup([
                     [InlineKeyboardButton("Stripe", callback_data="ichk"),
                      InlineKeyboardButton("PayPal", callback_data="ipp")],
-                    [InlineKeyboardButton("Shopify", callback_data="ish")],
+                    [InlineKeyboardButton("Shopify", callback_data="ish"),
                      InlineKeyboardButton("PayU", callback_data="ipyu")],
                     [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
-                ]
+                ])
             )
 
         elif d == "ichk":
@@ -1151,7 +1120,7 @@ async def on_start(app):
 async def cmd_killbot(update, context):
     if update.effective_user.id != OWNER_ID:
         return
-    await update.message_reply_text("🛑 Killing bot...")
+    await update.message.reply_text("🛑 Killing bot...")
     os.kill(os.getpid(), signal.SIGTERM)
 
 async def error_handler(update, context):
@@ -1185,7 +1154,6 @@ def main():
     app.add_handler(CommandHandler("sh", cmd_sh))
     app.add_handler(CommandHandler("pyu", cmd_pyu))
 
-    # b3.py integration
     b3_loaded = False
     try:
         from b3 import get_b3_handler
