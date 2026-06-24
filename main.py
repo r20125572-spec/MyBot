@@ -338,8 +338,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Instantly open the main menu so it feels 0ms
         try:
             await q.edit_message_text(text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-        except: 
-            try: await context.bot.send_message(chat_id=q.message.chat_id, text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+        except:
+            try:
+                await context.bot.send_message(chat_id=q.message.chat_id, text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+            except:
+                pass
         
         # Check join status in the background (doesn't block UI)
         asyncio.ensure_future(_check_and_kick_if_not_joined(q.from_user.id, context, q.message.chat_id))
