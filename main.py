@@ -15,7 +15,7 @@ from pp import get_pp_handler
 from sh import get_sh_handler
 from pyu import get_pyu_handler
 from plans import get_plans_handler, get_user_ui_text
-from bin import get_bin_handler
+from bincheck import get_bin_handler  # FIXED: Changed from 'bin' to 'bincheck'
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -76,7 +76,6 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     try: return (await context.bot.get_chat(f"@{target}")).id
     except Exception: return None
 
-# FIXED: Added missing dot between ContextTypes and DEFAULT_TYPE
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if 'user_data' not in context.bot_data: context.bot_data['user_data'] = {}
@@ -169,28 +168,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
     elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: $0.30\nCMD: /pyu\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SAFE STARTUP & CONFLICT FIX 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 async def on_start(app):
     print("Batman Starting...")
     await app.bot.delete_webhook(drop_pending_updates=True)
 
-# FIXED: Removed duplicate "update:" in parameter
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner command to safely kill the bot process"""
     if update.effective_user.id != OWNER_ID: return
-    
     await update.message.reply_text("🛑 Killing old bot process...", parse_mode="HTML")
-    
-    # Send kill signal to current process
     os.kill(os.getpid(), signal.SIGTERM)
-    await asyncio.sleep(3) # Wait 3 seconds for process to die
+    await asyncio.sleep(3)
 
-# FIXED: Made function async to use await
 async def main():
-    # Safety: Kill any leftover python processes from old crashes to avoid conflicts
     try:
         import psutil
         for proc in psutil.process_iter(['python', 'main.py']):
@@ -200,10 +188,8 @@ async def main():
     except Exception:
         pass
     
-    # Start the application
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     
-    # Register all handlers here...
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
     app.add_handler(CommandHandler("killbot", cmd_killbot))
     app.add_handler(CommandHandler("start", cmd_start))
@@ -214,7 +200,7 @@ async def main():
     app.add_handler(get_chk_handler())
     app.add_handler(get_pp_handler())
     app.add_handler(get_sh_handler())
-    app.add_handler(get_pyu_handler())  # FIXED: Added missing pyu handler
+    app.add_handler(get_pyu_handler())
     app.add_handler(get_bin_handler())
     
     for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
@@ -224,7 +210,6 @@ async def main():
     
     print("Online!")
     
-    # Use run_polling with conflict handling - if it crashes, it will auto-restart
     while True:
         try:
             print("⚡ Running bot...")
