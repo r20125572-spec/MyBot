@@ -11,7 +11,7 @@ import asyncio
 from typing import Optional
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ApplicationHandlerStop
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict
 
 from config import (
@@ -27,14 +27,20 @@ SUPPORT_LINK = "https://t.me/cardchkSupport"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 try: from chk import get_chk_handler
 except: get_chk_handler = None
+
 try: from pp import get_pp_handler
 except: get_pp_handler = None
+
 try: from sh import get_sh_handler
 except: get_sh_handler = None
+
 try: from pyu import get_pyu_handler
 except: get_pyu_handler = None
-try: from plans import get_plans_handler
-except: get_plans_handler = lambda: []
+
+try: from plans import get_plans_handler, get_user_ui_text
+except: 
+    get_plans_handler = lambda: []
+    get_user_ui_text = lambda uid: "Pʟᴀɴ ➺ Fʀᴇᴇ\nCʀᴇᴅɪᴛꜱ ➺ 0"
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -53,21 +59,12 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
         except: return False
     return await check(CHANNEL_USERNAME) and await check(GROUP_USERNAME)
 
-def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
+def ui_profile(user):
     u = user.username or "None"
-    ud = context.bot_data.get('user_data', {}).get(str(user.id), {})
-    
-    plan = ud.get('plan', 'FREE').upper()
-    credits = ud.get('credits', 0)
-    
-    status = f"Pʟᴀɴ ➺ {plan}\nCʀᴇᴅɪᴛꜱ ➺ {credits}"
-    if ud.get('expires', 0) > time.time():
-        status += f"\nExᴘɪʀᴇꜱ ➺ {datetime.fromtimestamp(ud['expires']).strftime('%Y-%m-%d')}"
-        
     return (
         f"Uꜱᴇʀ ➺ {u}\n"
         f"Uꜱᴇʀ ID ➺ <code>{user.id}</code>\n"
-        f"{status}\n"
+        f"{get_user_ui_text(user.id)}\n"
         f"Jᴏɪɴᴇᴅ ➺ {datetime.now().strftime('%Y-%m-%d')}\n"
         f"Dᴇᴠ ➺ <a href='{DEV_LINK}'>Batman</a>"
     )
@@ -101,40 +98,6 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     except: return None
 
 def gen_code(length=10): return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CREDIT DEDUCTION SYSTEM 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def gate_credit_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
-    
-    # Safely get the command
-    text = update.message.text.lower().split()[0]
-    
-    # Only intercept gate commands
-    if text in ['/chk', '/pp', '/sh', '/pyu']:
-        if update.effective_user.id == OWNER_ID: return # Owner bypass
-        
-        uid = str(update.effective_user.id)
-        ud = context.bot_data.get('user_data', {}).get(uid, {})
-        
-        # Premium bypass
-        if ud.get('expires', 0) > time.time(): return
-            
-        credits = ud.get('credits', 0)
-        if credits <= 0:
-            await update.message.reply_text(
-                "❌ INSUFFICIENT BALANCE\n━━━━━━━━━━━━━━━━━━━━\n\n"
-                "You have 0 credits.\n\n"
-                "📌 Use /rm <code> to add credits\n"
-                "📌 Or buy premium /plan\n"
-                "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
-            )
-            raise ApplicationHandlerStop # Stops gate from running
-            
-        # Deduct 1 credit safely
-        if 'user_data' in context.bot_data and uid in context.bot_data['user_data']:
-            context.bot_data['user_data'][uid]['credits'] = credits - 1
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 BUILT-IN BIN COMMAND 🦇
@@ -185,19 +148,14 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud = context.bot_data.setdefault('user_data', {})
-    uid = str(user.id)
-    
-    if uid not in ud:
-        ud[uid] = {
+    if str(user.id) not in ud:
+        ud[str(user.id)] = {
             "name": user.first_name, 
             "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "credits": 150,  # 150 FREE TRIAL CREDITS
-            "plan": "FREE", 
-            "expires": 0
+            "credits": 150  # ADDED: 150 FREE TRIAL CREDITS
         }
-        
     if await is_joined(user.id, context):
-        await update.message.reply_text(text=ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+        await update.message.reply_text(text=ui_profile(user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
     else:
         cap = "BATMAN CARD CHECKER\n\nAccess Required\n━━━━━━━━━━━━━━━━━━━━\nJoin both channels to\nunlock the bot.\n━━━━━━━━━━━━━━━━━━━━"
         try: await update.message.reply_photo(photo=BOT_PHOTO, caption=cap, parse_mode="HTML", reply_markup=kb_force())
@@ -213,17 +171,11 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args: target_input = context.args[0]; target_id = await resolve_user(target_input, context)
     else: await update.message.reply_text("❌ Usage: /info @username or /info 12345", parse_mode="HTML"); return
     if not target_id: await update.message.reply_text(f"❌ User not found.", parse_mode="HTML"); return
-    
     udata = context.bot_data.get('user_data', {}).get(str(target_id))
+    plans = context.bot_data.get('plans', {}).get(str(target_id))
     txt = f"━━━━━━━━━━━━━━━━━━━━━━\nUSER INFO\n━━━━━━━━━━━━━━━━━━━━━━\n\nName: {udata.get('name', 'N/A') if udata else 'N/A'}\nID: <code>{target_id}</code>\n"
-    
-    if udata:
-        txt += f"Plan: {udata.get('plan', 'FREE').upper()}\nCredits: {udata.get('credits', 0)}\n"
-        if udata.get('expires', 0) > time.time():
-            txt += f"Expires: {datetime.fromtimestamp(udata['expires']).strftime('%Y-%m-%d %H:%M')}\n"
-    else:
-        txt += "Plan: Not Started Yet\n"
-        
+    if plans: txt += f"Plan: {plans['plan'].upper()}\nExpires: {datetime.fromtimestamp(plans['expires']).strftime('%Y-%m-%d %H:%M')}\n"
+    else: txt += "Plan: FREE\n"
     await update.message.reply_text(txt + "━━━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -234,19 +186,24 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🦇 BATMAN BOT COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\n"
         "👤 USER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n"
-        "▸ /start - Start Bot (150 Free Credits)\n▸ /plan - View Plans\n▸ /bin - BIN Lookup\n"
-        "▸ /chk - Stripe Check (-1 Credit)\n▸ /pp - PayPal Check (-1 Credit)\n"
-        "▸ /sh - Shopify Check (-1 Credit)\n▸ /pyu - PayU Check (-1 Credit)\n"
-        "▸ /rm - Redeem Code\n\n"
+        "▸ /start - Start Bot\n▸ /plan - View Plans\n▸ /bin - BIN Lookup\n"
+        "▸ /chk - Stripe Check\n▸ /pp - PayPal Check\n▸ /sh - Shopify Check\n"
+        "▸ /pyu - PayU Check\n▸ /rm - Redeem Code\n\n"
         "👑 OWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n"
         "▸ /info - User Info\n▸ /allcm - This Menu\n"
         "▸ /gen <amt> - Gen Credit Code\n"
-        "▸ /key10 - Gen Core Key (7 Days)\n▸ /key20 - Gen Elite Key (15 Days)\n▸ /key30 - Gen Root Key (30 Days)\n"
-        "▸ /oneday <user_id> - Give 1 Day Access\n▸ /sub <user_id> <days> - Grant Premium\n"
-        "▸ /resub <user_id> - Remove Premium\n▸ /allplans - View Active Plans\n"
+        "▸ /key10 - Gen Core Key (7 Days)\n"
+        "▸ /key20 - Gen Elite Key (15 Days)\n"
+        "▸ /key30 - Gen Root Key (30 Days)\n"
+        "▸ /oneday <user_id> - Give 1 Day Access\n"
+        "▸ /sub <user_id> <days> - Grant Premium\n"
+        "▸ /resub <user_id> - Remove Premium\n"
+        "▸ /allplans - View Active Plans\n"
         "▸ /delcode <code> - Delete Code/Key\n"
-        "▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n"
-        "▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n"
+        "▸ /onchk /offchk - Stripe Gate\n"
+        "▸ /onpp /offpp - PayPal Gate\n"
+        "▸ /onsh /offsh - Shopify Gate\n"
+        "▸ /onpyu /offpyu - PayU Gate\n"
         "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
     )
 
@@ -268,217 +225,4 @@ async def cmd_gen_key(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
 
 async def cmd_key10(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "core", 7)
 async def cmd_key20(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "elite", 15)
-async def cmd_key30(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "root", 30)
-
-async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args: await update.message.reply_text("❌ Usage: /oneday <user_id>", parse_mode="HTML"); return
-    uid = await resolve_user(context.args[0], context)
-    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    ud = context.bot_data.setdefault('user_data', {})
-    uid_str = str(uid)
-    if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": "", "credits": 0}
-    ud[uid_str]["plan"] = "core"
-    ud[uid_str]["expires"] = time.time() + 86400
-    await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>", parse_mode="HTML")
-
-async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if len(context.args) < 2: await update.message.reply_text("❌ Usage: /sub <user_id> <days>", parse_mode="HTML"); return
-    uid = await resolve_user(context.args[0], context)
-    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    try:
-        days = int(context.args[1])
-        plan = "root" if days >= 30 else "elite" if days >= 15 else "core"
-        ud = context.bot_data.setdefault('user_data', {})
-        uid_str = str(uid)
-        if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": "", "credits": 0}
-        ud[uid_str]["plan"] = plan
-        ud[uid_str]["expires"] = time.time() + (days * 86400)
-        await update.message.reply_text(f"✅ Granted {days} Days ({plan.upper()}) to <code>{uid}</code>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Invalid days.", parse_mode="HTML")
-
-async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args: await update.message.reply_text("❌ Usage: /resub <user_id>", parse_mode="HTML"); return
-    uid = await resolve_user(context.args[0], context)
-    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    ud = context.bot_data.setdefault('user_data', {})
-    uid_str = str(uid)
-    if uid_str in ud:
-        ud[uid_str]["plan"] = "FREE"
-        ud[uid_str]["expires"] = 0
-        await update.message.reply_text(f"✅ Removed premium from <code>{uid}</code>", parse_mode="HTML")
-    else: await update.message.reply_text("❌ User not found.", parse_mode="HTML")
-
-async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    users = context.bot_data.get('user_data', {})
-    txt = "🦇 ACTIVE PLANS\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    found = False
-    for uid, data in users.items():
-        if data.get('expires', 0) > time.time():
-            found = True
-            txt += f"ID: <code>{uid}</code>\nPlan: {data.get('plan', 'FREE').upper()}\nExp: {datetime.fromtimestamp(data['expires']).strftime('%Y-%m-%d')}\n━━━━━━━━━━━━━━━━━━━━\n"
-    if not found: txt += "❌ No active plans."
-    await update.message.reply_text(txt, parse_mode="HTML")
-
-async def cmd_delcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args: await update.message.reply_text("❌ Usage: /delcode <code>", parse_mode="HTML"); return
-    code = context.args[0]
-    codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {})
-    if code in codes: del codes[code]; await update.message.reply_text("✅ Code deleted.", parse_mode="HTML")
-    elif code in keys: del keys[code]; await update.message.reply_text("✅ Key deleted.", parse_mode="HTML")
-    else: await update.message.reply_text("❌ Not found.", parse_mode="HTML")
-
-async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: await update.message.reply_text("❌ Usage: /rm <code>", parse_mode="HTML"); return
-    code = context.args[0].upper()
-    codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {})
-    uid = str(update.effective_user.id)
-    ud = context.bot_data.setdefault('user_data', {})
-    if uid not in ud: ud[uid] = {"credits": 0, "plan": "FREE", "expires": 0}
-    
-    if code in codes and not codes[code]['used']:
-        codes[code]['used'] = True
-        val = codes[code]['value']
-        ud[uid]["credits"] = ud[uid].get("credits", 0) + val
-        await update.message.reply_text(f"✅ Redeemed! Added {val} credits.\nNew Balance: {ud[uid]['credits']}", parse_mode="HTML")
-    elif code in keys and not keys[code]['used']:
-        keys[code]['used'] = True
-        p, d = keys[code]['plan'], keys[code]['days']
-        ud[uid]["plan"] = p
-        ud[uid]["expires"] = time.time() + (d * 86400)
-        await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.", parse_mode="HTML")
-    else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE TOGGLES 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['chk_on'] = True; await update.message.reply_text("STRIPE → ON ✅", parse_mode="HTML")
-async def cmd_offchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['chk_on'] = False; await update.message.reply_text("STRIPE → OFF ❌", parse_mode="HTML")
-async def cmd_onpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['pp_on'] = True; await update.message.reply_text("PAYPAL → ON ✅", parse_mode="HTML")
-async def cmd_offpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['pp_on'] = False; await update.message.reply_text("PAYPAL → OFF ❌", parse_mode="HTML")
-async def cmd_onsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['sh_on'] = True; await update.message.reply_text("SHOPIFY → ON ✅", parse_mode="HTML")
-async def cmd_offsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['sh_on'] = False; await update.message.reply_text("SHOPIFY → OFF ❌", parse_mode="HTML")
-async def cmd_onpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['pyu_on'] = True; await update.message.reply_text("PAYU → ON ✅", parse_mode="HTML")
-async def cmd_offpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    context.bot_data['pyu_on'] = False; await update.message.reply_text("PAYU → OFF ❌", parse_mode="HTML")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CALLBACKS 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer(); d = q.data
-    if d == "verify_join":
-        if await is_joined(q.from_user.id, context):
-            try:
-                if q.message.photo: await q.message.delete(); await context.bot.send_message(chat_id=q.message.chat_id, text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-                else: await q.edit_message_text(text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
-            except: pass
-        else: await q.answer("❌ Join Group & Channel first!", show_alert=True)
-        return
-    async def edit(t, kb):
-        try: await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-        except: pass
-    if d == "bmain": await edit(ui_profile(q.from_user, context), kb_main())
-    elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
-    elif d in ("pay10", "pay20", "pay30"): await edit(f"PAYMENT - {d.replace('pay','$')}\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: {d.replace('pay','$')}\nTotal: {d.replace('pay','$')}\n\n━━━━━━━━━━━━━━━━━━━━\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
-    elif d == "mgates": await edit("SELECT GATE", InlineKeyboardMarkup([[InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],[InlineKeyboardButton("◀ BACK", callback_data="bmain")]]))
-    elif d == "mauth": await edit("AUTH GATES", InlineKeyboardMarkup([[InlineKeyboardButton("Stripe", callback_data="iau"), InlineKeyboardButton("Braintree", callback_data="ib3")],[InlineKeyboardButton("◀ BACK", callback_data="mgates")]]))
-    elif d == "iau": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe Auth\nCMD: /au\nSITES: 16\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mauth"))
-    elif d == "ib3": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Braintree Auth\nCMD: /b3\nSITES: 2\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mauth"))
-    elif d == "mcharge": await edit("CHARGE GATES", InlineKeyboardMarkup([[InlineKeyboardButton("Stripe", callback_data="ichk"), InlineKeyboardButton("PayPal", callback_data="ipp")],[InlineKeyboardButton("Shopify", callback_data="ish"), InlineKeyboardButton("PayU", callback_data="ipyu")],[InlineKeyboardButton("◀ BACK", callback_data="mgates")]]))
-    elif d == "ichk": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe\nPRICE: 1 Credit\nCMD: /chk\nSITES: 4\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-    elif d == "ipp": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayPal\nPRICE: 1 Credit\nCMD: /pp\nSITES: 7\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-    elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: 1 Credit\nCMD: /sh\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-    elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: 1 Credit\nCMD: /pyu\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
-
-async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text("🛑 Killing bot...", parse_mode="HTML")
-    os.kill(os.getpid(), signal.SIGTERM)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 MAIN STARTUP 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def main():
-    # 🔥 CRITICAL FIX: FORCE KILL WEBHOOK BEFORE ANYTHING ELSE
-    try:
-        webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True"
-        urllib.request.urlopen(webhook_url, timeout=5).read()
-        print("🧹 Webhook forcefully deleted.")
-    except Exception as e:
-        print(f"Webhook delete note: {e}")
-        
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    # 1. CREDIT INTERCEPTOR (Group -1 runs first to check credits)
-    app.add_handler(MessageHandler(filters.Regex(r'^/(chk|pp|sh|pyu)'), gate_credit_guard), group=-1)
-    
-    # 2. ALL EXACT COMMANDS
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("plan", cmd_plan))
-    app.add_handler(CommandHandler("bin", cmd_bin))
-    app.add_handler(CommandHandler("info", cmd_info))
-    app.add_handler(CommandHandler("allcm", cmd_allcm))
-    app.add_handler(CommandHandler("gen", cmd_gen))
-    app.add_handler(CommandHandler("key10", cmd_key10))
-    app.add_handler(CommandHandler("key20", cmd_key20))
-    app.add_handler(CommandHandler("key30", cmd_key30))
-    app.add_handler(CommandHandler("oneday", cmd_oneday))
-    app.add_handler(CommandHandler("sub", cmd_sub))
-    app.add_handler(CommandHandler("resub", cmd_resub))
-    app.add_handler(CommandHandler("allplans", cmd_allplans))
-    app.add_handler(CommandHandler("delcode", cmd_delcode))
-    app.add_handler(CommandHandler("rm", cmd_rm))
-    app.add_handler(CommandHandler("killbot", cmd_killbot))
-    
-    for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
-        app.add_handler(CommandHandler(cmd, func))
-    
-    # 3. EXTERNAL GATE CHECKS
-    if get_chk_handler: app.add_handler(get_chk_handler())
-    if get_pp_handler: app.add_handler(get_pp_handler())
-    if get_sh_handler: app.add_handler(get_sh_handler())
-    if get_pyu_handler: app.add_handler(get_pyu_handler())
-    
-    try:
-        for h in get_plans_handler(): app.add_handler(h)
-    except: pass
-    
-    # 4. CALLBACKS & FILTERS
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
-    
-    print("🦇 Online! All Commands & Gates Active.")
-    
-    while True:
-        try:
-            app.run_polling(drop_pending_updates=True)
-            break
-        except Conflict:
-            print("⚠️ Conflict detected! Waiting 15s...")
-            time.sleep(15)
-        except Exception as e:
-            print(f"⚠️ Stopped: {e}")
-            break
-
-if __name__ == "__main__":
-    main()
+async def cmd_key30
