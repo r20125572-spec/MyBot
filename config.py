@@ -10,7 +10,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = "8813507423:AAFWkdkk8Je4kB93AB5fu6qQ0-8eo-jlRKE"
 OWNER_ID = 8283904645
-VERSION = "V4.1"
+VERSION = "V4.2"
 DEV_LINK = "https://t.me/Batmancardchk"
 
 CHANNEL_USERNAME = "@Batcardchk"
@@ -20,9 +20,7 @@ GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/failurefr_07"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BATMAN PHOTO
-#    Bot downloads this URL itself (Telegram can't access
-#    chatglm.cn directly, so we download it for Telegram)
+# 🦇 BATMAN PHOTO — Bot downloads this URL itself
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
 BOT_PHOTO = "batman.jpg"
@@ -48,10 +46,6 @@ GATE_SITES = {
 
 API_TIMEOUT = 120
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BIN LOOKUP
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 async def get_bin_info(bin_num: str) -> dict:
     try:
         url = f"https://lookup.binlist.net/{bin_num}"
@@ -61,48 +55,20 @@ async def get_bin_info(bin_num: str) -> dict:
                 return json.loads(resp.read().decode('utf-8'))
         data = await asyncio.get_running_loop().run_in_executor(None, fetch)
         bank_name = "N/A"
-        if data.get("bank"):
-            bank_name = data["bank"].get("name", "N/A")
-        country_name = "N/A"
-        country_emoji = ""
+        if data.get("bank"): bank_name = data["bank"].get("name", "N/A")
+        country_name = "N/A"; country_emoji = ""
         if data.get("country"):
             country_name = data["country"].get("name", "N/A").upper()
             country_emoji = data["country"].get("emoji", "")
-        return {
-            "scheme": data.get("scheme", "N/A"),
-            "type": data.get("type", "N/A"),
-            "bank": bank_name,
-            "country": country_name,
-            "country_emoji": country_emoji,
-            "error": False
-        }
-    except Exception:
-        pass
+        return {"scheme": data.get("scheme", "N/A"), "type": data.get("type", "N/A"), "bank": bank_name, "country": country_name, "country_emoji": country_emoji, "error": False}
+    except Exception: pass
     return {"error": True}
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SHARED CHECK UI
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def ui_result(card, gate, bin_txt, country, flag, raw, user, approved, time_taken="0.00"):
     u = user.username or user.first_name
     status = "Cᴀʀᴅ Cʜᴀʀɢᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
-    if bin_txt and bin_txt != "N/A":
-        info = f"{bin_txt} - {country}{flag}"
-    else:
-        info = f"{country}{flag}"
-    return (
-        f"Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\n"
-        f"Tɪᴍᴇ ➺ {time_taken}s\n"
-        f"Uꜱᴇʀ ➺ {u}\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"<code>{card}</code>\n"
-        f"{status}\n"
-        f"Iɴꜰᴏ ➺ {info}\n"
-        f"━━━━━━━━━━━━━━━━\n\n"
-        f"✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ."
-    )
+    info = f"{bin_txt} - {country}{flag}" if bin_txt and bin_txt != "N/A" else f"{country}{flag}"
+    return (f"Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\nTɪᴍᴇ ➺ {time_taken}s\nUꜱᴇʀ ➺ {u}\n━━━━━━━━━━━━━━━━\n━━━━━━━━━━━━━━━━\n<code>{card}</code>\n{status}\nIɴꜰᴏ ➺ {info}\n━━━━━━━━━━━━━━━━\n\n✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ.")
 
 def kb_result():
     return InlineKeyboardMarkup([
