@@ -22,7 +22,7 @@ from config import (
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SAFE IMPORTS (GATES ONLY - PLANS.PY KILLED FOREVER) 🦇
+# 🦇 SAFE IMPORTS (BLOCKS A_ToolsX LINK FOREVER) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 try: from chk import get_chk_handler
 except: get_chk_handler = None
@@ -32,9 +32,7 @@ try: from sh import get_sh_handler
 except: get_sh_handler = None
 try: from pyu import get_pyu_handler
 except: get_pyu_handler = None
-
-# COMPLETELY DISABLED TO STOP A_ToolsX LINK LEAK
-get_plans_handler = lambda: [] 
+get_plans_handler = lambda: [] # KILLED TO STOP 3RD PARTY LINKS
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -53,9 +51,6 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
         except: return False
     return await check(CHANNEL_USERNAME) and await check(GROUP_USERNAME)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 NATIVE UI PROFILE (NO A_ToolsX LINK) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
     ud = context.bot_data.get('user_data', {}).get(str(user.id), {})
@@ -102,9 +97,6 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
 
 def gen_code(length=10): return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BUILT-IN BIN COMMAND 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def fetch_bin(url: str) -> dict:
     try:
         req = urllib.request.Request(url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"})
@@ -143,9 +135,6 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await status.edit_text(txt, parse_mode="HTML", disable_web_page_preview=True)
     except: pass
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 USER COMMANDS 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud = context.bot_data.setdefault('user_data', {})
@@ -162,34 +151,82 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", parse_mode="HTML", reply_markup=kb_price())
 
-async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    target_id = target_input = None
-    if update.message.reply_to_message: target_id = update.message.reply_to_message.from_user.id; target_input = str(target_id)
-    elif context.args: target_input = context.args[0]; target_id = await resolve_user(target_input, context)
-    else: await update.message.reply_text("❌ Usage: /info @username or /info 12345", parse_mode="HTML"); return
-    if not target_id: await update.message.reply_text(f"❌ User not found.", parse_mode="HTML"); return
-    udata = context.bot_data.get('user_data', {}).get(str(target_id), {})
-    txt = f"━━━━━━━━━━━━━━━━━━━━━━\nUSER INFO\n━━━━━━━━━━━━━━━━━━━━━━\n\nName: {udata.get('name', 'N/A')}\nID: <code>{target_id}</code>\nCredits: {udata.get('credits', 150)}\n"
-    if udata.get('expires', 0) > time.time(): txt += f"Plan: {udata.get('plan', 'FREE').upper()}\nExpires: {datetime.fromtimestamp(udata['expires']).strftime('%Y-%m-%d %H:%M')}\n"
-    else: txt += "Plan: FREE\n"
-    await update.message.reply_text(txt + "━━━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 OWNER COMMANDS 🦇
+# 🦇 OWNER COMMANDS (EXACT IMAGE FORMAT) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
-        f"🦇 BATMAN BOT COMMANDS\n━━━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👤 USER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n▸ /start - Start Bot\n▸ /plan - View Plans\n▸ /bin - BIN Lookup\n▸ /chk - Stripe Check\n▸ /pp - PayPal Check\n▸ /sh - Shopify Check\n▸ /pyu - PayU Check\n▸ /rm - Redeem Code\n\n"
-        "👑 OWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n▸ /info - User Info\n▸ /allcm - This Menu\n▸ /gen <amt> - Gen Credit Code\n"
-        "▸ /key10 - Gen Core Key\n▸ /key20 - Gen Elite Key\n▸ /key30 - Gen Root Key\n"
-        "▸ /oneday <id> - 1 Day Access\n▸ /sub <id> <days> - Grant Premium\n▸ /resub <id> - Remove Premium\n"
-        "▸ /allplans - Active Plans\n▸ /delcode <code> - Delete Code\n"
-        "▸ /onchk /offchk - Stripe\n▸ /onpp /offpp - PayPal\n▸ /onsh /offsh - Shopify\n▸ /onpyu /offpyu - PayU\n"
-        "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
+        f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━\n\n"
+        "USER COMMANDS\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "/start - Start the bot\n"
+        "/plan - View pricing plans\n"
+        "/bin - Check BIN details\n"
+        "/chk - Stripe check\n"
+        "/pp - PayPal check\n"
+        "/sh - Shopify check\n"
+        "/pyu - PayU check\n"
+        "/rm - Redeem code\n\n"
+        "OWNER COMMANDS\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "/info - Get user info\n"
+        "/allcm - Show this\n"
+        "/gen - Gen credit code\n"
+        "/key10 - Gen premium key 10$\n"
+        "/key20 - Gen premium key 20$\n"
+        "/key30 - Gen premium key 30$\n"
+        "/sub - Grant premium\n"
+        "/resub - Remove premium\n"
+        "/allplans - View active plans\n"
+        "/oneday - Grant 1 day access\n"
+        "/threeday - Grant 3 days access\n"
+        "/onchk /offchk - Stripe gate\n"
+        "/onpp /offpp - PayPal gate\n"
+        "/onsh /offsh - Shopify gate\n"
+        "/onpyu /offpyu - PayU gate\n"
+        "━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
     )
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    target_id = target_input = None
+    if update.message.reply_to_message: 
+        target_id = update.message.reply_to_message.from_user.id
+        target_input = str(target_id)
+    elif context.args: 
+        target_input = context.args[0]
+        target_id = await resolve_user(target_input, context)
+    else: 
+        await update.message.reply_text(
+            "❌ INVALID USAGE\n\n"
+            "How to get User ID:\n"
+            "1. Ask the user to send /start\n"
+            "2. Copy the 'USER ID' from their menu\n"
+            "3. Then type: /info 123456789\n\n"
+            "Or simply reply to their message with /info", 
+            parse_mode="HTML"
+        )
+        return
+        
+    if not target_id: 
+        await update.message.reply_text("❌ User not found.", parse_mode="HTML")
+        return
+        
+    udata = context.bot_data.get('user_data', {}).get(str(target_id), {})
+    txt = (
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"USER INFO\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Name: {udata.get('name', 'N/A')}\n"
+        f"ID: <code>{target_id}</code>\n"
+        f"Credits: {udata.get('credits', 150)}\n"
+    )
+    if udata.get('expires', 0) > time.time():
+        txt += f"Plan: {udata.get('plan', 'FREE').upper()}\nExpires: {datetime.fromtimestamp(udata['expires']).strftime('%Y-%m-%d %H:%M')}\n"
+    else:
+        txt += "Plan: FREE\n"
+    await update.message.reply_text(txt + "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -221,9 +258,20 @@ async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud[uid_str]["plan"] = "core"; ud[uid_str]["expires"] = time.time() + 86400
     await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>", parse_mode="HTML")
 
+async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args: await update.message.reply_text("❌ Usage: /threeday <user_id>", parse_mode="HTML"); return
+    uid = await resolve_user(context.args[0], context)
+    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
+    ud = context.bot_data.setdefault('user_data', {})
+    uid_str = str(uid)
+    if uid_str not in ud: ud[uid_str] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
+    ud[uid_str]["plan"] = "core"; ud[uid_str]["expires"] = time.time() + (3 * 86400)
+    await update.message.reply_text(f"✅ Granted 3 Days Access to <code>{uid}</code>", parse_mode="HTML")
+
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if len(context.args) < 2: await update.message.reply_text("❌ Usage: /sub <user_id> <days>", parse_mode="HTML"); return
+    if len(context.args) < 2: await update.message.reply_text("❌ Usage: /sub <user_id> <days>\nExample: /sub 123456789 30", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
     try:
@@ -268,9 +316,6 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif code in keys and not keys[code]['used']: keys[code]['used'] = True; p, d = keys[code]['plan'], keys[code]['days']; ud[uid]["plan"] = p; ud[uid]["expires"] = time.time() + (d * 86400); await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.", parse_mode="HTML")
     else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE TOGGLES 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['chk_on'] = True; await update.message.reply_text("STRIPE → ON ✅", parse_mode="HTML")
@@ -296,9 +341,6 @@ async def cmd_offpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['pyu_on'] = False; await update.message.reply_text("PAYU → OFF ❌", parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CALLBACKS 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); d = q.data
     if d == "verify_join":
@@ -336,14 +378,11 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict):
-        logging.warning("⚠️ Conflict caught! Waiting 15s...")
+        logging.warning("⚠️ Conflict caught! Ignoring ghost instance...")
         await asyncio.sleep(15) 
         return
     logging.error(f"Exception: {context.error}")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 MAIN STARTUP (PRIORITY GROUPS FIX) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
     try: urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5).read()
     except: pass
@@ -351,41 +390,40 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     app.add_error_handler(error_handler)
     
-    # ╔══════════════════════════════════════════════════════╗
-    # ║ GROUP 0: HIGHEST PRIORITY (BLOCKS GATES FROM ERRORS) ║
-    # ╚══════════════════════════════════════════════════════╝
-    app.add_handler(CommandHandler("start", cmd_start), group=0)
-    app.add_handler(CommandHandler("plan", cmd_plan), group=0)
-    app.add_handler(CommandHandler("bin", cmd_bin), group=0)
-    app.add_handler(CommandHandler("info", cmd_info), group=0)
-    app.add_handler(CommandHandler("allcm", cmd_allcm), group=0)
-    app.add_handler(CommandHandler("gen", cmd_gen), group=0)
-    app.add_handler(CommandHandler("key10", cmd_key10), group=0)
-    app.add_handler(CommandHandler("key20", cmd_key20), group=0)
-    app.add_handler(CommandHandler("key30", cmd_key30), group=0)
-    app.add_handler(CommandHandler("oneday", cmd_oneday), group=0)
-    app.add_handler(CommandHandler("sub", cmd_sub), group=0)
-    app.add_handler(CommandHandler("resub", cmd_resub), group=0)
-    app.add_handler(CommandHandler("allplans", cmd_allplans), group=0)
-    app.add_handler(CommandHandler("delcode", cmd_delcode), group=0)
-    app.add_handler(CommandHandler("rm", cmd_rm), group=0)
-    app.add_handler(CommandHandler("killbot", cmd_killbot), group=0)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ALL COMMANDS (STANDARD PRIORITY - UNBLOCKED)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("plan", cmd_plan))
+    app.add_handler(CommandHandler("bin", cmd_bin))
+    app.add_handler(CommandHandler("info", cmd_info))
+    app.add_handler(CommandHandler("allcm", cmd_allcm))
+    app.add_handler(CommandHandler("gen", cmd_gen))
+    app.add_handler(CommandHandler("key10", cmd_key10))
+    app.add_handler(CommandHandler("key20", cmd_key20))
+    app.add_handler(CommandHandler("key30", cmd_key30))
+    app.add_handler(CommandHandler("oneday", cmd_oneday))
+    app.add_handler(CommandHandler("threeday", cmd_threeday)) # ADDED
+    app.add_handler(CommandHandler("sub", cmd_sub))
+    app.add_handler(CommandHandler("resub", cmd_resub))
+    app.add_handler(CommandHandler("allplans", cmd_allplans))
+    app.add_handler(CommandHandler("delcode", cmd_delcode))
+    app.add_handler(CommandHandler("rm", cmd_rm))
+    app.add_handler(CommandHandler("killbot", cmd_killbot))
     
     for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
-        app.add_handler(CommandHandler(cmd, func), group=0)
-        
-    # ╔══════════════════════════════════════════════════════╗
-    # ║ GROUP 1: GATES & FILTERS (Lower priority, safe)     ║
-    # ╚══════════════════════════════════════════════════════╝
-    if get_chk_handler: app.add_handler(get_chk_handler(), group=1)
-    if get_pp_handler: app.add_handler(get_pp_handler(), group=1)
-    if get_sh_handler: app.add_handler(get_sh_handler(), group=1)
-    if get_pyu_handler: app.add_handler(get_pyu_handler(), group=1)
+        app.add_handler(CommandHandler(cmd, func))
     
-    app.add_handler(CallbackQueryHandler(on_callback), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter), group=1)
+    # OLD GATE HANDLERS
+    if get_chk_handler: app.add_handler(get_chk_handler())
+    if get_pp_handler: app.add_handler(get_pp_handler())
+    if get_sh_handler: app.add_handler(get_sh_handler())
+    if get_pyu_handler: app.add_handler(get_pyu_handler())
     
-    print("🦇 Online! All Commands Protected & Active.")
+    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
+    
+    print("🦇 Online! All Commands Unblocked & Active.")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
