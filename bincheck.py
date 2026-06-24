@@ -7,15 +7,10 @@ from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
 logger = logging.getLogger(__name__)
-BIN_API_URL = "https://lookup.binlist.net/{bin}"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 async def fetch_url(url: str, timeout: int = 15) -> tuple:
     try:
-        req = urllib.request.Request(
-            url,
-            headers={"Accept-Version": "3", "User-Agent": USER_AGENT, "Accept": "application/json"}
-        )
+        req = urllib.request.Request(url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         loop = asyncio.get_running_loop()
         def do_request():
             with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -23,7 +18,7 @@ async def fetch_url(url: str, timeout: int = 15) -> tuple:
         return await loop.run_in_executor(None, do_request)
     except urllib.error.HTTPError as e:
         return e.code, {}
-    except Exception as e:
+    except Exception:
         return 0, {}
 
 async def lookup_bin(bin_number: str) -> dict:
@@ -32,7 +27,7 @@ async def lookup_bin(bin_number: str) -> dict:
         if len(bin_clean) < 6:
             return {"success": False, "error": "Invalid BIN! Must be at least 6 digits."}
         
-        status_code, data = await fetch_url(BIN_API_URL.format(bin=bin_clean[:6]))
+        status_code, data = await fetch_url(f"https://lookup.binlist.net/{bin_clean[:6]}")
         
         if status_code == 200:
             country_data = data.get("country") or {}
@@ -55,7 +50,7 @@ async def lookup_bin(bin_number: str) -> dict:
 
 def format_bin_response(result: dict) -> str:
     if not result["success"]:
-        return f"❌ BIN LOOKUP FAILED\n━━━━━━━━━━━━━━━━━━━━\n\n⚠️ {result['error']}\n\n━━━━━━━━━━━━━━━━━━━━"
+        return f"❌ BIN LOOKUP FAILED\n━━━━━━━━━━━━━━━━━━━━\n\n⚠️ {result['error']}\n━━━━━━━━━━━━━━━━━━━━"
     
     type_emoji = {"CREDIT": "💳", "DEBIT": "🏦", "PREPAID": "💰"}.get(result["type"], "💳")
     brand_emoji = {"VISA": "🔵", "MASTERCARD": "🔴", "AMEX": "🟡"}.get(result["brand"], "⚪")
