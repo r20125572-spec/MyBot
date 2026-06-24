@@ -1,4 +1,7 @@
-import aiohttp
+import urllib.request
+import urllib.error
+import json
+import asyncio
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -30,32 +33,36 @@ PYU_SITE = "example.com"
 API_TIMEOUT = 120
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BIN LOOKUP 🦇
+# 🦇 BIN LOOKUP (Fixed: No aiohttp needed) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def get_bin_info(bin_num: str) -> dict:
     try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(f"https://lookup.binlist.net/{bin_num}") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    bank_name = "N/A"
-                    if data.get("bank"):
-                        bank_name = data["bank"].get("name", "N/A")
-                    country_name = "N/A"
-                    country_emoji = ""
-                    if data.get("country"):
-                        country_name = data["country"].get("name", "N/A").upper()
-                        country_emoji = data["country"].get("emoji", "")
-                    return {
-                        "scheme": data.get("scheme", "N/A"),
-                        "type": data.get("type", "N/A"),
-                        "bank": bank_name,
-                        "country": country_name,
-                        "country_emoji": country_emoji,
-                        "error": False
-                    }
+        url = f"https://lookup.binlist.net/{bin_num}"
+        req = urllib.request.Request(url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"})
+        
+        def fetch():
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+                
+        data = await asyncio.get_running_loop().run_in_executor(None, fetch)
+        
+        bank_name = "N/A"
+        if data.get("bank"):
+            bank_name = data["bank"].get("name", "N/A")
+        country_name = "N/A"
+        country_emoji = ""
+        if data.get("country"):
+            country_name = data["country"].get("name", "N/A").upper()
+            country_emoji = data["country"].get("emoji", "")
+        return {
+            "scheme": data.get("scheme", "N/A"),
+            "type": data.get("type", "N/A"),
+            "bank": bank_name,
+            "country": country_name,
+            "country_emoji": country_emoji,
+            "error": False
+        }
     except Exception:
         pass
     return {"error": True}
@@ -68,7 +75,6 @@ def ui_result(card, gate, bin_txt, country, flag, raw, user, approved, time_take
     u = user.username or user.first_name
     status = "Cᴀʀᴅ Cʜᴀʀɢᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
     
-    # Combine BIN info and Country cleanly
     if bin_txt and bin_txt != "N/A":
         info = f"{bin_txt} - {country}{flag}"
     else:
