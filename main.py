@@ -8,13 +8,17 @@ import urllib.request
 import urllib.error
 import json
 import asyncio
+import tempfile
 from typing import Optional
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict
 
-from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, BOT_PHOTO, GATE_URLS, GATE_SITES, API_TIMEOUT
+from config import (
+    BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, BOT_PHOTO, BOT_PHOTO_URL,
+    GATE_URLS, GATE_SITES, API_TIMEOUT
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 HARDCODED LINKS
@@ -38,6 +42,11 @@ BLOCK_WORDS = (
     "toolsx"
 )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 DOWNLOADED PHOTO PATH (set at startup)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DOWNLOADED_PHOTO_PATH = None
+
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or msg.from_user.id == OWNER_ID: return
@@ -59,6 +68,55 @@ def gen_receipt(): return f"BATCARD-{random.randint(100000, 999999)}-CHK"
 def is_premium_active(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     ud = context.bot_data.get('user_data', {}).get(str(user_id), {})
     return ud.get('plan', 'FREE') != 'FREE' and ud.get('expires', 0) > time.time()
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 DOWNLOAD PHOTO AT STARTUP
+#    Telegram can't access chatglm.cn, so WE download it
+#    and save as local file, then send that file to users
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def download_photo():
+    """Download photo from URL to local temp file. Called at startup."""
+    global DOWNLOADED_PHOTO_PATH
+
+    # Priority 1: Check if local file already exists
+    for name in ["batman.jpg", "batman.png", "batman.jpeg", "batman.webp",
+                  "BATMAN.jpg", "BATMAN.png", "photo.jpg", "photo.png"]:
+        if os.path.isfile(name):
+            DOWNLOADED_PHOTO_PATH = name
+            print(f"🦇 Found local photo: {name}")
+            return
+
+    # Priority 2: Check BOT_PHOTO from config (if it's a local path)
+    if BOT_PHOTO and os.path.isfile(BOT_PHOTO):
+        DOWNLOADED_PHOTO_PATH = BOT_PHOTO
+        print(f"🦇 Found BOT_PHOTO file: {BOT_PHOTO}")
+        return
+
+    # Priority 3: Download from BOT_PHOTO_URL
+    url_to_try = BOT_PHOTO_URL or (BOT_PHOTO if BOT_PHOTO and BOT_PHOTO.startswith("http") else "")
+
+    if url_to_try:
+        print(f"🦇 Downloading photo from: {url_to_try[:80]}...")
+        try:
+            req = urllib.request.Request(url_to_try, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = resp.read()
+
+            # Save to temp file
+            save_path = os.path.join(tempfile.gettempdir(), "batman_bot_photo.jpg")
+            with open(save_path, 'wb') as f:
+                f.write(data)
+
+            DOWNLOADED_PHOTO_PATH = save_path
+            print(f"🦇 Photo downloaded! Saved to: {save_path} ({len(data)} bytes)")
+            return
+        except Exception as e:
+            print(f"❌ Photo download failed: {e}")
+
+    print("❌ NO PHOTO FOUND — join page will be text only")
+    print("   Fix: Upload batman.jpg to your project folder, or check BOT_PHOTO_URL")
 
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
@@ -135,7 +193,7 @@ async def fetch_bin(url: str) -> dict:
     except: return {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 /start — PHOTO FROM config.py URL ON JOIN PAGE
+# 🦇 /start — PHOTO ABOVE JOIN BUTTONS (DOWNLOADED FILE)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -143,8 +201,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ud: ud[uid] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "FREE", "expires": 0}
 
     if await is_joined(user.id, context):
-        await update.message.reply_text(text=ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+        # ✅ JOINED — TEXT ONLY, NO PHOTO
+        await update.message.reply_text(
+            text=ui_profile(user, context), parse_mode="HTML",
+            reply_markup=kb_main(), disable_web_page_preview=True
+        )
     else:
+        # ✅ NOT JOINED — BATMAN PHOTO ON TOP + JOIN BUTTONS BELOW
         caption = (
             "🦇 BATMAN CARD CHECKER 🦇\n\n"
             "Access Required\n"
@@ -153,29 +216,28 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "unlock the bot.\n"
             "━━━━━━━━━━━━━━━━━━━━"
         )
+
         photo_sent = False
 
-        # Try BOT_PHOTO as URL from config.py
-        if BOT_PHOTO:
+        # Send the DOWNLOADED photo file (already on disk)
+        if DOWNLOADED_PHOTO_PATH and os.path.isfile(DOWNLOADED_PHOTO_PATH):
             try:
-                await update.message.reply_photo(photo=BOT_PHOTO, caption=caption, parse_mode="HTML", reply_markup=kb_force())
+                with open(DOWNLOADED_PHOTO_PATH, 'rb') as f:
+                    await update.message.reply_photo(
+                        photo=f, caption=caption, parse_mode="HTML",
+                        reply_markup=kb_force()
+                    )
                 photo_sent = True
-                print(f"🦇 Photo sent via URL: {BOT_PHOTO[:60]}...")
+                print(f"🦇 Sent join page photo: {DOWNLOADED_PHOTO_PATH}")
             except Exception as e:
-                print(f"⚠️ URL photo failed: {e}")
+                print(f"⚠️ Send downloaded photo failed: {e}")
 
-        # Try as local file
-        if not photo_sent and BOT_PHOTO:
-            try:
-                with open(BOT_PHOTO, 'rb') as f:
-                    await update.message.reply_photo(photo=f, caption=caption, parse_mode="HTML", reply_markup=kb_force())
-                photo_sent = True
-                print(f"🦇 Photo sent via file: {BOT_PHOTO}")
-            except: pass
-
+        # Fallback: text only
         if not photo_sent:
-            print("❌ Photo failed, sending text only")
-            await update.message.reply_text(text=caption, parse_mode="HTML", reply_markup=kb_force())
+            print("❌ No photo available, sending text only join page")
+            await update.message.reply_text(
+                text=caption, parse_mode="HTML", reply_markup=kb_force()
+            )
 
 async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /bin <BIN>\nExample: /bin 453201", parse_mode="HTML"); return
@@ -354,7 +416,7 @@ async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Unknown gate. Valid: chk, pp, sh, pyu, b3", parse_mode="HTML"); return
     if url.lower() == "remove":
         context.bot_data.pop(f'gate_url_{gate}', None)
-        await update.message.reply_text(f"✅ Removed {GATE_NAMES[gate]} override. Using config.py URL.", parse_mode="HTML"); return
+        await update.message.reply_text(f"✅ Removed {GATE_NAMES[gate]} override.", parse_mode="HTML"); return
     context.bot_data[f'gate_url_{gate}'] = url
     await update.message.reply_text(f"✅ {GATE_NAMES[gate]} override set.\n<code>{url}</code>", parse_mode="HTML")
 
@@ -372,8 +434,7 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(txt, parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇🦇🦇 GATE COMMANDS — USES config.py URLs DIRECTLY
-#     Flow: /seturl override → config.py GATE_URLS → error
+# 🦇🦇🦇 GATE COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_card(text: str) -> Optional[dict]:
     text = text.strip()
@@ -388,30 +449,15 @@ def parse_card(text: str) -> Optional[dict]:
     return None
 
 async def run_gate_api(gate: str, card: dict, context: ContextTypes.DEFAULT_TYPE) -> dict:
-    # Priority 1: /seturl override in bot_data
     api_url = context.bot_data.get(f'gate_url_{gate}', '')
-    # Priority 2: config.py GATE_URLS
-    if not api_url:
-        api_url = GATE_URLS.get(gate, '')
-
+    if not api_url: api_url = GATE_URLS.get(gate, '')
     if not api_url:
         return {"status": "error", "message": f"{GATE_NAMES[gate]} gate is not configured."}
     if not context.bot_data.get(f'{gate}_on', True):
         return {"status": "error", "message": f"{GATE_NAMES[gate]} gate is temporarily disabled."}
-
     site = GATE_SITES.get(gate, "")
-    payload = json.dumps({
-        "cc": card["cc"], "mm": card["mm"],
-        "yy": card["yy"], "cvv": card["cvv"],
-        "gate": gate, "site": site
-    }).encode('utf-8')
-
-    req = urllib.request.Request(api_url, data=payload, headers={
-        "Content-Type": "application/json",
-        "User-Agent": "BatCardChk/4.1",
-        "Accept": "application/json"
-    })
-
+    payload = json.dumps({"cc": card["cc"], "mm": card["mm"], "yy": card["yy"], "cvv": card["cvv"], "gate": gate, "site": site}).encode('utf-8')
+    req = urllib.request.Request(api_url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "BatCardChk/4.1", "Accept": "application/json"})
     try:
         loop = asyncio.get_running_loop()
         def do_req():
@@ -444,7 +490,6 @@ def format_gate_result(gate: str, data: dict, card: dict) -> str:
     if not status: status = str(data.get("code", "")).lower()
     msg = data.get("message", "") or data.get("msg", "") or data.get("info", "") or data.get("description", "") or ""
     if isinstance(msg, (dict, list)): msg = json.dumps(msg, ensure_ascii=False)
-
     if any(w == status for w in ("approved", "live", "charged", "success", "1", "true", "approved_charged", "valid", "alive")) or status.startswith("approv"):
         icon, result = "✅", "APPROVED ✅"
     elif any(w == status for w in ("declined", "dead", "rejected", "fail", "0", "false", "declined_dead", "invalid", "die")) or status.startswith("declin") or status.startswith("reject"):
@@ -456,7 +501,6 @@ def format_gate_result(gate: str, data: dict, card: dict) -> str:
         return (f"❌ {GATE_NAMES[gate].upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\nCard ➺ <code>{masked}</code>\nResult ➺ FAILED ❌\nReason ➺ {msg if msg else 'Unknown error'}\n\n━━━━━━━━━━━━━━━━━━━━")
     else:
         icon, result = "⚠️", f"RESPONSE: {(status or 'UNKNOWN').upper()}"
-
     masked = f"{card['cc'][:6]}******{card['cc'][-4:]}"
     txt = (f"{icon} {GATE_NAMES[gate].upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\nCard ➺ <code>{masked}</code>\nResult ➺ {result}\n")
     if msg and msg.lower() not in ("none", "", "null"): txt += f"Info ➺ {msg[:300]}\n"
@@ -551,8 +595,6 @@ async def _check_and_kick_if_not_joined(user_id, chat_id, context: ContextTypes.
 
 async def on_start(app):
     print("🦇 Batman Bot Initializing...")
-    print(f"🦇 Gate URLs loaded: {list(GATE_URLS.keys())}")
-    print(f"🦇 Photo: {BOT_PHOTO[:60] if BOT_PHOTO else 'NONE'}...")
     await app.bot.delete_webhook(drop_pending_updates=True)
 
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -568,6 +610,18 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logging.error(f"Exception: {context.error}")
 
 def main():
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 🦇 STEP 1: DOWNLOAD PHOTO BEFORE BOT STARTS
+    #    This is the KEY fix — bot downloads the image itself
+    #    because Telegram can't access chatglm.cn
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    print("🦇 Downloading photo...")
+    download_photo()
+    if DOWNLOADED_PHOTO_PATH:
+        print(f"🦇 Photo ready: {DOWNLOADED_PHOTO_PATH}")
+    else:
+        print("❌ NO PHOTO — join page will be text only")
+
     try: urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5).read()
     except: pass
 
