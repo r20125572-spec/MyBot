@@ -225,4 +225,180 @@ async def cmd_gen_key(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
 
 async def cmd_key10(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "core", 7)
 async def cmd_key20(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "elite", 15)
-async def cmd_key30
+async def cmd_key30(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "root", 30)
+
+async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args: await update.message.reply_text("❌ Usage: /oneday <user_id>", parse_mode="HTML"); return
+    uid = await resolve_user(context.args[0], context)
+    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
+    context.bot_data.setdefault('plans', {})[str(uid)] = {"plan": "core", "expires": time.time() + 86400}
+    await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>", parse_mode="HTML")
+
+async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if len(context.args) < 2: await update.message.reply_text("❌ Usage: /sub <user_id> <days>", parse_mode="HTML"); return
+    uid = await resolve_user(context.args[0], context)
+    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
+    try:
+        days = int(context.args[1])
+        plan = "root" if days >= 30 else "elite" if days >= 15 else "core"
+        context.bot_data.setdefault('plans', {})[str(uid)] = {"plan": plan, "expires": time.time() + (days * 86400)}
+        await update.message.reply_text(f"✅ Granted {days} Days ({plan.upper()}) to <code>{uid}</code>", parse_mode="HTML")
+    except: await update.message.reply_text("❌ Invalid days.", parse_mode="HTML")
+
+async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args: await update.message.reply_text("❌ Usage: /resub <user_id>", parse_mode="HTML"); return
+    uid = await resolve_user(context.args[0], context)
+    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
+    plans = context.bot_data.get('plans', {})
+    if str(uid) in plans: del plans[str(uid)]; await update.message.reply_text(f"✅ Removed premium from <code>{uid}</code>", parse_mode="HTML")
+    else: await update.message.reply_text("❌ User doesn't have premium.", parse_mode="HTML")
+
+async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    plans = context.bot_data.get('plans', {})
+    if not plans: await update.message.reply_text("❌ No active plans.", parse_mode="HTML"); return
+    txt = "🦇 ACTIVE PLANS\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    for uid, data in plans.items():
+        if data['expires'] > time.time(): txt += f"ID: <code>{uid}</code>\nPlan: {data['plan'].upper()}\nExp: {datetime.fromtimestamp(data['expires']).strftime('%Y-%m-%d')}\n━━━━━━━━━━━━━━━━━━━━\n"
+    await update.message.reply_text(txt, parse_mode="HTML")
+
+async def cmd_delcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not context.args: await update.message.reply_text("❌ Usage: /delcode <code>", parse_mode="HTML"); return
+    code = context.args[0]
+    codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {})
+    if code in codes: del codes[code]; await update.message.reply_text("✅ Code deleted.", parse_mode="HTML")
+    elif code in keys: del keys[code]; await update.message.reply_text("✅ Key deleted.", parse_mode="HTML")
+    else: await update.message.reply_text("❌ Not found.", parse_mode="HTML")
+
+async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args: await update.message.reply_text("❌ Usage: /rm <code>", parse_mode="HTML"); return
+    code = context.args[0].upper()
+    codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {})
+    uid = str(update.effective_user.id)
+    if code in codes and not codes[code]['used']: codes[code]['used'] = True; await update.message.reply_text(f"✅ Added {codes[code]['value']} credits.", parse_mode="HTML")
+    elif code in keys and not keys[code]['used']: keys[code]['used'] = True; p, d = keys[code]['plan'], keys[code]['days']; context.bot_data.setdefault('plans', {})[uid] = {"plan": p, "expires": time.time() + (d * 86400)}; await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.", parse_mode="HTML")
+    else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 GATE TOGGLES 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['chk_on'] = True; await update.message.reply_text("STRIPE → ON ✅", parse_mode="HTML")
+async def cmd_offchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['chk_on'] = False; await update.message.reply_text("STRIPE → OFF ❌", parse_mode="HTML")
+async def cmd_onpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['pp_on'] = True; await update.message.reply_text("PAYPAL → ON ✅", parse_mode="HTML")
+async def cmd_offpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['pp_on'] = False; await update.message.reply_text("PAYPAL → OFF ❌", parse_mode="HTML")
+async def cmd_onsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['sh_on'] = True; await update.message.reply_text("SHOPIFY → ON ✅", parse_mode="HTML")
+async def cmd_offsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['sh_on'] = False; await update.message.reply_text("SHOPIFY → OFF ❌", parse_mode="HTML")
+async def cmd_onpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['pyu_on'] = True; await update.message.reply_text("PAYU → ON ✅", parse_mode="HTML")
+async def cmd_offpyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data['pyu_on'] = False; await update.message.reply_text("PAYU → OFF ❌", parse_mode="HTML")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 CALLBACKS 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer(); d = q.data
+    if d == "verify_join":
+        if await is_joined(q.from_user.id, context):
+            try:
+                if q.message.photo: await q.message.delete(); await context.bot.send_message(chat_id=q.message.chat_id, text=ui_profile(q.from_user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+                else: await q.edit_message_text(text=ui_profile(q.from_user), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
+            except: pass
+        else: await q.answer("❌ Join Group & Channel first!", show_alert=True)
+        return
+    async def edit(t, kb):
+        try: await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+        except: pass
+    if d == "bmain": await edit(ui_profile(q.from_user), kb_main())
+    elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
+    elif d in ("pay10", "pay20", "pay30"): await edit(f"PAYMENT - {d.replace('pay','$')}\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: {d.replace('pay','$')}\nTotal: {d.replace('pay','$')}\n\n━━━━━━━━━━━━━━━━━━━━\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
+    elif d == "mgates": await edit("SELECT GATE", InlineKeyboardMarkup([[InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],[InlineKeyboardButton("◀ BACK", callback_data="bmain")]]))
+    elif d == "mauth": await edit("AUTH GATES", InlineKeyboardMarkup([[InlineKeyboardButton("Stripe", callback_data="iau"), InlineKeyboardButton("Braintree", callback_data="ib3")],[InlineKeyboardButton("◀ BACK", callback_data="mgates")]]))
+    elif d == "iau": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe Auth\nCMD: /au\nSITES: 16\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mauth"))
+    elif d == "ib3": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Braintree Auth\nCMD: /b3\nSITES: 2\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mauth"))
+    elif d == "mcharge": await edit("CHARGE GATES", InlineKeyboardMarkup([[InlineKeyboardButton("Stripe", callback_data="ichk"), InlineKeyboardButton("PayPal", callback_data="ipp")],[InlineKeyboardButton("Shopify", callback_data="ish"), InlineKeyboardButton("PayU", callback_data="ipyu")],[InlineKeyboardButton("◀ BACK", callback_data="mgates")]]))
+    elif d == "ichk": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe\nPRICE: $0.50\nCMD: /chk\nSITES: 4\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
+    elif d == "ipp": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayPal\nPRICE: $0.10\nCMD: /pp\nSITES: 7\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
+    elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
+    elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: $0.30\nCMD: /pyu\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
+
+async def on_start(app):
+    print("🦇 Batman Bot Initializing...")
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    await update.message.reply_text("🛑 Killing bot...", parse_mode="HTML")
+    os.kill(os.getpid(), signal.SIGTERM)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 MAIN STARTUP (PERMANENT CONFLICT FIX) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def main():
+    # 🔥 FORCE KILL WEBHOOK TO PREVENT POLLING CONFLICTS
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True"
+        urllib.request.urlopen(url, timeout=5).read()
+    except: pass
+
+    app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
+    
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("plan", cmd_plan))
+    app.add_handler(CommandHandler("bin", cmd_bin))
+    app.add_handler(CommandHandler("info", cmd_info))
+    app.add_handler(CommandHandler("allcm", cmd_allcm))
+    app.add_handler(CommandHandler("gen", cmd_gen))
+    app.add_handler(CommandHandler("key10", cmd_key10))
+    app.add_handler(CommandHandler("key20", cmd_key20))
+    app.add_handler(CommandHandler("key30", cmd_key30))
+    app.add_handler(CommandHandler("oneday", cmd_oneday))
+    app.add_handler(CommandHandler("sub", cmd_sub))
+    app.add_handler(CommandHandler("resub", cmd_resub))
+    app.add_handler(CommandHandler("allplans", cmd_allplans))
+    app.add_handler(CommandHandler("delcode", cmd_delcode))
+    app.add_handler(CommandHandler("rm", cmd_rm))
+    app.add_handler(CommandHandler("killbot", cmd_killbot))
+    
+    for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
+        app.add_handler(CommandHandler(cmd, func))
+    
+    # EXACT OLD GATE HANDLERS (RESTORES OLD RESPONSES)
+    if get_chk_handler: app.add_handler(get_chk_handler())
+    if get_pp_handler: app.add_handler(get_pp_handler())
+    if get_sh_handler: app.add_handler(get_sh_handler())
+    if get_pyu_handler: app.add_handler(get_pyu_handler())
+    
+    try:
+        for h in get_plans_handler(): app.add_handler(h)
+    except: pass
+    
+    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
+    
+    print("🦇 Online! All Commands & Old Gates Active.")
+    
+    # FIX: Removed the "while True:" loop that was causing the Conflict error!
+    # run_polling handles its own reconnections natively.
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
