@@ -2,8 +2,6 @@ import os
 import signal
 import logging
 import asyncio
-import re
-import time
 from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -15,22 +13,33 @@ from pp import get_pp_handler
 from sh import get_sh_handler
 from pyu import get_pyu_handler
 from plans import get_plans_handler, get_user_ui_text
-from bincheck import get_bin_handler  # FIXED: Changed from 'bin' to 'bincheck'
+from bincheck import get_bin_handler
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 BOT_PHOTO = "https://z-cdn-media.chatglm.cn/files/e82a6a24-028b-47b0-b909-003812e3ad83.jpg?auth_key=1882226135-b1b80190e4204674b0398d13564d82fe-0-874f5e21b888b225a795c7f0f75b970a"
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
+# ENHANCED: Strictly block ALL outer links
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    text = update.message.text.lower()
     if update.effective_user.id == OWNER_ID: return
-    banned_words = ["t.me", "http://", "https://", "www.", "join our channel", "join channel", "subscribe", "telegram.me"]
-    for word in banned_words:
-        if word in text:
-            try: await update.message.delete()
-            except Exception: pass
+    
+    text = update.message.text.lower()
+    
+    # Comprehensive list to block any link
+    link_patterns = [
+        "http://", "https://", "www.", "t.me", ".com", ".net", ".org", 
+        ".io", ".me", ".xyz", ".tk", ".ml", ".cf", ".ga", ".ru", ".in", ".pw",
+        "telegram.me", "joinchat", "://"
+    ]
+    
+    for pattern in link_patterns:
+        if pattern in text:
+            try: 
+                await update.message.delete()
+            except Exception: 
+                pass
             return
 
 async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -57,11 +66,12 @@ def kb_main():
 
 def kb_back(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("◀ BACK", callback_data=cb)]])
 
+# Uses variables from config.py to avoid wrong links
 def kb_force():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("JOIN GROUP", url="https://t.me/batcardchkGroup")],
-        [InlineKeyboardButton("JOIN CHANNEL", url="https://t.me/Batcardchk")],
-        [InlineKeyboardButton("VERIFY", callback_data="verify_join")]
+        [InlineKeyboardButton("JOIN GROUP", url=GROUP_LINK)],
+        [InlineKeyboardButton("JOIN CHANNEL", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ VERIFY", callback_data="verify_join")]
     ])
 
 def kb_price():
@@ -174,11 +184,11 @@ async def on_start(app):
 
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text("🛑 Killing old bot process...", parse_mode="HTML")
+    await update.message.reply_text("🛑 Killing bot process...", parse_mode="HTML")
     os.kill(os.getpid(), signal.SIGTERM)
-    await asyncio.sleep(3)
 
-async def main():
+# FIX: Normal synchronous function to stop "Cannot close a running event loop"
+def main():
     try:
         import psutil
         for proc in psutil.process_iter(['python', 'main.py']):
@@ -208,16 +218,10 @@ async def main():
     for handler in get_plans_handler(): app.add_handler(handler)
     app.add_handler(CallbackQueryHandler(on_callback))
     
-    print("Online!")
+    print("Online! Bot is running perfectly.")
     
-    while True:
-        try:
-            print("⚡ Running bot...")
-            await app.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            print(f"⚠️ Error: {e}, Restarting in 3s...")
-            await asyncio.sleep(3)
-            continue
+    # FIX: app.run_polling handles its own loop and auto-restarts automatically!
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
