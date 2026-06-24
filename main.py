@@ -41,12 +41,23 @@ get_plans_handler = lambda: []
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-BLOCK_WORDS = ("http://", "https://", "www.", "t.me", ".com", ".net", ".org", ".io", ".me", ".xyz", ".tk", ".ml", ".cf", ".ga", ".ru", ".in", ".pw", "telegram.me", "joinchat", "://")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 BLOCKED WORDS (A_ToolsX FULLY BLOCKED)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BLOCK_WORDS = (
+    "http://", "https://", "www.", "t.me", ".com", ".net", ".org",
+    ".io", ".me", ".xyz", ".tk", ".ml", ".cf", ".ga", ".ru", ".in",
+    ".pw", "telegram.me", "joinchat", "://",
+    "a_toolsx", "a-tools", "atoolsx", "a tools x", "a-tools x"
+)
 
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg or not msg.text or msg.from_user.id == OWNER_ID: return
-    if any(w in msg.text.lower() for w in BLOCK_WORDS):
+    if not msg or msg.from_user.id == OWNER_ID: return
+    # Check both text and caption (photo messages with text)
+    text = (msg.text or msg.caption or "").lower()
+    if not text: return
+    if any(w in text for w in BLOCK_WORDS):
         try: await msg.delete()
         except: pass
 
@@ -55,6 +66,34 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
         try: return (await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)).status not in ('left', 'kicked')
         except: return False
     return await check(CHANNEL_USERNAME) and await check(GROUP_USERNAME)
+
+def gen_code(length=10): return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+def gen_receipt(): return f"BATCARD-{random.randint(100000, 999999)}-CHK"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 PREMIUM ACTIVATION MESSAGE TO USER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def send_activation_msg(user_id: int, plan: str, days: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+    receipt = gen_receipt()
+    name = "Unknown"
+    try:
+        chat = await context.bot.get_chat(user_id)
+        name = chat.first_name or "Unknown"
+    except: pass
+    txt = (
+        "Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n\n"
+        f"Uꜱᴇʀ ➺ {name}\n"
+        f"Aᴄᴄᴇꜱꜱ ➺ {plan.upper()}\n"
+        f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
+        f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\n"
+        f"Rᴇᴄᴇɪᴘᴘᴛ ID ➺ <code>{receipt}</code>\n\n"
+        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴘᴛ ID."
+    )
+    try:
+        await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
+    except: pass
+    return receipt
 
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
@@ -99,8 +138,6 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     if target.lstrip('-').isdigit(): return int(target)
     try: return (await context.bot.get_chat(f"@{target}")).id
     except: return None
-
-def gen_code(length=10): return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 async def fetch_bin(url: str) -> dict:
     try:
@@ -189,23 +226,68 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
     )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 IMPROVED /info — FAST & DETAILED
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    target_id = target_input = None
-    if update.message.reply_to_message: 
+    if not update.message.reply_to_message and not context.args:
+        await update.message.reply_text(
+            "❌ INVALID USAGE\n\n"
+            "How to get User ID:\n"
+            "1. Ask user to send /start\n"
+            "2. Copy the 'USER ID' from menu\n"
+            "3. Then type: /info 123456789\n\n"
+            "Or simply reply to their message with /info",
+            parse_mode="HTML"
+        )
+        return
+
+    if update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
-        target_input = str(target_id)
-    elif context.args: 
-        target_input = context.args[0]
-        target_id = await resolve_user(target_input, context)
-    else: 
-        await update.message.reply_text("❌ INVALID USAGE\n\nHow to get User ID:\n1. Ask user to send /start\n2. Copy the 'USER ID' from menu\n3. Then type: /info 123456789\n\nOr simply reply to their message with /info", parse_mode="HTML"); return
-    if not target_id: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    udata = context.bot_data.get('user_data', {}).get(str(target_id), {})
-    txt = f"━━━━━━━━━━━━━━━━━━━━\nUSER INFO\n━━━━━━━━━━━━━━━━━━━━\n\nName: {udata.get('name', 'N/A')}\nID: <code>{target_id}</code>\nCredits: {udata.get('credits', 150)}\n"
-    if udata.get('expires', 0) > time.time(): txt += f"Plan: {udata.get('plan', 'FREE').upper()}\nExpires: {datetime.fromtimestamp(udata['expires']).strftime('%Y-%m-%d %H:%M')}\n"
-    else: txt += "Plan: FREE\n"
-    await update.message.reply_text(txt + "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    else:
+        target_id = await resolve_user(context.args[0], context)
+
+    if not target_id:
+        await update.message.reply_text("❌ User not found.", parse_mode="HTML")
+        return
+
+    # Fetch Telegram profile + local data at same time for speed
+    async def fetch_tg():
+        try:
+            u = await context.bot.get_chat(target_id)
+            return u.first_name or "N/A", u.username or "None", u.id
+        except:
+            return "N/A", "None", target_id
+
+    name, username, uid = await fetch_tg()
+    udata = context.bot_data.get('user_data', {}).get(str(uid), {})
+
+    plan = udata.get('plan', 'FREE').upper()
+    credits = udata.get('credits', 150)
+    expires = udata.get('expires', 0)
+    joined = udata.get('joined', 'N/A')
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🦇 USER INFO\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Name ➺ {name}\n"
+        f"Username ➺ @{username}\n"
+        f"User ID ➺ <code>{uid}</code>\n"
+        f"Joined Bot ➺ {joined}\n"
+        f"Plan ➺ {plan}\n"
+        f"Credits ➺ {credits}\n"
+    )
+    if expires > time.time():
+        txt += f"Expires ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+        remaining = int((expires - time.time()) / 86400)
+        txt += f"Remaining ➺ {remaining} Days\n"
+    else:
+        txt += "Status ➺ Inactive / Free\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━"
+
+    await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -226,6 +308,9 @@ async def cmd_key10(update: Update, context: ContextTypes.DEFAULT_TYPE): await c
 async def cmd_key20(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "elite", 15)
 async def cmd_key30(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "root", 30)
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 /oneday /threeday /sub — SENDS ACTIVATION MSG TO USER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args: await update.message.reply_text("❌ Usage: /oneday <user_id>", parse_mode="HTML"); return
@@ -234,7 +319,8 @@ async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
     if uid_str not in ud: ud[uid_str] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
     ud[uid_str]["plan"] = "core"; ud[uid_str]["expires"] = time.time() + 86400
-    await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>", parse_mode="HTML")
+    receipt = await send_activation_msg(uid, "core", 1, context)
+    await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>\nReceipt: <code>{receipt}</code>", parse_mode="HTML")
 
 async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -244,7 +330,8 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
     if uid_str not in ud: ud[uid_str] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
     ud[uid_str]["plan"] = "core"; ud[uid_str]["expires"] = time.time() + (3 * 86400)
-    await update.message.reply_text(f"✅ Granted 3 Days Access to <code>{uid}</code>", parse_mode="HTML")
+    receipt = await send_activation_msg(uid, "core", 3, context)
+    await update.message.reply_text(f"✅ Granted 3 Days Access to <code>{uid}</code>\nReceipt: <code>{receipt}</code>", parse_mode="HTML")
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -258,7 +345,8 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
         if uid_str not in ud: ud[uid_str] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
         ud[uid_str]["plan"] = plan; ud[uid_str]["expires"] = time.time() + (days * 86400)
-        await update.message.reply_text(f"✅ Granted {days} Days ({plan.upper()}) to <code>{uid}</code>", parse_mode="HTML")
+        receipt = await send_activation_msg(uid, plan, days, context)
+        await update.message.reply_text(f"✅ Granted {days} Days ({plan.upper()}) to <code>{uid}</code>\nReceipt: <code>{receipt}</code>", parse_mode="HTML")
     except ValueError:
         await update.message.reply_text("❌ INVALID DAYS\nThe second parameter must be a number.\nExample: /sub 123456789 30", parse_mode="HTML")
 
@@ -292,8 +380,14 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = context.args[0].upper(); codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {}); uid = str(update.effective_user.id)
     ud = context.bot_data.setdefault('user_data', {})
     if uid not in ud: ud[uid] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
-    if code in codes and not codes[code]['used']: codes[code]['used'] = True; ud[uid]["credits"] += codes[code]['value']; await update.message.reply_text(f"✅ Redeemed! Added {codes[code]['value']} credits.\nNew Balance: {ud[uid]['credits']}", parse_mode="HTML")
-    elif code in keys and not keys[code]['used']: keys[code]['used'] = True; p, d = keys[code]['plan'], keys[code]['days']; ud[uid]["plan"] = p; ud[uid]["expires"] = time.time() + (d * 86400); await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.", parse_mode="HTML")
+    if code in codes and not codes[code]['used']:
+        codes[code]['used'] = True; ud[uid]["credits"] += codes[code]['value']
+        await update.message.reply_text(f"✅ Redeemed! Added {codes[code]['value']} credits.\nNew Balance: {ud[uid]['credits']}", parse_mode="HTML")
+    elif code in keys and not keys[code]['used']:
+        keys[code]['used'] = True; p, d = keys[code]['plan'], keys[code]['days']
+        ud[uid]["plan"] = p; ud[uid]["expires"] = time.time() + (d * 86400)
+        await send_activation_msg(int(uid), p, d, context)
+        await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.", parse_mode="HTML")
     else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
 
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -328,14 +422,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
     
-    # 1. Answer callback instantly without waiting
     try:
         await q.answer()
     except: pass
 
-    # 2. Handle Verify Button separately to avoid blocking other buttons
     if d == "verify_join":
-        # Instantly open the main menu so it feels 0ms
         try:
             await q.edit_message_text(text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
         except:
@@ -343,19 +434,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=q.message.chat_id, text=ui_profile(q.from_user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
             except:
                 pass
-        
-        # Check join status in the background (doesn't block UI)
         asyncio.ensure_future(_check_and_kick_if_not_joined(q.from_user.id, context, q.message.chat_id))
         return
 
-    # 3. Instant text editor
     async def edit(t, kb):
         try: await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
         except: pass
 
-    # 4. Route all other buttons instantly
     if d == "bmain": await edit(ui_profile(q.from_user, context), kb_main())
-    elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
+    elif d == "mprice": await edit("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", kb_price())
     elif d in ("pay10", "pay20", "pay30"): 
         amt = d.replace("pay", "$")
         await edit(f"PAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: {amt}\nTaxes: Included\nTotal: {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added\nwith taxes included.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.", kb_back("mprice"))
@@ -369,17 +456,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh cc|mm|yy|cvv\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
     elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: $0.30\nCMD: /pyu cc|mm|yy|cvv\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
 
-# Background check to kick user if they clicked verify but didn't join
 async def _check_and_kick_if_not_joined(user_id, chat_id, context: ContextTypes.DEFAULT_TYPE):
     try:
         joined = await is_joined(user_id, context)
         if not joined:
             try:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="❌ You didn't join both channels! Access Denied.",
-                    parse_mode="HTML"
-                )
+                await context.bot.send_message(chat_id=chat_id, text="❌ You didn't join both channels! Access Denied.", parse_mode="HTML")
             except: pass
     except Exception:
         pass
@@ -429,14 +511,16 @@ def main():
     for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd, func))
     
-    if get_chk_handler: app.add_handler(get_chk_handler())
-    if get_pp_handler: app.add_handler(get_pp_handler())
-    if get_sh_handler: app.add_handler(get_sh_handler())
-    if get_pyu_handler: app.add_handler(get_pyu_handler())
-    if get_b3_handler: app.add_handler(get_b3_handler())
+    # Gate module handlers — wrapped to block A_ToolsX leak
+    for get_handler in [get_chk_handler, get_pp_handler, get_sh_handler, get_pyu_handler, get_b3_handler]:
+        if get_handler:
+            handler = get_handler()
+            app.add_handler(handler)
     
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
+    # Also block A_ToolsX in photo captions
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, anti_ad_filter))
     
     print("🦇 Online! All Commands & Buttons Hyper-Fast.")
     app.run_polling(drop_pending_updates=True)
