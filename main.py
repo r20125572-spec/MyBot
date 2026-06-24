@@ -13,16 +13,27 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict
 
-from config import (
-    BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, 
-    CHANNEL_USERNAME, GROUP_USERNAME, CHANNEL_LINK, GROUP_LINK, 
-    BOT_PHOTO
-)
+from config import BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, BOT_PHOTO
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FORCE KILL GHOST INSTANCES (FIXES CONFLICT FOREVER) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+try:
+    os.system("pkill -9 -f main.py") # Kills any duplicate bots instantly
+    time.sleep(2)
+except: pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 HARDCODED CORRECT LINKS (IGNORES BAD CONFIG.PY) 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHANNEL_USERNAME = "@Batcardchk"
+GROUP_USERNAME = "@batcardchkGroup"
+CHANNEL_LINK = "https://t.me/Batcardchk"
+GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SAFE IMPORTS (BLOCKS A_ToolsX LINK FOREVER) 🦇
+# 🦇 SAFE IMPORTS (BLOCKS A_ToolsX LEAK) 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 try: from chk import get_chk_handler
 except: get_chk_handler = None
@@ -32,7 +43,7 @@ try: from sh import get_sh_handler
 except: get_sh_handler = None
 try: from pyu import get_pyu_handler
 except: get_pyu_handler = None
-get_plans_handler = lambda: [] # KILLED TO STOP 3RD PARTY LINKS
+get_plans_handler = lambda: [] # KILLED TO STOP 3RD PARTY LEAKS
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -151,9 +162,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", parse_mode="HTML", reply_markup=kb_price())
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 OWNER COMMANDS (EXACT IMAGE FORMAT) 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
@@ -198,34 +206,12 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_input = context.args[0]
         target_id = await resolve_user(target_input, context)
     else: 
-        await update.message.reply_text(
-            "❌ INVALID USAGE\n\n"
-            "How to get User ID:\n"
-            "1. Ask the user to send /start\n"
-            "2. Copy the 'USER ID' from their menu\n"
-            "3. Then type: /info 123456789\n\n"
-            "Or simply reply to their message with /info", 
-            parse_mode="HTML"
-        )
-        return
-        
-    if not target_id: 
-        await update.message.reply_text("❌ User not found.", parse_mode="HTML")
-        return
-        
+        await update.message.reply_text("❌ INVALID USAGE\n\nHow to get User ID:\n1. Ask user to send /start\n2. Copy the 'USER ID' from menu\n3. Then type: /info 123456789\n\nOr simply reply to their message with /info", parse_mode="HTML"); return
+    if not target_id: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
     udata = context.bot_data.get('user_data', {}).get(str(target_id), {})
-    txt = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"USER INFO\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Name: {udata.get('name', 'N/A')}\n"
-        f"ID: <code>{target_id}</code>\n"
-        f"Credits: {udata.get('credits', 150)}\n"
-    )
-    if udata.get('expires', 0) > time.time():
-        txt += f"Plan: {udata.get('plan', 'FREE').upper()}\nExpires: {datetime.fromtimestamp(udata['expires']).strftime('%Y-%m-%d %H:%M')}\n"
-    else:
-        txt += "Plan: FREE\n"
+    txt = f"━━━━━━━━━━━━━━━━━━━━\nUSER INFO\n━━━━━━━━━━━━━━━━━━\n\nName: {udata.get('name', 'N/A')}\nID: <code>{target_id}</code>\nCredits: {udata.get('credits', 150)}\n"
+    if udata.get('expires', 0) > time.time(): txt += f"Plan: {udata.get('plan', 'FREE').upper()}\nExpires: {datetime.fromtimestamp(udata['expires']).strftime('%Y-%m-%d %H:%M')}\n"
+    else: txt += "Plan: FREE\n"
     await update.message.reply_text(txt + "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -252,8 +238,7 @@ async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /oneday <user_id>", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    ud = context.bot_data.setdefault('user_data', {})
-    uid_str = str(uid)
+    ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
     if uid_str not in ud: ud[uid_str] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
     ud[uid_str]["plan"] = "core"; ud[uid_str]["expires"] = time.time() + 86400
     await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>", parse_mode="HTML")
@@ -263,8 +248,7 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /threeday <user_id>", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    ud = context.bot_data.setdefault('user_data', {})
-    uid_str = str(uid)
+    ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
     if uid_str not in ud: ud[uid_str] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
     ud[uid_str]["plan"] = "core"; ud[uid_str]["expires"] = time.time() + (3 * 86400)
     await update.message.reply_text(f"✅ Granted 3 Days Access to <code>{uid}</code>", parse_mode="HTML")
@@ -378,7 +362,7 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict):
-        logging.warning("⚠️ Conflict caught! Ignoring ghost instance...")
+        logging.warning("⚠️ Conflict caught! Waiting 15s...")
         await asyncio.sleep(15) 
         return
     logging.error(f"Exception: {context.error}")
@@ -390,9 +374,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     app.add_error_handler(error_handler)
     
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # ALL COMMANDS (STANDARD PRIORITY - UNBLOCKED)
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("bin", cmd_bin))
@@ -403,7 +384,7 @@ def main():
     app.add_handler(CommandHandler("key20", cmd_key20))
     app.add_handler(CommandHandler("key30", cmd_key30))
     app.add_handler(CommandHandler("oneday", cmd_oneday))
-    app.add_handler(CommandHandler("threeday", cmd_threeday)) # ADDED
+    app.add_handler(CommandHandler("threeday", cmd_threeday))
     app.add_handler(CommandHandler("sub", cmd_sub))
     app.add_handler(CommandHandler("resub", cmd_resub))
     app.add_handler(CommandHandler("allplans", cmd_allplans))
@@ -414,7 +395,6 @@ def main():
     for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd, func))
     
-    # OLD GATE HANDLERS
     if get_chk_handler: app.add_handler(get_chk_handler())
     if get_pp_handler: app.add_handler(get_pp_handler())
     if get_sh_handler: app.add_handler(get_sh_handler())
@@ -423,7 +403,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
     
-    print("🦇 Online! All Commands Unblocked & Active.")
+    print("🦇 Online! All Commands Active.")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
