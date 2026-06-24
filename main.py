@@ -76,7 +76,8 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     try: return (await context.bot.get_chat(f"@{target}")).id
     except Exception: return None
 
-async def cmd_start(update: Update, context: ContextTypes DEFAULT_TYPE):
+# FIXED: Added missing dot between ContextTypes and DEFAULT_TYPE
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if 'user_data' not in context.bot_data: context.bot_data['user_data'] = {}
     if str(user.id) not in context.bot_data['user_data']:
@@ -89,7 +90,7 @@ async def cmd_start(update: Update, context: ContextTypes DEFAULT_TYPE):
         except Exception: await update.message.reply_text(text=cap, parse_mode="HTML", reply_markup=kb_force())
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t = "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$"
+    t = "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$"
     await update.message.reply_text(t, parse_mode="HTML", reply_markup=kb_price())
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -176,7 +177,8 @@ async def on_start(app):
     print("Batman Starting...")
     await app.bot.delete_webhook(drop_pending_updates=True)
 
-async def cmd_killbot(update: update: Update, context: ContextTypes.DEFAULT_TYPE):
+# FIXED: Removed duplicate "update:" in parameter
+async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Owner command to safely kill the bot process"""
     if update.effective_user.id != OWNER_ID: return
     
@@ -185,16 +187,16 @@ async def cmd_killbot(update: update: Update, context: ContextTypes.DEFAULT_TYPE
     # Send kill signal to current process
     os.kill(os.getpid(), signal.SIGTERM)
     await asyncio.sleep(3) # Wait 3 seconds for process to die
-    
-    await update.message.reply_text("✅ Old process killed! Please wait 5 seconds and type /start again.", parse_mode="HTML")
 
-def main():
+# FIXED: Made function async to use await
+async def main():
     # Safety: Kill any leftover python processes from old crashes to avoid conflicts
     try:
         import psutil
         for proc in psutil.process_iter(['python', 'main.py']):
-            if 'main.py' in ' '.join(proc.cmdline):
-                os.kill(proc.pid, signal.SIGTERM)
+            if 'main.py' in ' '.join(proc.cmdline()):
+                if proc.pid != os.getpid():
+                    os.kill(proc.pid, signal.SIGTERM)
     except Exception:
         pass
     
@@ -203,7 +205,7 @@ def main():
     
     # Register all handlers here...
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
-    app.add_handler(CommandHandler("killbot", cmd_killbot)) # NEW: Manual kill switch command
+    app.add_handler(CommandHandler("killbot", cmd_killbot))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("info", cmd_info))
@@ -212,7 +214,8 @@ def main():
     app.add_handler(get_chk_handler())
     app.add_handler(get_pp_handler())
     app.add_handler(get_sh_handler())
-    app.add_handler(get_bin_handler()) # NEW
+    app.add_handler(get_pyu_handler())  # FIXED: Added missing pyu handler
+    app.add_handler(get_bin_handler())
     
     for cmd in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd[0], cmd[1]))
@@ -226,10 +229,10 @@ def main():
         try:
             print("⚡ Running bot...")
             await app.run_polling(drop_pending_updates=True)
-        except Conflict:
-            print("⚠️ Conflict detected! Restarting in 3s...")
+        except Exception as e:
+            print(f"⚠️ Error: {e}, Restarting in 3s...")
             await asyncio.sleep(3)
             continue
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
