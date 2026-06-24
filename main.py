@@ -27,16 +27,12 @@ SUPPORT_LINK = "https://t.me/cardchkSupport"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 try: from chk import get_chk_handler
 except: get_chk_handler = None
-
 try: from pp import get_pp_handler
 except: get_pp_handler = None
-
 try: from sh import get_sh_handler
 except: get_sh_handler = None
-
 try: from pyu import get_pyu_handler
 except: get_pyu_handler = None
-
 try: from plans import get_plans_handler
 except: get_plans_handler = lambda: []
 
@@ -57,7 +53,6 @@ async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
         except: return False
     return await check(CHANNEL_USERNAME) and await check(GROUP_USERNAME)
 
-# FIXED: Now reads live credits & plans directly from bot_data
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
     ud = context.bot_data.get('user_data', {}).get(str(user.id), {})
@@ -108,21 +103,23 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
 def gen_code(length=10): return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CREDIT DEDUCTION SYSTEM (1 Gate Check = 1 Credit) 🦇
+# 🦇 CREDIT DEDUCTION SYSTEM 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def gate_credit_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    cmd = update.message.text.split()[0].lower()
     
-    if cmd in ['/chk', '/pp', '/sh', '/pyu']:
-        if update.effective_user.id == OWNER_ID: return # Owner has unlimited
+    # Safely get the command
+    text = update.message.text.lower().split()[0]
+    
+    # Only intercept gate commands
+    if text in ['/chk', '/pp', '/sh', '/pyu']:
+        if update.effective_user.id == OWNER_ID: return # Owner bypass
         
         uid = str(update.effective_user.id)
         ud = context.bot_data.get('user_data', {}).get(uid, {})
         
-        # Premium users bypass credit deduction
-        if ud.get('expires', 0) > time.time():
-            return
+        # Premium bypass
+        if ud.get('expires', 0) > time.time(): return
             
         credits = ud.get('credits', 0)
         if credits <= 0:
@@ -133,10 +130,11 @@ async def gate_credit_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📌 Or buy premium /plan\n"
                 "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
             )
-            raise ApplicationHandlerStop # Blocks the check command
+            raise ApplicationHandlerStop # Stops gate from running
             
-        # Deduct 1 credit
-        context.bot_data['user_data'][uid]['credits'] = credits - 1
+        # Deduct 1 credit safely
+        if 'user_data' in context.bot_data and uid in context.bot_data['user_data']:
+            context.bot_data['user_data'][uid]['credits'] = credits - 1
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 BUILT-IN BIN COMMAND 🦇
@@ -193,7 +191,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud[uid] = {
             "name": user.first_name, 
             "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "credits": 150,  # FIXED: 150 FREE TRIAL CREDITS
+            "credits": 150,  # 150 FREE TRIAL CREDITS
             "plan": "FREE", 
             "expires": 0
         }
@@ -243,18 +241,12 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👑 OWNER COMMANDS\n━━━━━━━━━━━━━━━━━━━━\n"
         "▸ /info - User Info\n▸ /allcm - This Menu\n"
         "▸ /gen <amt> - Gen Credit Code\n"
-        "▸ /key10 - Gen Core Key (7 Days)\n"
-        "▸ /key20 - Gen Elite Key (15 Days)\n"
-        "▸ /key30 - Gen Root Key (30 Days)\n"
-        "▸ /oneday <user_id> - Give 1 Day Access\n"
-        "▸ /sub <user_id> <days> - Grant Premium\n"
-        "▸ /resub <user_id> - Remove Premium\n"
-        "▸ /allplans - View Active Plans\n"
+        "▸ /key10 - Gen Core Key (7 Days)\n▸ /key20 - Gen Elite Key (15 Days)\n▸ /key30 - Gen Root Key (30 Days)\n"
+        "▸ /oneday <user_id> - Give 1 Day Access\n▸ /sub <user_id> <days> - Grant Premium\n"
+        "▸ /resub <user_id> - Remove Premium\n▸ /allplans - View Active Plans\n"
         "▸ /delcode <code> - Delete Code/Key\n"
-        "▸ /onchk /offchk - Stripe Gate\n"
-        "▸ /onpp /offpp - PayPal Gate\n"
-        "▸ /onsh /offsh - Shopify Gate\n"
-        "▸ /onpyu /offpyu - PayU Gate\n"
+        "▸ /onchk /offchk - Stripe Gate\n▸ /onpp /offpp - PayPal Gate\n"
+        "▸ /onsh /offsh - Shopify Gate\n▸ /onpyu /offpyu - PayU Gate\n"
         "━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML"
     )
 
@@ -283,14 +275,11 @@ async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /oneday <user_id>", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    
-    # FIXED: Updates user_data so it shows on /start
     ud = context.bot_data.setdefault('user_data', {})
     uid_str = str(uid)
     if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": "", "credits": 0}
     ud[uid_str]["plan"] = "core"
     ud[uid_str]["expires"] = time.time() + 86400
-    
     await update.message.reply_text(f"✅ Granted 1 Day Access to <code>{uid}</code>", parse_mode="HTML")
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,14 +290,11 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         days = int(context.args[1])
         plan = "root" if days >= 30 else "elite" if days >= 15 else "core"
-        
-        # FIXED: Updates user_data so it shows on /start
         ud = context.bot_data.setdefault('user_data', {})
         uid_str = str(uid)
         if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": "", "credits": 0}
         ud[uid_str]["plan"] = plan
         ud[uid_str]["expires"] = time.time() + (days * 86400)
-        
         await update.message.reply_text(f"✅ Granted {days} Days ({plan.upper()}) to <code>{uid}</code>", parse_mode="HTML")
     except: await update.message.reply_text("❌ Invalid days.", parse_mode="HTML")
 
@@ -317,20 +303,16 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /resub <user_id>", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    
-    # FIXED: Removes plan from user_data
     ud = context.bot_data.setdefault('user_data', {})
     uid_str = str(uid)
     if uid_str in ud:
         ud[uid_str]["plan"] = "FREE"
         ud[uid_str]["expires"] = 0
         await update.message.reply_text(f"✅ Removed premium from <code>{uid}</code>", parse_mode="HTML")
-    else:
-        await update.message.reply_text("❌ User not found.", parse_mode="HTML")
+    else: await update.message.reply_text("❌ User not found.", parse_mode="HTML")
 
 async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    # FIXED: Now reads correctly from user_data
     users = context.bot_data.get('user_data', {})
     txt = "🦇 ACTIVE PLANS\n━━━━━━━━━━━━━━━━━━━━\n\n"
     found = False
@@ -355,8 +337,6 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = context.args[0].upper()
     codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {})
     uid = str(update.effective_user.id)
-    
-    # FIXED: Ensure user exists to update balance
     ud = context.bot_data.setdefault('user_data', {})
     if uid not in ud: ud[uid] = {"credits": 0, "plan": "FREE", "expires": 0}
     
@@ -371,8 +351,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud[uid]["plan"] = p
         ud[uid]["expires"] = time.time() + (d * 86400)
         await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.", parse_mode="HTML")
-    else:
-        await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
+    else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 GATE TOGGLES 🦇
@@ -431,25 +410,29 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "ish": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: 1 Credit\nCMD: /sh\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
     elif d == "ipyu": await edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: 1 Credit\nCMD: /pyu\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_back("mcharge"))
 
-async def on_start(app):
-    print("🦇 Batman Bot Initializing...")
-    await app.bot.delete_webhook(drop_pending_updates=True)
-
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text("🛑 Killing bot...", parse_mode="HTML")
     os.kill(os.getpid(), signal.SIGTERM)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 MAIN STARTUP (CONFLICT FIX APPLIED) 🦇
+# 🦇 MAIN STARTUP 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
+    # 🔥 CRITICAL FIX: FORCE KILL WEBHOOK BEFORE ANYTHING ELSE
+    try:
+        webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=True"
+        urllib.request.urlopen(webhook_url, timeout=5).read()
+        print("🧹 Webhook forcefully deleted.")
+    except Exception as e:
+        print(f"Webhook delete note: {e}")
+        
+    app = Application.builder().token(BOT_TOKEN).build()
     
-    # 1. CREDIT INTERCEPTOR (Must be in Group -1 to run before gate checks)
-    app.add_handler(MessageHandler(filters.Regex(r'^/(chk|pp|sh|pyu)(@\w+)?\s'), gate_credit_guard), group=-1)
+    # 1. CREDIT INTERCEPTOR (Group -1 runs first to check credits)
+    app.add_handler(MessageHandler(filters.Regex(r'^/(chk|pp|sh|pyu)'), gate_credit_guard), group=-1)
     
-    # 2. ALL EXACT OLD COMMANDS
+    # 2. ALL EXACT COMMANDS
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("bin", cmd_bin))
@@ -470,6 +453,7 @@ def main():
     for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu)]:
         app.add_handler(CommandHandler(cmd, func))
     
+    # 3. EXTERNAL GATE CHECKS
     if get_chk_handler: app.add_handler(get_chk_handler())
     if get_pp_handler: app.add_handler(get_pp_handler())
     if get_sh_handler: app.add_handler(get_sh_handler())
@@ -479,22 +463,21 @@ def main():
         for h in get_plans_handler(): app.add_handler(h)
     except: pass
     
+    # 4. CALLBACKS & FILTERS
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
     
-    print("🦇 Online! All Commands Active.")
+    print("🦇 Online! All Commands & Gates Active.")
     
-    # CRITICAL FIX: CATCH CONFLICT ERROR SO BOT STAYS ALIVE
     while True:
         try:
             app.run_polling(drop_pending_updates=True)
             break
         except Conflict:
-            print("⚠️ Conflict detected: Another instance is running!")
-            print("⏳ Waiting 15 seconds for it to close...")
+            print("⚠️ Conflict detected! Waiting 15s...")
             time.sleep(15)
         except Exception as e:
-            print(f"⚠️ Stopped unexpectedly: {e}")
+            print(f"⚠️ Stopped: {e}")
             break
 
 if __name__ == "__main__":
