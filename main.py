@@ -77,9 +77,13 @@ async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await msg.delete()
         except: pass
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 MAINTENANCE MODE CHECKER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.bot_data.get('maintenance', False) and update.effective_user.id != OWNER_ID:
-        try: await update.message.reply_text("🛑 Bot is currently under maintenance.", parse_mode="HTML")
+        try:
+            await update.message.reply_text("🛑 Bot is currently under maintenance.", parse_mode="HTML")
         except: pass
         raise ApplicationHandlerStop
 
@@ -148,7 +152,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     return receipt
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 KEYBOARDS (EXACTLY AS REQUESTED)
+# 🦇 KEYBOARDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
     return InlineKeyboardMarkup([
@@ -178,15 +182,9 @@ def kb_payment():
         [InlineKeyboardButton("« BACK", callback_data="mprice")]
     ])
 
-def kb_gate_info(cmd, back_cb):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ USE GATE", callback_data=f"use_{cmd}")],
-        [InlineKeyboardButton("« BACK", callback_data=back_cb)]
-    ])
-
 def kb_gate_category():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge"), InlineKeyboardButton("MASS", callback_data="mmass")],
+        [InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],
         [InlineKeyboardButton("« BACK", callback_data="bmain")]
     ])
 
@@ -259,9 +257,33 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(PLAN_TEXT, parse_mode="HTML", reply_markup=kb_price(), disable_web_page_preview=True)
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FIXED /allcm COMMAND (EXACT REQUESTED LIST)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text(f"BATMAN BOT - ALL COMMANDS\n━━━━━━━━━━━━━━━━━━\nVersion: {VERSION}\n━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text(
+        f"BATMAN BOT - ALL COMMANDS\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Version: {VERSION}\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"USER COMMANDS\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"/start /plan /bin\n"
+        f"/chk /pp /sh /pyu /b3 /rm\n\n"
+        f"OWNER COMMANDS\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"/info /allcm /gen\n"
+        f"/key10 /key20 /key30\n"
+        f"/sub /resub /allplans\n"
+        f"/oneday /threeday\n"
+        f"/seturl /geturl\n"
+        f"/onchk /offchk /onpp /offpp\n"
+        f"/onsh /offsh /onpyu /offpyu\n"
+        f"/killbot /onbot\n"
+        f"━━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML"
+    )
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -312,19 +334,38 @@ async def _grant_premium(uid: int, plan: str, days: int, update: Update, context
     receipt = await send_activation_msg(uid, plan, days, context)
     await update.message.reply_text(f"✅ Granted {days} Days ({get_styled_plan(plan)}) to <code>{uid}</code>\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 FIXED /oneday AND /threeday (NOW GENERATES CODES)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not context.args: await update.message.reply_text("❌ Usage: /oneday <user_id>", parse_mode="HTML"); return
-    uid = await resolve_user(context.args[0], context)
-    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    await _grant_premium(uid, "core", 1, update, context)
+    code = "KEY-" + gen_code(12)
+    context.bot_data.setdefault('keys', {})[code] = {"plan": "core", "days": 1, "used": False}
+    await update.message.reply_text(
+        f"✅ 1 DAY CODE GENERATED\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Code: <code>{code}</code>\n"
+        f"Plan: {get_styled_plan('core')}\n"
+        f"Days: 1\n\n"
+        f"Give this code to the user!\n"
+        f"User can redeem via /rm {code}",
+        parse_mode="HTML"
+    )
 
 async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not context.args: await update.message.reply_text("❌ Usage: /threeday <user_id>", parse_mode="HTML"); return
-    uid = await resolve_user(context.args[0], context)
-    if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
-    await _grant_premium(uid, "core", 3, update, context)
+    code = "KEY-" + gen_code(12)
+    context.bot_data.setdefault('keys', {})[code] = {"plan": "core", "days": 3, "used": False}
+    await update.message.reply_text(
+        f"✅ 3 DAYS CODE GENERATED\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Code: <code>{code}</code>\n"
+        f"Plan: {get_styled_plan('core')}\n"
+        f"Days: 3\n\n"
+        f"Give this code to the user!\n"
+        f"User can redeem via /rm {code}",
+        parse_mode="HTML"
+    )
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -353,7 +394,7 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exp = data.get('expires', 0)
         if data.get('plan', 'TRIAL') != 'TRIAL' and exp > now:
             found = True; remaining = int((exp - now) / 86400)
-            txt += f"ID: <code>{uid}</code>\nPlan: {get_styled_plan(data.get('plan', 'TRIAL'))}\nCredits: ∞\nRemaining: {remaining} Days\nExp: {datetime.fromtimestamp(exp).strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━━━━━\n"
+            txt += f"ID: <code>{uid}</code>\nPlan: {get_styled_plan(data.get('plan', 'TRIAL'))}\nCredits: ∞\nRemaining: {remaining} Days\n━━━━━━━━━━━━━━━━━━━━\n"
     if not found: txt += "❌ No active plans."
     await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -441,7 +482,7 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/b3 cc|mm|yy|cvv", parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CALLBACK SYSTEM (ZERO LAG, EXACT UI AS REQUESTED)
+# 🦇 EMPTY CALLBACK SYSTEM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -483,58 +524,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nThe payment method or address is uploaded soon.", kb_payment())
         
     elif d == "mgates":
-        await safe_edit(
-            "Gᴀᴛᴇꜱ Sᴛᴀᴛᴜꜱ:\nAᴜᴛʜ Gᴀᴛᴇꜱ ➺ 2\nMᴀꜱꜱ Gᴀᴛᴇꜱ ➺ 2\nCʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4\n━━━━━━━━━━━━━━━━━━\nSᴇʟᴇᴄᴛ ᴀ Gᴀᴛᴇ ➺ Cᴀᴛᴛᴇɢᴏʀʏ",
-            kb_gate_category()
-        )
+        await safe_edit("SELECT A GATE → CATEGORY\n━━━━━━━━━━━━━━━━━━━━", kb_gate_category())
         
     elif d == "mauth":
-        await safe_edit(
-            "Sᴇʟᴇᴄᴛ ᴀ Aᴜᴛʜ Gᴇᴀᴛᴇ ➺",
-            kb_auth_gates()
-        )
-        
-    elif d == "iau":
-        await safe_edit(
-            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /chk\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 16\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
-            kb_gate_info("chk", "mauth")
-        )
-        
-    elif d == "ib3":
-        await safe_edit(
-            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Bʀᴀɪɴᴛʀᴇᴇ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /b3\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 2\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
-            kb_gate_info("b3", "mauth")
-        )
+        await safe_edit("SELECT AUTH GATE →", kb_auth_gates())
         
     elif d == "mcharge":
-        await safe_edit(
-            "Sᴇʟᴇᴄᴛ Cʜᴀʀɢᴇ Gᴇᴀᴛᴇ ➺",
-            kb_charge_gates()
-        )
+        await safe_edit("SELECT CHARGE GATE →", kb_charge_gates())
+        
+    elif d == "iau":
+        await safe_edit("STRIPE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mauth"))
+        
+    elif d == "ib3":
+        await safe_edit("BRAINTREE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mauth"))
         
     elif d == "ichk":
-        await safe_edit(
-            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /chk\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 4\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
-            kb_gate_info("chk", "mcharge")
-        )
+        await safe_edit("STRIPE CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
         
     elif d == "ipp":
-        await safe_edit(
-            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ PᴀʏPᴀʟ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /pp\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 7\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
-            kb_gate_info("pp", "mcharge")
-        )
+        await safe_edit("PAYPAL CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
         
     elif d == "ish":
-        await safe_edit(
-            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /sh\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 10\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
-            kb_gate_info("sh", "mcharge")
-        )
+        await safe_edit("SHOPIFY CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
         
     elif d == "ipyu":
-        await safe_edit(
-            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ PᴀʏU 0$\nCᴏᴍᴍᴍᴀɴᴅ ➺ /pyu\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 1\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
-            kb_gate_info("pyu", "mcharge")
-        )
+        await safe_edit("PAYU CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
 
 async def on_start(app):
     print("🦇 Batman Bot Initializing...")
@@ -543,6 +557,9 @@ async def on_start(app):
         await asyncio.sleep(1)
     except Exception: pass
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 SAFE KILLBOT & NEW ONBOT COMMAND
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['maintenance'] = True
@@ -551,7 +568,7 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['maintenance'] = False
-    await update.message_reply_text("✅ Maintenance Mode OFF.\nBot is now online for users!", parse_mode="HTML")
+    await update.message.reply_text("✅ Maintenance Mode OFF.\nBot is now online for users!", parse_mode="HTML")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict): return
@@ -561,7 +578,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     app.add_error_handler(error_handler)
 
-    # MAINTENANCE CHECK MUST BE FIRST
+    # ADD THIS FIRST TO BLOCK USERS DURING MAINTENANCE
     app.add_handler(MessageHandler(filters.ALL, maintenance_check), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -571,7 +588,10 @@ def main():
     app.add_handler(CommandHandler("rm", cmd_rm))
     app.add_handler(CommandHandler("chk", cmd_chk))
     app.add_handler(CommandHandler("pp", cmd_pp))
+    
+    # FIX 1: Changed app_handler to app.add_handler
     app.add_handler(CommandHandler("sh", cmd_sh))
+    
     app.add_handler(CommandHandler("pyu", cmd_pyu))
     app.add_handler(CommandHandler("b3", cmd_b3))
     app.add_handler(CommandHandler("info", cmd_info))
@@ -579,7 +599,10 @@ def main():
     app.add_handler(CommandHandler("gen", cmd_gen))
     app.add_handler(CommandHandler("key10", cmd_key10))
     app.add_handler(CommandHandler("key20", cmd_key20))
+    
+    # FIX 2: Changed app_handler to app.add_handler
     app.add_handler(CommandHandler("key30", cmd_key30))
+    
     app.add_handler(CommandHandler("oneday", cmd_oneday))
     app.add_handler(CommandHandler("threeday", cmd_threeday))
     app.add_handler(CommandHandler("sub", cmd_sub))
@@ -588,6 +611,8 @@ def main():
     app.add_handler(CommandHandler("delcode", cmd_delcode))
     app.add_handler(CommandHandler("seturl", cmd_seturl))
     app.add_handler(CommandHandler("geturl", cmd_geturl))
+    
+    # NEW ONBOT AND FIXED KILLBOT
     app.add_handler(CommandHandler("killbot", cmd_killbot))
     app.add_handler(CommandHandler("onbot", cmd_onbot))
 
