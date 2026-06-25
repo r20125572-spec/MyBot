@@ -20,13 +20,13 @@ GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/failurefr_07"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BATMAN PHOTO — Bot downloads this URL itself
+# 🦇 BATMAN PHOTO
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
 BOT_PHOTO = "batman.jpg"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE API URLs
+# 🦇 GATE API URLs & SITES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS = {
     "chk": "https://stripe-auth-test-production.up.railway.app/st0",
@@ -46,21 +46,15 @@ GATE_SITES = {
 
 API_TIMEOUT = 120
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 DIRECT GATE VARIABLES (Fixes Import Errors for gates)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Direct gate variables
 CHK_API = GATE_URLS.get("chk", "")
 CHK_SITE = GATE_SITES.get("chk", "example.com")
-
 PP_API = GATE_URLS.get("pp", "")
 PP_SITE = GATE_SITES.get("pp", "example.com")
-
 SH_API = GATE_URLS.get("sh", "")
 SH_SITE = GATE_SITES.get("sh", "example.com")
-
 PYU_API = GATE_URLS.get("pyu", "")
 PYU_SITE = GATE_SITES.get("pyu", "example.com")
-
 B3_API = GATE_URLS.get("b3", "")
 B3_SITE = GATE_SITES.get("b3", "example.com")
 
