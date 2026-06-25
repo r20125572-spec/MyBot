@@ -77,16 +77,11 @@ async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await msg.delete()
         except: pass
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 MAINTENANCE MODE CHECKER (Prevents killing the bot)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # If maintenance is ON and user is NOT owner, block them
     if context.bot_data.get('maintenance', False) and update.effective_user.id != OWNER_ID:
-        try:
-            await update.message.reply_text("🛑 Bot is currently under maintenance.", parse_mode="HTML")
+        try: await update.message.reply_text("🛑 Bot is currently under maintenance.", parse_mode="HTML")
         except: pass
-        raise ApplicationHandlerStop # Stops other handlers from processing
+        raise ApplicationHandlerStop
 
 async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     async def check(chat_id):
@@ -153,7 +148,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     return receipt
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 KEYBOARDS
+# 🦇 KEYBOARDS (EXACTLY AS REQUESTED)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
     return InlineKeyboardMarkup([
@@ -183,9 +178,15 @@ def kb_payment():
         [InlineKeyboardButton("« BACK", callback_data="mprice")]
     ])
 
+def kb_gate_info(cmd, back_cb):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ USE GATE", callback_data=f"use_{cmd}")],
+        [InlineKeyboardButton("« BACK", callback_data=back_cb)]
+    ])
+
 def kb_gate_category():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],
+        [InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge"), InlineKeyboardButton("MASS", callback_data="mmass")],
         [InlineKeyboardButton("« BACK", callback_data="bmain")]
     ])
 
@@ -352,7 +353,7 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exp = data.get('expires', 0)
         if data.get('plan', 'TRIAL') != 'TRIAL' and exp > now:
             found = True; remaining = int((exp - now) / 86400)
-            txt += f"ID: <code>{uid}</code>\nPlan: {get_styled_plan(data.get('plan', 'TRIAL'))}\nCredits: ∞\nRemaining: {remaining} Days\n━━━━━━━━━━━━━━━━━━━━\n"
+            txt += f"ID: <code>{uid}</code>\nPlan: {get_styled_plan(data.get('plan', 'TRIAL'))}\nCredits: ∞\nRemaining: {remaining} Days\nExp: {datetime.fromtimestamp(exp).strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━━━━━\n"
     if not found: txt += "❌ No active plans."
     await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -440,7 +441,7 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/b3 cc|mm|yy|cvv", parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 EMPTY CALLBACK SYSTEM
+# 🦇 CALLBACK SYSTEM (ZERO LAG, EXACT UI AS REQUESTED)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -448,7 +449,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except: pass
     
-    # Block callbacks if in maintenance mode
     if context.bot_data.get('maintenance', False) and q.from_user.id != OWNER_ID:
         await q.answer("🛑 Bot is under maintenance.", show_alert=True)
         return
@@ -483,31 +483,58 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nThe payment method or address is uploaded soon.", kb_payment())
         
     elif d == "mgates":
-        await safe_edit("SELECT A GATE → CATEGORY\n━━━━━━━━━━━━━━━━━━━━", kb_gate_category())
+        await safe_edit(
+            "Gᴀᴛᴇꜱ Sᴛᴀᴛᴜꜱ:\nAᴜᴛʜ Gᴀᴛᴇꜱ ➺ 2\nMᴀꜱꜱ Gᴀᴛᴇꜱ ➺ 2\nCʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4\n━━━━━━━━━━━━━━━━━━\nSᴇʟᴇᴄᴛ ᴀ Gᴀᴛᴇ ➺ Cᴀᴛᴛᴇɢᴏʀʏ",
+            kb_gate_category()
+        )
         
     elif d == "mauth":
-        await safe_edit("SELECT AUTH GATE →", kb_auth_gates())
-        
-    elif d == "mcharge":
-        await safe_edit("SELECT CHARGE GATE →", kb_charge_gates())
+        await safe_edit(
+            "Sᴇʟᴇᴄᴛ ᴀ Aᴜᴛʜ Gᴇᴀᴛᴇ ➺",
+            kb_auth_gates()
+        )
         
     elif d == "iau":
-        await safe_edit("STRIPE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mauth"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /chk\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 16\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
+            kb_gate_info("chk", "mauth")
+        )
         
     elif d == "ib3":
-        await safe_edit("BRAINTREE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mauth"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Bʀᴀɪɴᴛʀᴇᴇ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /b3\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 2\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
+            kb_gate_info("b3", "mauth")
+        )
+        
+    elif d == "mcharge":
+        await safe_edit(
+            "Sᴇʟᴇᴄᴛ Cʜᴀʀɢᴇ Gᴇᴀᴛᴇ ➺",
+            kb_charge_gates()
+        )
         
     elif d == "ichk":
-        await safe_edit("STRIPE CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /chk\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 4\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
+            kb_gate_info("chk", "mcharge")
+        )
         
     elif d == "ipp":
-        await safe_edit("PAYPAL CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ PᴀʏPᴀʟ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /pp\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 7\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
+            kb_gate_info("pp", "mcharge")
+        )
         
     elif d == "ish":
-        await safe_edit("SHOPIFY CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$\nCᴏᴍᴍᴀɴᴅ ➺ /sh\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 10\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
+            kb_gate_info("sh", "mcharge")
+        )
         
     elif d == "ipyu":
-        await safe_edit("PAYU CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━\nGᴀᴛᴇ ➺ PᴀʏU 0$\nCᴏᴍᴍᴍᴀɴᴅ ➺ /pyu\nSɪᴛᴇꜱ Lᴏᴀᴅᴇᴅ ➺ 1\nGᴀᴛᴇ Hᴇᴀʟᴛʜ ➺ 100%\n━━━━━━━━━━━━━━━━━",
+            kb_gate_info("pyu", "mcharge")
+        )
 
 async def on_start(app):
     print("🦇 Batman Bot Initializing...")
@@ -516,9 +543,6 @@ async def on_start(app):
         await asyncio.sleep(1)
     except Exception: pass
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SAFE KILLBOT & NEW ONBOT COMMAND
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['maintenance'] = True
@@ -527,7 +551,7 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data['maintenance'] = False
-    await update.message.reply_text("✅ Maintenance Mode OFF.\nBot is now online for users!", parse_mode="HTML")
+    await update.message_reply_text("✅ Maintenance Mode OFF.\nBot is now online for users!", parse_mode="HTML")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict): return
@@ -537,7 +561,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     app.add_error_handler(error_handler)
 
-    # ADD THIS FIRST TO BLOCK USERS DURING MAINTENANCE
+    # MAINTENANCE CHECK MUST BE FIRST
     app.add_handler(MessageHandler(filters.ALL, maintenance_check), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -547,7 +571,7 @@ def main():
     app.add_handler(CommandHandler("rm", cmd_rm))
     app.add_handler(CommandHandler("chk", cmd_chk))
     app.add_handler(CommandHandler("pp", cmd_pp))
-    app_handler(CommandHandler("sh", cmd_sh))
+    app.add_handler(CommandHandler("sh", cmd_sh))
     app.add_handler(CommandHandler("pyu", cmd_pyu))
     app.add_handler(CommandHandler("b3", cmd_b3))
     app.add_handler(CommandHandler("info", cmd_info))
@@ -555,7 +579,7 @@ def main():
     app.add_handler(CommandHandler("gen", cmd_gen))
     app.add_handler(CommandHandler("key10", cmd_key10))
     app.add_handler(CommandHandler("key20", cmd_key20))
-    app_handler(CommandHandler("key30", cmd_key30))
+    app.add_handler(CommandHandler("key30", cmd_key30))
     app.add_handler(CommandHandler("oneday", cmd_oneday))
     app.add_handler(CommandHandler("threeday", cmd_threeday))
     app.add_handler(CommandHandler("sub", cmd_sub))
@@ -564,8 +588,6 @@ def main():
     app.add_handler(CommandHandler("delcode", cmd_delcode))
     app.add_handler(CommandHandler("seturl", cmd_seturl))
     app.add_handler(CommandHandler("geturl", cmd_geturl))
-    
-    # NEW ONBOT AND FIXED KILLBOT
     app.add_handler(CommandHandler("killbot", cmd_killbot))
     app.add_handler(CommandHandler("onbot", cmd_onbot))
 
