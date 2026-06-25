@@ -48,17 +48,17 @@ BLOCK_WORDS = (
 
 PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀
 Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
-Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴛᴇᴅ
+Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 10$ 
 ━━━━━━━━━━━━━━━━
-Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴛᴇ ⭐️
+Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️
 Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]
-Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴛᴇᴅ
+Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 15$ 
 ━━━━━━━━━━━━━━━━
 Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑
 Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]
-Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴛᴇᴅ
+Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 30$"""
 
 def get_styled_plan(raw_plan: str) -> str:
@@ -146,97 +146,61 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     ud["name"] = name; ud["plan"] = plan; ud["expires"] = time.time() + (days * 86400)
     exp_date = datetime.fromtimestamp(ud["expires"]).strftime('%Y-%m-%d %H:%M')
     styled_plan = get_styled_plan(plan)
-    txt = (f"Cᴏɴɢʀᴀᴛᴜᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴄᴛᴇᴠᴛᴇᴅ.\n━━━━━━━━━━━━━━━━━━━━\n\nUꜱᴇʀ ➺ {name}\nUꜱᴇʀɴᴀᴍᴇ ➺ @{username}\nAᴄᴄᴇꜱꜱ ➺ {styled_plan}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nExᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴘᴛ ID ➺ <code>{receipt}</code>\n\n━━━━━━━━━━━━━━━━━━━━\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴘᴘᴛ ID.")
+    txt = (f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n━━━━━━━━━━━━━━━━━━━━\n\nUꜱᴇʀ ➺ {name}\nUꜱᴇʀɴᴀᴍᴇ ➺ @{username}\nAᴄᴄᴇꜱꜱ ➺ {styled_plan}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nExᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴘᴛ ID ➺ <code>{receipt}</code>\n\n━━━━━━━━━━━━━━━━━━━━\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴘᴛ ID.")
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except: pass
     return receipt
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 NEW KEYBOARDS (CHECKER BUTTONS UI)
+# 🦇 KEYBOARDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
-    # First row: AUTH and CHARGE buttons
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ AUTH", callback_data="mauth"), InlineKeyboardButton("💀 CHARGE", callback_data="mcharge")],
-        [InlineKeyboardButton("📢 UPDATES", url=CHANNEL_LINK), InlineKeyboardButton("👥 GROUP", url=GROUP_LINK)],
-        [InlineKeyboardButton("🛡️ SUPPORT", url=SUPPORT_LINK)]
+        [InlineKeyboardButton("CHECKER", callback_data="mgates"), InlineKeyboardButton("BUY NOW", callback_data="mprice")],
+        [InlineKeyboardButton("UPDATES", url=CHANNEL_LINK), InlineKeyboardButton("GROUP", url=GROUP_LINK)],
+        [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]
     ])
 
-def kb_back(cb): 
-    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ BACK", callback_data=cb)]])
+def kb_back(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("« BACK", callback_data=cb)]])
 
 def kb_force():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("JOIN GROUP", url=GROUP_LINK)],
         [InlineKeyboardButton("JOIN CHANNEL", url=CHANNEL_LINK)],
-        [InlineKeywordButton("✅ VERIFY", callback_data="verify_join")]
+        [InlineKeyboardButton("✅ VERIFY", callback_data="verify_join")]
     ])
 
 def kb_price():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("10$PAY", callback_data="pay10"), InlineKeyboardButton("15$PAY", callback_data="pay15"), InlineKeyboardButton("30$PAY", callback_data="pay30")],
-        [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
+        [InlineKeyboardButton("« BACK", callback_data="bmain")]
     ])
 
 def kb_payment():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("◀ BACK", callback_data="mprice")]
-    ])
-
-# 🦇 AUTH GATES - Shows the exact text layout requested
-def kb_auth_gates():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ AUTH", callback_data="iau")],
-        [InlineKeyboardButton("🦇 BRAINTREE", callback_data="ib3")],
-        [InlineKeyboardButton("◀️ BACK", callback_data="mgates")]
-    ])
-
-# 🦇 CHARGE GATES - Shows AUTH, CHARGE, MASS, BACK
-def kb_charge_gates():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ STRIPE", callback_data="ichk"), InlineKeyboardButton("💰 PAYPAL", callback_data="ipp")],
-        [InlineKeyboardButton("🛒 SHOPIFY", callback_data="ish"), InlineKeyboardButton("💸 PAYU", callback_data="ipyu")],
-        [InlineKeyboardButton💀 MASS", callback_data="mmass")],
-        [InlineKeyboardButton("◀️ BACK", callback_data="mgates")]
+        [InlineKeyboardButton("« BACK", callback_data="mprice")]
     ])
 
 def kb_gate_category():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],
-        [InlineKeyboardButton("◀️ BACK", callback_data="bmain")]
+        [InlineKeyboardButton("« BACK", callback_data="bmain")]
     ])
 
-def kb_auth_gate_list():
+def kb_auth_gates():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("STRIPE", callback_data="iau")],
         [InlineKeyboardButton("BRAINTREE", callback_data="ib3")],
-        [InlineKeyboardButton("◀️ BACK", callback_data="mauth")]
+        [InlineKeyboardButton("« BACK", callback_data="mgates")]
     ])
 
-def kb_charge_gate_list():
+def kb_charge_gates():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("STRIPE", callback_data="ichk"), InlineKeyboardButton("PAYPAL", callback_data="ipp")],
         [InlineKeyboardButton("SHOPIFY", callback_data="ish"), InlineKeyboardButton("PAYU", callback_data="ipyu")],
-        [InlineKeyboardButton("◀️ BACK", callback_data="mcharge")]
+        [InlineKeyboardButton("« BACK", callback_data="mgates")]
     ])
-
-def kb_back_to_checker():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("◀️ BACK", callback_data="mgates")]
-    ])
-
-async def safe_edit(t, kb):
-        if not q.message: return
-        success = False
-        if not q.message.photo:
-            try:
-                await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-                success = True
-            except Exception: pass
-        if not success:
-            try: await context.bot.send_message(chat_id=q.message.chat_id, text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-            except Exception: pass
 
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     target = target.lstrip('@')
@@ -353,9 +317,7 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_gen_key(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: str, days: int):
     if update.effective_user.id != OWNER_ID: return
     code = "KEY-" + gen_code(12)
-    # ⚠️ FIX: FIXED SYNTAX ERROR HERE (Was ')' instead of '}')
-    keys_dict = context.bot_data.setdefault('keys', {})
-    keys_dict[code] = {"plan": plan, "days": days, "used": False}
+    context.bot_data.setdefault('keys', {})[code] = {"plan": plan, "days": days, "used": False}
     await update.message.reply_text(f"✅ PREMIUM KEY GENERATED\n━━━━━━━━━━━━━━━━━━━━\n\nKey: <code>{code}</code>\nPlan: {get_styled_plan(plan)}\nDays: {days}\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_key10(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "core", 7)
@@ -372,9 +334,7 @@ async def _grant_premium(uid: int, plan: str, days: int, update: Update, context
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     code = "KEY-" + gen_code(12)
-    # ⚠️ FIX: FIXED SYNTAX ERROR HERE (Was ')' instead of '}')
-    keys_dict = context.bot_data.setdefault('keys', {})
-    keys_dict[code] = {"plan": "core", "days": 1, "used": False}
+    context.bot_data.setdefault('keys', {})[code] = {"plan": "core", "days": 1, "used": False}
     await update.message.reply_text(
         f"✅ 1 DAY CODE GENERATED\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -389,9 +349,7 @@ async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     code = "KEY-" + gen_code(12)
-    # ⚠️ FIX: FIXED SYNTAX ERROR HERE (Was ')' instead of '}')
-    keys_dict = context.bot_data.setdefault('keys', {})
-    keys_dict[code] = {"plan": "core", "days": 3, "used": False}
+    context.bot_data.setdefault('keys', {})[code] = {"plan": "core", "days": 3, "used": False}
     await update.message.reply_text(
         f"✅ 3 DAYS CODE GENERATED\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -503,9 +461,6 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt += "━━━━━━━━━━━━━━━━━━━━"
     await update.message.reply_text(txt, parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CALLBACKS (NEW BUTTON LOGIC)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
@@ -532,7 +487,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await is_joined(q.from_user.id, context):
             await safe_edit(ui_profile(q.from_user, context), kb_main())
         else:
-            await q.answer("❌ Join channels first!", show_alert=True)
+            await q.answer("❌ Join Group & Channel first!", show_alert=True)
         return
 
     if d == "bmain":
@@ -546,45 +501,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nThe payment method or address is uploaded soon.", kb_payment())
         
     elif d == "mgates":
-        await safe_edit("SELECT GATE CATEGORY", kb_gate_category())
+        await safe_edit("SELECT A GATE → CATEGORY\n━━━━━━━━━━━━━━━━━━━━", kb_gate_category())
         
     elif d == "mauth":
-        await safe_edit("SELECT AUTH GATE", kb_auth_gates())
+        await safe_edit("SELECT AUTH GATE →", kb_auth_gates())
         
     elif d == "mcharge":
-        await safe_edit("SELECT CHARGE GATE", kb_charge_gates())
+        await safe_edit("SELECT CHARGE GATE →", kb_charge_gates())
         
     elif d == "iau":
-        await safe_edit("STRIPE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_auth_gate_list())
+        await safe_edit("STRIPE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mauth"))
         
     elif d == "ib3":
-        await safe_edit("BRAINTREE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_auth_gate_list())
+        await safe_edit("BRAINTREE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mauth"))
         
     elif d == "ichk":
-        await safe_edit("STRIPE CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_charge_gate_list())
+        await safe_edit("STRIPE CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
         
     elif d == "ipp":
-        await safe_edit("PAYPAL CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_charge_gate_list())
+        await safe_edit("PAYPAL CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
         
     elif d == "ish":
-        await safe_edit("SHOPIFY CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_charge_gate_list())
+        await safe_edit("SHOPIFY CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
         
     elif d == "ipyu":
-        await safe_edit("PAYU CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_charge_gate_list())
-        
-    elif d == "mmass":
-        # MASS BUTTON ACTION
-        await safe_edit(
-            "Gᴀᴛᴛᴇꜱ Sᴛᴀᴍᴍᴇꜱ:\n\n"
-            "Aᴜᴛᴀᴜ Gᴀᴛᴇ ➺ 2\n"
-            "Mᴀꜱꜱꜱ Gᴀᴛᴇ ➺ 2\n"
-            "Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4\n"
-            "━━━━━━━━━━━━━━━━━━",
-            kb_back_to_checker()
-        )
-        
-    elif d == "back_checker":
-        await safe_edit(ui_profile(q.from_user, context), kb_main())
+        await safe_edit("PAYU CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nPASTE YOUR TEXT HERE", kb_back("mcharge"))
 
 async def on_start(app):
     print("🦇 Batman Bot Initializing...")
@@ -594,7 +535,7 @@ async def on_start(app):
     except Exception: pass
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SAFE KILLBOT & ONBOT COMMANDS
+# 🦇 SAFE KILLBOT & NEW ONBOT COMMAND
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -623,7 +564,7 @@ def main():
     app.add_handler(CommandHandler("bin", cmd_bin))
     app.add_handler(CommandHandler("rm", cmd_rm))
     
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # 🦇 CONNECT REAL GATES HERE (NO OLD EMPTY FUNCTIONS ALLOWED)
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     from chk import get_chk_handler
@@ -651,7 +592,7 @@ def main():
     app.add_handler(CommandHandler("allplans", cmd_allplans))
     app.add_handler(CommandHandler("delcode", cmd_delcode))
     app.add_handler(CommandHandler("seturl", cmd_seturl))
-    app.add_handler(CommandHandler("geturl", cmd_geturl)
+    app.add_handler(CommandHandler("geturl", cmd_geturl))
     
     # NEW ONBOT AND FIXED KILLBOT
     app.add_handler(CommandHandler("killbot", cmd_killbot))
