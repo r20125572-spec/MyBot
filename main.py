@@ -26,7 +26,6 @@ GROUP_USERNAME = "@batcardchkGroup"
 CHANNEL_LINK = "https://t.me/Batcardchk"
 GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/cardchkSupport"
-BOT_LINK = "https://t.me/Batmancardchk_bot"
 
 WELCOME_IMAGE_URL = "https://example.com/batman.jpg"
 
@@ -71,6 +70,8 @@ COUNTRY_CURRENCY = {
     "IL": "ILS", "VN": "VND", "BD": "BDT", "LK": "LKR", "KE": "KES",
 }
 
+BOT_LINK = "https://t.me/Batmancardchk_bot"
+
 PLAN_TEXT = (
     "━━━━━━━━━━━━━━━━━━━━\n"
     "Bᴀᴛᴍᴀɴ Pʀᴇᴍɪᴜᴍ Pʟᴀɴs\n"
@@ -79,12 +80,12 @@ PLAN_TEXT = (
     "Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]\n"
     "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\n"
     "Pʀɪᴄᴇ ➺ 10$\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
+    "━━━━━━━━━━━━━━━━\n"
     "Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\n"
     "Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]\n"
     "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\n"
     "Pʀɪᴄᴇ ➺ 15$\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
+    "━━━━━━━━━━━━━━━━\n"
     "Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\n"
     "Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]\n"
     "Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\n"
@@ -250,6 +251,8 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
         pass
     return receipt
 
+
+# ── KEYBOARDS ──
 
 def kb_main():
     return InlineKeyboardMarkup([
@@ -427,7 +430,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     if not api_url:
         await msg.edit_text(
             f"Error: Gate API URL not set.\n"
-            f"Ask owner to use: /seturl {gate_key} &lt;url&gt;",
+            f"Ask owner to use: /seturl {gate_key} <url>",
             parse_mode="HTML"
         )
         return
@@ -477,6 +480,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         await msg.edit_text(f"Error: <code>{str(e)[:120]}</code>", parse_mode="HTML")
 
 
+# ── GATE COMMANDS ──
 async def cmd_chk(update, context):  await process_gate(update, context, "chk",  "Stripe Charge | 1 credit")
 async def cmd_pp(update, context):   await process_gate(update, context, "pp",   "PayPal Charge | 1 credit")
 async def cmd_sh(update, context):   await process_gate(update, context, "sh",   "Shopify Charge | 2 credits")
@@ -494,6 +498,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["joined"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if "name" not in ud:
         ud["name"] = user.first_name or "User"
+
     if await is_joined(user.id, context):
         caption = ui_profile(user, context)
         try:
@@ -551,6 +556,7 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     c_data = data.get("country") or {}
     b_data = data.get("bank") or {}
+
     user = update.effective_user
     ud = get_user_data(user.id, context)
     raw_plan = ud.get("plan", "TRIAL").upper()
@@ -558,6 +564,7 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raw_plan = "TRIAL"
     plan_label = get_styled_plan(raw_plan)
     first_name = user.first_name or "User"
+
     brand        = (data.get("scheme") or "N/A").upper()
     level        = (data.get("brand") or "N/A").upper()
     bank         = (b_data.get("name") or "N/A").upper()
@@ -566,6 +573,7 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     country_name = (c_data.get("name") or "N/A").upper()
     card_type    = (data.get("type") or "N/A").upper()
     currency     = COUNTRY_CURRENCY.get(country_code, "N/A")
+
     txt = (
         f"𝗕𝗶𝗻 ➛ <code>{bin_num}</code>\n"
         f"𝗕𝗿𝗮𝗻𝗱 ➛ {brand}\n"
@@ -844,13 +852,14 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid or already used code.", parse_mode="HTML")
 
 
+# ── GATE TOGGLE FACTORY ──
 def _make_gate_toggle(gate: str, label: str, state: bool):
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id != OWNER_ID:
             return
         context.bot_data[f"{gate}_on"] = state
         await update.message.reply_text(
-            f"{label} — {'ON' if state else 'OFF'}",
+            f"{label} → {'ON' if state else 'OFF'}",
             parse_mode="HTML"
         )
     return handler
@@ -879,7 +888,7 @@ async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if len(context.args) < 2:
         await update.message.reply_text(
-            "Usage: /seturl &lt;gate&gt; &lt;url&gt;\n"
+            "Usage: /seturl <gate> <url>\n"
             "To remove: /seturl chk remove\n"
             "Gates: chk pp sh pyu b3 au mss mpp2",
             parse_mode="HTML"
@@ -919,6 +928,7 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(txt, parse_mode="HTML")
 
 
+# ── CALLBACK HANDLER ──
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
@@ -1086,6 +1096,50 @@ def main():
     app.add_handler(CommandHandler("buy",      cmd_plan))
     app.add_handler(CommandHandler("bin",      cmd_bin))
     app.add_handler(CommandHandler("rm",       cmd_rm))
-    app.ad **...**
+    app.add_handler(CommandHandler("chk",      cmd_chk))
+    app.add_handler(CommandHandler("pp",       cmd_pp))
+    app.add_handler(CommandHandler("sh",       cmd_sh))
+    app.add_handler(CommandHandler("pyu",      cmd_pyu))
+    app.add_handler(CommandHandler("b3",       cmd_b3))
+    app.add_handler(CommandHandler("au",       cmd_au))
+    app.add_handler(CommandHandler("mss",      cmd_mss))
+    app.add_handler(CommandHandler("mpp2",     cmd_mpp2))
+    app.add_handler(CommandHandler("info",     cmd_info))
+    app.add_handler(CommandHandler("allcm",    cmd_allcm))
+    app.add_handler(CommandHandler("gen",      cmd_gen))
+    app.add_handler(CommandHandler("key10",    cmd_key10))
+    app.add_handler(CommandHandler("key20",    cmd_key20))
+    app.add_handler(CommandHandler("key30",    cmd_key30))
+    app.add_handler(CommandHandler("oneday",   cmd_oneday))
+    app.add_handler(CommandHandler("threeday", cmd_threeday))
+    app.add_handler(CommandHandler("sub",      cmd_sub))
+    app.add_handler(CommandHandler("resub",    cmd_resub))
+    app.add_handler(CommandHandler("allplans", cmd_allplans))
+    app.add_handler(CommandHandler("delcode",  cmd_delcode))
+    app.add_handler(CommandHandler("seturl",   cmd_seturl))
+    app.add_handler(CommandHandler("geturl",   cmd_geturl))
+    app.add_handler(CommandHandler("killbot",  cmd_killbot))
+    app.add_handler(CommandHandler("onbot",    cmd_onbot))
 
-_This response is too long to display in full._
+    for cmd, func in [
+        ("onchk",  cmd_onchk),  ("offchk",  cmd_offchk),
+        ("onpp",   cmd_onpp),   ("offpp",   cmd_offpp),
+        ("onsh",   cmd_onsh),   ("offsh",   cmd_offsh),
+        ("onpyu",  cmd_onpyu),  ("offpyu",  cmd_offpyu),
+        ("onb3",   cmd_onb3),   ("offb3",   cmd_offb3),
+        ("onau",   cmd_onau),   ("offau",   cmd_offau),
+        ("onmss",  cmd_onmss),  ("offmss",  cmd_offmss),
+        ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2),
+    ]:
+        app.add_handler(CommandHandler(cmd, func))
+
+    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, anti_ad_filter))
+
+    print("Batman Bot Online!")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
