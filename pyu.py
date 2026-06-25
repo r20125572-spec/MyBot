@@ -4,7 +4,6 @@ import time
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 from config import PYU_API, PYU_SITE, API_TIMEOUT, get_bin_info, kb_result
-from plans import deduct_credit
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 PAYU CONFIGURATION & HELPERS 🦇
@@ -18,6 +17,28 @@ def get_styled_plan(raw_plan: str) -> str:
     elif plan_upper == "ROOT": return "👑 Rᴏᴏᴛ 👑"
     else: return "Tʀɪᴀʟ"
 
+def deduct_credit(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # Built-in credit deduction so it doesn't crash looking for plans.py
+    uid_str = str(user_id)
+    ud = context.bot_data.get('user_data', {}).get(uid_str, {})
+    
+    # Premium users bypass credit check
+    raw_plan = ud.get('plan', 'TRIAL').upper()
+    if raw_plan != 'TRIAL' and ud.get('expires', 0) > time.time():
+        return True
+        
+    # Trial users use credits
+    credits = ud.get('credits', 150)
+    if credits > 0:
+        if 'user_data' not in context.bot_data:
+            context.bot_data['user_data'] = {}
+        if uid_str not in context.bot_data['user_data']:
+            context.bot_data['user_data'][uid_str] = {"credits": 150}
+        context.bot_data['user_data'][uid_str]['credits'] = credits - 1
+        return True
+        
+    return False
+
 async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get('pyu_on', True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
@@ -30,14 +51,13 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         card = update.message.reply_to_message.text.strip()
         
     if not card:
-        # Exact requested warning text without "❌ Usage" or "Example"
         await update.message.reply_text(
             "⚠️ Uꜱᴀɢᴇ: Rᴇᴍʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pyu cc|mm|yy|cvv", 
             parse_mode="HTML"
         )
         return
     
-    if not deduct_credit(update.effective_user.id):
+    if not deduct_credit(update.effective_user.id, context):
         await update.message.reply_text("Buy the PLANS and Start the checking you trils cradits are empty.", parse_mode="HTML")
         return
     
@@ -100,6 +120,8 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_ui = get_styled_plan(raw_plan)
         username = update.effective_user.first_name or "User"
         
+        time_taken = f"{time.time() - start_time:.2f}"
+        
         # Exact Requested Premium UI Design
         text = (
             f"[ 𖥷iТ ] ➺ {status_ui}\n"
@@ -108,7 +130,8 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Rᴀᴡ ➺ {raw_response}\n"
             f"Iɴꜰᴏ ➺ {bin_txt}\n"
             f"Uꜱᴇʀ ➺ {username} 👑 ({plan_ui})\n"
-            f"Pʀᴏ ➺ Batman ⚡"
+            f"Pʀᴏ ➺ Batman ⚡\n"
+            f"Tɪᴍᴇ ➺ {time_taken}s"
         )
         
         await msg.edit_text(
