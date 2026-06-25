@@ -27,7 +27,7 @@ CHANNEL_USERNAME = "@Batcardchk"
 GROUP_USERNAME = "@batcardchkGroup"
 CHANNEL_LINK = "https://t.me/Batcardchk"
 GROUP_LINK = "https://t.me/batcardchkGroup"
-SUPPORT_LINK = "https://t.me/failurefr_07"
+SUPPORT_LINK = "https://t.me/cardchkSupport"
 
 GATE_COST = {"chk": 1, "pp": 1, "sh": 2, "pyu": 1, "b3": 1}
 GATE_NAMES = {"chk": "Stripe", "pp": "PayPal", "sh": "Shopify", "pyu": "PayU", "b3": "Braintree"}
@@ -43,6 +43,22 @@ BLOCK_WORDS = (
 )
 
 DOWNLOADED_PHOTO_PATH = None
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 PLAN TEXT CONSTANT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀
+Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
+Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
+Pʀɪᴄᴇ ➺ 10$ ━━━━━━━━━━━━━━━━
+Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️
+Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]
+Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
+Pʀɪᴄᴇ ➺ 15$ ━━━━━━━━━━━━━━━━
+Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑
+Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]
+Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
+Pʀɪᴄᴇ ➺ 30$"""
 
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -132,25 +148,30 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     except: pass
     return receipt
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 KEYBOARDS - UNIFIED UI DESIGN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("CHECKER", callback_data="mgates"), InlineKeyboardButton("BUY NOW", callback_data="mprice")],
-        [InlineKeyboardButton("UPDATES", url=CHANNEL_LINK), InlineKeyboardButton("GROUP", url=GROUP_LINK)],
-        [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)]
+        [InlineKeyboardButton("⚡ CHECKER", callback_data="mgates"), InlineKeyboardButton("💎 BUY NOW", callback_data="mprice")],
+        [InlineKeyboardButton("📢 UPDATES", url=CHANNEL_LINK), InlineKeyboardButton("👥 GROUP", url=GROUP_LINK)],
+        [InlineKeyboardButton("🛡️ SUPPORT", url=SUPPORT_LINK)]
     ])
 
 def kb_back(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("◀ BACK", callback_data=cb)]])
 
 def kb_force():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("JOIN GROUP", url=GROUP_LINK)],
-        [InlineKeyboardButton("JOIN CHANNEL", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("👥 JOIN GROUP", url=GROUP_LINK)],
+        [InlineKeyboardButton("📢 JOIN CHANNEL", url=CHANNEL_LINK)],
         [InlineKeyboardButton("✅ VERIFY", callback_data="verify_join")]
     ])
 
 def kb_price():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("10$ PAY", callback_data="pay10"), InlineKeyboardButton("20$ PAY", callback_data="pay20"), InlineKeyboardButton("30$ PAY", callback_data="pay30")],
+        [InlineKeyboardButton("🎀 CORE - 10$", callback_data="pay10")],
+        [InlineKeyboardButton("⭐️ ELITE - 15$", callback_data="pay15")],
+        [InlineKeyboardButton("👑 ROOT - 30$", callback_data="pay30")],
         [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
     ])
 
@@ -158,6 +179,26 @@ def kb_gate_info(cmd, back_cb):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ USE GATE", callback_data=f"use_{cmd}")],
         [InlineKeyboardButton("◀ BACK", callback_data=back_cb)]
+    ])
+
+def kb_gate_category():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔵 AUTH", callback_data="mauth"), InlineKeyboardButton("⚡ CHARGE", callback_data="mcharge")],
+        [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
+    ])
+
+def kb_auth_gates():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("STRIPE", callback_data="iau")],
+        [InlineKeyboardButton("BRAINTREE", callback_data="ib3")],
+        [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
+    ])
+
+def kb_charge_gates():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("STRIPE", callback_data="ichk"), InlineKeyboardButton("PAYPAL", callback_data="ipp")],
+        [InlineKeyboardButton("SHOPIFY", callback_data="ish"), InlineKeyboardButton("PAYU", callback_data="ipyu")],
+        [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
     ])
 
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
@@ -229,7 +270,7 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$", parse_mode="HTML", reply_markup=kb_price())
+    await update.message.reply_text(PLAN_TEXT, parse_mode="HTML", reply_markup=kb_price())
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -405,9 +446,6 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇🦇🦇 GATE COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇🦇🦇 GATE COMMANDS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_card(text: str) -> Optional[dict]:
     text = text.strip()
     for sep in ['|', '/', ' ']:
@@ -487,7 +525,6 @@ async def handle_gate_cmd(gate: str, update: Update, context: ContextTypes.DEFAU
     if not context.bot_data.get(f'{gate}_on', True):
         await update.message.reply_text(f"❌ {GATE_NAMES[gate]} gate is currently OFF.", parse_mode="HTML"); return
     if not context.args:
-        # Custom usage message format
         if gate == "pp":
             usage_msg = "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pp email|pass"
         else:
@@ -517,6 +554,7 @@ async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE): await hand
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("sh", update, context)
 async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("pyu", update, context)
 async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("b3", update, context)
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 100% BULLETPROOF CALLBACK SYSTEM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -526,25 +564,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except: pass
     
-    # This function solves the photo-to-text crash perfectly
     async def safe_edit(t, kb):
         try:
-            # If message has a photo, delete it and send fresh text
             if q.message.photo:
-                try:
-                    await q.message.delete()
-                except:
-                    pass
+                try: await q.message.delete()
+                except: pass
                 await context.bot.send_message(chat_id=q.message.chat_id, text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
             else:
-                # If normal text, just edit it
                 await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
         except Exception:
-            # Ultimate fallback if delete fails
             try:
                 await context.bot.send_message(chat_id=q.message.chat_id, text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-            except:
-                pass
+            except: pass
 
     if d == "verify_join":
         if await is_joined(q.from_user.id, context):
@@ -557,56 +588,73 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("use_"):
         cmd = d.replace("use_", "")
         gate_name = GATE_NAMES.get(cmd, cmd.upper())
-        await safe_edit(
-            f"━━━━━━━━━━━━━━━━━━━━\n⚡ {gate_name.upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\nSend your card below:\n\n<code>/{cmd} cc|mm|yy|cvv</code>\n\nExample:\n<code>/{cmd} 4532010123456789|03|28|353</code>",
-            kb_back("mgates")
-        )
+        if cmd == "pp":
+            usage_text = f"━━━━━━━━━━━━━━━━━━━━\n⚡ {gate_name.upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\n⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n<code>/{cmd} email|pass</code>"
+        else:
+            usage_text = f"━━━━━━━━━━━━━━━━━━━━\n⚡ {gate_name.upper()} GATE\n━━━━━━━━━━━━━━━━━━━━\n\n⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n<code>/{cmd} cc|mm|yy|cvv</code>"
+        await safe_edit(usage_text, kb_back("mgates"))
         return
 
     if d == "bmain":
         await safe_edit(ui_profile(q.from_user, context), kb_main())
+        
     elif d == "mprice":
+        await safe_edit(PLAN_TEXT, kb_price())
+        
+    elif d in ("pay10", "pay15", "pay30"):
+        if d == "pay10":
+            amt, plan_name, days = "10$", "CORE 🎀", "7"
+        elif d == "pay15":
+            amt, plan_name, days = "15$", "ELITE ⭐️", "15"
+        else:
+            amt, plan_name, days = "30$", "ROOT 👑", "30"
         await safe_edit(
-            "Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀\nSᴘᴀɴ ➺ [7 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 10$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️\nSᴘᴀɴ ➺ [15 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 15$\n━━━━━━━━━━━━━━━━\nAᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑\nSᴘᴀɴ ➺ [30 Dᴀʏꜱ]\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nPʀɪᴄᴇ ➺ 30$",
-            kb_price()
-        )
-    elif d in ("pay10", "pay20", "pay30"):
-        amt = d.replace("pay", "$")
-        await safe_edit(
-            f"PAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nBase Amount: {amt}\nTaxes: Included\nTotal: {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Soon the payment\naddress will be added.\n━━━━━━━━━━━━━━━━━━━━\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.",
+            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nAᴄᴄᴇꜱꜱ ➺ {plan_name}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nTᴏᴛᴀʟ ➺ {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Payment coming soon.\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.",
             kb_back("mprice")
         )
+        
     elif d == "mgates":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("AUTH", callback_data="mauth"), InlineKeyboardButton("CHARGE", callback_data="mcharge")],
-            [InlineKeyboardButton("◀ BACK", callback_data="bmain")]
-        ])
-        await safe_edit("SELECT GATE", kb)
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATES STATUS:\nAuth Gates → 2\nCharge Gates → 4\n━━━━━━━━━━━━━━━━━━━━\n\nSELECT A GATE → CATEGORY",
+            kb_gate_category()
+        )
+        
     elif d == "mauth":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Stripe", callback_data="iau"), InlineKeyboardButton("Braintree", callback_data="ib3")],
-            [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
-        ])
-        await safe_edit("AUTH GATES", kb)
-    elif d == "iau":
-        await safe_edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe Auth\nCMD: /chk cc|mm|yy|cvv\nSITES: 16\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_gate_info("chk", "mauth"))
-    elif d == "ib3":
-        await safe_edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Braintree Auth\nCMD: /b3 cc|mm|yy|cvv\nSITES: 2\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_gate_info("b3", "mauth"))
+        await safe_edit("SELECT AUTH GATE →", kb_auth_gates())
+        
     elif d == "mcharge":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Stripe", callback_data="ichk"), InlineKeyboardButton("PayPal", callback_data="ipp")],
-            [InlineKeyboardButton("Shopify", callback_data="ish"), InlineKeyboardButton("PayU", callback_data="ipyu")],
-            [InlineKeyboardButton("◀ BACK", callback_data="mgates")]
-        ])
-        await safe_edit("CHARGE GATES", kb)
+        await safe_edit("SELECT CHARGE GATE →", kb_charge_gates())
+        
+    elif d == "iau":
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATE: STRIPE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 16\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
+            kb_gate_info("chk", "mauth")
+        )
+    elif d == "ib3":
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATE: BRAINTREE AUTH\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 2\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
+            kb_gate_info("b3", "mauth")
+        )
     elif d == "ichk":
-        await safe_edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Stripe\nPRICE: $0.50\nCMD: /chk cc|mm|yy|cvv\nSITES: 4\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_gate_info("chk", "mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATE: STRIPE CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 4\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
+            kb_gate_info("chk", "mcharge")
+        )
     elif d == "ipp":
-        await safe_edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayPal\nPRICE: $0.10\nCMD: /pp cc|mm|yy|cvv\nSITES: 7\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_gate_info("pp", "mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATE: PAYPAL CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 7\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
+            kb_gate_info("pp", "mcharge")
+        )
     elif d == "ish":
-        await safe_edit("━━━━━━━━━━━━━━━━━━━━\nGATE: Shopify\nPRICE: $1.00\nCMD: /sh cc|mm|yy|cvv\nSITES: 10\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_gate_info("sh", "mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATE: SHOPIFY CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 10\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
+            kb_gate_info("sh", "mcharge")
+        )
     elif d == "ipyu":
-        await safe_edit("━━━━━━━━━━━━━━━━━━━━\nGATE: PayU\nPRICE: $0.30\nCMD: /pyu cc|mm|yy|cvv\nSITES: 1\nHEALTH: 100%\n━━━━━━━━━━━━━━━━━━━━", kb_gate_info("pyu", "mcharge"))
+        await safe_edit(
+            "━━━━━━━━━━━━━━━━━━━━\nGATE: PAYU CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 1\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
+            kb_gate_info("pyu", "mcharge")
+        )
 
 async def _check_and_kick_if_not_joined(user_id, chat_id, context: ContextTypes.DEFAULT_TYPE):
     try:
