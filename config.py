@@ -46,6 +46,24 @@ GATE_SITES = {
 
 API_TIMEOUT = 120
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 DIRECT GATE VARIABLES (Fixes Import Errors for gates)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHK_API = GATE_URLS.get("chk", "")
+CHK_SITE = GATE_SITES.get("chk", "example.com")
+
+PP_API = GATE_URLS.get("pp", "")
+PP_SITE = GATE_SITES.get("pp", "example.com")
+
+SH_API = GATE_URLS.get("sh", "")
+SH_SITE = GATE_SITES.get("sh", "example.com")
+
+PYU_API = GATE_URLS.get("pyu", "")
+PYU_SITE = GATE_SITES.get("pyu", "example.com")
+
+B3_API = GATE_URLS.get("b3", "")
+B3_SITE = GATE_SITES.get("b3", "example.com")
+
 async def get_bin_info(bin_num: str) -> dict:
     try:
         url = f"https://lookup.binlist.net/{bin_num}"
