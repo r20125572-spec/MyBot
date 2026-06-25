@@ -29,13 +29,13 @@ CHANNEL_LINK = "https://t.me/Batcardchk"
 GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
-# 🦇 WELCOME IMAGE (Only shows on first-time forced join screen)
-WELCOME_IMAGE_URL = "https://telegra.ph/file/YOUR_REAL_IMAGE_LINK_HERE.jpg"
+# 🦇 WELCOME IMAGE (Replace with your REAL image link)
+WELCOME_IMAGE_URL = "https://example.com/batman.jpg"
 
 GATE_COST = {"chk": 1, "pp": 1, "sh": 2, "pyu": 1, "b3": 1}
 GATE_NAMES = {"chk": "Stripe", "pp": "PayPal", "sh": "Shopify", "pyu": "PayU", "b3": "Braintree"}
 
-# Silence httpx and telegram spam logs
+# Silence background spam
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -48,9 +48,6 @@ BLOCK_WORDS = (
     "toolsx"
 )
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 PLAN TEXT EXACTLY AS REQUESTED
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 💎
 Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
@@ -106,8 +103,6 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
         
     plan_str = get_styled_plan(raw_plan)
     is_premium = raw_plan != 'TRIAL'
-    
-    # Format credits like 148/150 for trial, ∞ for premium
     credits = "∞" if is_premium else f"{ud.get('credits', 150)}/150"
     
     lines = [
@@ -147,7 +142,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     return receipt
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CLASSIC CLEAN KEYBOARDS (ZERO LAG)
+# 🦇 KEYBOARDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
     return InlineKeyboardMarkup([
@@ -167,8 +162,14 @@ def kb_force():
 
 def kb_price():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("10$ PAY", callback_data="pay10"), InlineKeyboardButton("15$ PAY", callback_data="pay15"), InlineKeyboardButton("30$ PAY", callback_data="pay30")],
+        [InlineKeyboardButton("10$PAY", callback_data="pay10"), InlineKeyboardButton("15$PAY", callback_data="pay15"), InlineKeyboardButton("30$PAY", callback_data="pay30")],
         [InlineKeyboardButton("« BACK", callback_data="bmain")]
+    ])
+
+def kb_payment():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)],
+        [InlineKeyboardButton("« BACK", callback_data="mprice")]
     ])
 
 def kb_gate_info(cmd, back_cb):
@@ -265,7 +266,7 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(PLAN_TEXT, parse_mode="HTML", reply_markup=kb_price())
+    await update.message.reply_text(PLAN_TEXT, parse_mode="HTML", reply_markup=kb_price(), disable_web_page_preview=True)
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -553,7 +554,7 @@ async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE): await han
 async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("b3", update, context)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 100% BULLETPROOF CALLBACK SYSTEM
+# 🦇 100% BULLETPROOF CALLBACK SYSTEM (ZERO LAG FIX)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -561,18 +562,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except: pass
     
+    # ULTRA FAST SAFE EDIT - Deletes old and sends new if editing fails to prevent lag
     async def safe_edit(t, kb):
-        try:
-            if q.message.photo:
-                try: await q.message.delete()
-                except: pass
-                await context.bot.send_message(chat_id=q.message.chat_id, text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-            else:
+        sent = False
+        if not q.message.photo:
+            try:
                 await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-        except Exception:
+                sent = True
+            except Exception:
+                pass
+        
+        if not sent:
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
             try:
                 await context.bot.send_message(chat_id=q.message.chat_id, text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-            except: pass
+            except Exception:
+                pass
 
     if d == "verify_join":
         if await is_joined(q.from_user.id, context):
@@ -599,11 +607,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(PLAN_TEXT, kb_price())
         
     elif d in ("pay10", "pay15", "pay30"):
-        # Ultra-fast zero lag response
         amt = d.replace("pay", "$")
         await safe_edit(
-            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\n⏳ Payment address added will soon.",
-            kb_back("mprice")
+            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nThe payment method or address is uploaded soon.",
+            kb_payment()
         )
         
     elif d == "mgates":
