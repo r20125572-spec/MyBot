@@ -146,7 +146,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     ud["name"] = name; ud["plan"] = plan; ud["expires"] = time.time() + (days * 86400)
     exp_date = datetime.fromtimestamp(ud["expires"]).strftime('%Y-%m-%d %H:%M')
     styled_plan = get_styled_plan(plan)
-    txt = (f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n━━━━━━━━━━━━━━━━━━━━\n\nUꜱᴇʀ ➺ {name}\nUꜱᴇʀɴᴀᴍᴇ ➺ @{username}\nAᴄᴄᴇꜱꜱ ➺ {styled_plan}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nExᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴛ ID ➺ <code>{receipt}</code>\n\n━━━━━━━━━━━━━━━━━━━━\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.")
+    txt = (f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n━━━━━━━━━━━━━━━━━━━━\n\nUꜱᴇʀ ➺ {name}\nUꜱᴇʀɴᴀᴍᴇ ➺ @{username}\nAᴄᴄᴇꜱꜱ ➺ {styled_plan}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nExᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴘᴛ ID ➺ <code>{receipt}</code>\n\n━━━━━━━━━━━━━━━━━━━━\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴘᴛ ID.")
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except: pass
     return receipt
@@ -257,9 +257,6 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(PLAN_TEXT, parse_mode="HTML", reply_markup=kb_price(), disable_web_page_preview=True)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FIXED /allcm COMMAND (EXACT REQUESTED LIST)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
@@ -320,7 +317,7 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_gen_key(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: str, days: int):
     if update.effective_user.id != OWNER_ID: return
     code = "KEY-" + gen_code(12)
-    context.bot_data.setdefault('keys', {})[code] = {"plan": plan, "days": days, "used": False}
+    context.bot_data.setdefault('keys', {code}) = {"plan": plan, "days": days, "used": False}
     await update.message.reply_text(f"✅ PREMIUM KEY GENERATED\n━━━━━━━━━━━━━━━━━━━━\n\nKey: <code>{code}</code>\nPlan: {get_styled_plan(plan)}\nDays: {days}\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_key10(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "core", 7)
@@ -332,11 +329,8 @@ async def _grant_premium(uid: int, plan: str, days: int, update: Update, context
     if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "TRIAL", "expires": 0}
     ud[uid_str]["plan"] = plan; ud[uid_str]["expires"] = time.time() + (days * 86400)
     receipt = await send_activation_msg(uid, plan, days, context)
-    await update.message.reply_text(f"✅ Granted {days} Days ({get_styled_plan(plan)}) to <code>{uid}</code>\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
+    await update.message.reply_text(f"✅ Granted {days} Days ({get_styled_plan(plan)}) to <code>{uid}</code>\nRᴇᴄᴇɪᴘᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 FIXED /oneday AND /threeday (NOW GENERATES CODES)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     code = "KEY-" + gen_code(12)
@@ -418,7 +412,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keys[code]['used'] = True; p, d = keys[code]['plan'], keys[code]['days']
         ud[uid]["plan"] = p; ud[uid]["expires"] = time.time() + (d * 86400)
         receipt = await send_activation_msg(int(uid), p, d, context)
-        await update.message.reply_text(f"✅ Activated {get_styled_plan(p)} for {d} days.\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"✅ Activated {get_styled_plan(p)} for {d} days.\nRᴇᴄᴇɪᴘᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
     else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
 
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -467,23 +461,6 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt += "━━━━━━━━━━━━━━━━━━━━"
     await update.message.reply_text(txt, parse_mode="HTML")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 EMPTY GATE COMMANDS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/chk cc|mm|yy|cvv", parse_mode="HTML")
-async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pp email|pass", parse_mode="HTML")
-async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/sh cc|mm|yy|cvv", parse_mode="HTML")
-async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pyu cc|mm|yy|cvv", parse_mode="HTML")
-async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/b3 cc|mm|yy|cvv", parse_mode="HTML")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 EMPTY CALLBACK SYSTEM
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
@@ -586,23 +563,28 @@ def main():
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("bin", cmd_bin))
     app.add_handler(CommandHandler("rm", cmd_rm))
-    app.add_handler(CommandHandler("chk", cmd_chk))
-    app.add_handler(CommandHandler("pp", cmd_pp))
     
-    # FIX 1: Changed app_handler to app.add_handler
-    app.add_handler(CommandHandler("sh", cmd_sh))
-    
-    app.add_handler(CommandHandler("pyu", cmd_pyu))
-    app.add_handler(CommandHandler("b3", cmd_b3))
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 🦇 CONNECT REAL GATES HERE (NO OLD EMPTY FUNCTIONS ALLOWED)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    from chk import get_chk_handler
+    from pp import get_pp_handler
+    from sh import get_sh_handler
+    from pyu import get_pyu_handler
+    from b3 import get_b3_handler
+
+    app.add_handler(get_chk_handler())
+    app.add_handler(get_pp_handler())
+    app.add_handler(get_sh_handler())
+    app.add_handler(get_pyu_handler())
+    app.add_handler(get_b3_handler())
+
     app.add_handler(CommandHandler("info", cmd_info))
     app.add_handler(CommandHandler("allcm", cmd_allcm))
     app.add_handler(CommandHandler("gen", cmd_gen))
     app.add_handler(CommandHandler("key10", cmd_key10))
     app.add_handler(CommandHandler("key20", cmd_key20))
-    
-    # FIX 2: Changed app_handler to app.add_handler
     app.add_handler(CommandHandler("key30", cmd_key30))
-    
     app.add_handler(CommandHandler("oneday", cmd_oneday))
     app.add_handler(CommandHandler("threeday", cmd_threeday))
     app.add_handler(CommandHandler("sub", cmd_sub))
