@@ -29,6 +29,9 @@ CHANNEL_LINK = "https://t.me/Batcardchk"
 GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
+# 🦇 WELCOME IMAGE (Only shows on first-time forced join screen)
+WELCOME_IMAGE_URL = "https://example.com/batman.jpg"
+
 GATE_COST = {"chk": 1, "pp": 1, "sh": 2, "pyu": 1, "b3": 1}
 GATE_NAMES = {"chk": "Stripe", "pp": "PayPal", "sh": "Shopify", "pyu": "PayU", "b3": "Braintree"}
 
@@ -44,8 +47,6 @@ BLOCK_WORDS = (
     "a_toolsx", "a-tools", "atoolsx", "a tools x", "a-tools x", "a_tools",
     "toolsx"
 )
-
-DOWNLOADED_PHOTO_PATH = None
 
 PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀
 Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
@@ -88,34 +89,6 @@ def gen_receipt(): return f"BATCARD-{random.randint(100000, 999999)}-CHK"
 def is_premium_active(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     ud = context.bot_data.get('user_data', {}).get(str(user_id), {})
     return ud.get('plan', 'TRIAL') != 'TRIAL' and ud.get('expires', 0) > time.time()
-
-def download_photo():
-    global DOWNLOADED_PHOTO_PATH
-    for name in ["batman.jpg", "batman.png", "batman.jpeg", "batman.webp", "BATMAN.jpg", "BATMAN.png", "photo.jpg", "photo.png"]:
-        if os.path.isfile(name):
-            DOWNLOADED_PHOTO_PATH = name
-            print(f"🦇 Found local photo: {name}")
-            return
-    if BOT_PHOTO and os.path.isfile(BOT_PHOTO):
-        DOWNLOADED_PHOTO_PATH = BOT_PHOTO
-        print(f"🦇 Found BOT_PHOTO file: {BOT_PHOTO}")
-        return
-    url_to_try = BOT_PHOTO_URL or (BOT_PHOTO if BOT_PHOTO and BOT_PHOTO.startswith("http") else "")
-    if url_to_try:
-        print(f"🦇 Downloading photo from: {url_to_try[:80]}...")
-        try:
-            req = urllib.request.Request(url_to_try, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = resp.read()
-            save_path = os.path.join(tempfile.gettempdir(), "batman_bot_photo.jpg")
-            with open(save_path, 'wb') as f:
-                f.write(data)
-            DOWNLOADED_PHOTO_PATH = save_path
-            print(f"🦇 Photo downloaded! Saved to: {save_path} ({len(data)} bytes)")
-            return
-        except Exception as e:
-            print(f"❌ Photo download failed: {e}")
-    print("❌ NO PHOTO FOUND — join page will be text only")
 
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
@@ -245,11 +218,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ud: ud[uid] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "TRIAL", "expires": 0}
 
     if await is_joined(user.id, context):
+        # Strictly Text Only for Joined Users
         await update.message.reply_text(
             text=ui_profile(user, context), parse_mode="HTML",
             reply_markup=kb_main(), disable_web_page_preview=True
         )
     else:
+        # Forced Join Message with Image on Top
         caption = (
             "🦇 BATMAN CARD CHECKER 🦇\n\n"
             "Access Required\n"
@@ -258,15 +233,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "unlock the bot.\n"
             "━━━━━━━━━━━━━━━━━━━━"
         )
-        photo_sent = False
-        if DOWNLOADED_PHOTO_PATH and os.path.isfile(DOWNLOADED_PHOTO_PATH):
-            try:
-                with open(DOWNLOADED_PHOTO_PATH, 'rb') as f:
-                    await update.message.reply_photo(photo=f, caption=caption, parse_mode="HTML", reply_markup=kb_force())
-                photo_sent = True
-            except Exception as e:
-                print(f"⚠️ Send downloaded photo failed: {e}")
-        if not photo_sent:
+        try:
+            # Send the hardcoded welcome image
+            await update.message.reply_photo(
+                photo=WELCOME_IMAGE_URL, 
+                caption=caption, 
+                parse_mode="HTML", 
+                reply_markup=kb_force()
+            )
+        except Exception as e:
+            # Fallback to text only if the image URL fails to load
+            print(f"⚠️ Welcome image failed to send: {e}")
             await update.message.reply_text(text=caption, parse_mode="HTML", reply_markup=kb_force())
 
 async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -588,6 +565,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     async def safe_edit(t, kb):
         try:
+            # Delete the photo and replace with pure text to avoid ads/images anywhere else
             if q.message.photo:
                 try: await q.message.delete()
                 except: pass
@@ -689,7 +667,7 @@ async def on_start(app):
     print("🦇 Batman Bot Initializing...")
     try:
         await app.bot.delete_webhook(drop_pending_updates=True)
-        await asyncio.sleep(1) # Prevents 409 conflict on startup
+        await asyncio.sleep(1)
     except Exception as e:
         print(f"Webhook clear skipped: {e}")
 
@@ -699,19 +677,11 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.kill(os.getpid(), signal.SIGTERM)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Completely ignore 409 Conflict to stop console spam
     if isinstance(context.error, Conflict):
         return
     logging.error(f"Exception: {context.error}")
 
 def main():
-    print("🦇 Downloading photo...")
-    download_photo()
-    if DOWNLOADED_PHOTO_PATH:
-        print(f"🦇 Photo ready: {DOWNLOADED_PHOTO_PATH}")
-    else:
-        print("❌ NO PHOTO — join page will be text only")
-
     app = Application.builder().token(BOT_TOKEN).post_init(on_start).build()
     app.add_error_handler(error_handler)
 
