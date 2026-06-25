@@ -48,15 +48,18 @@ BLOCK_WORDS = (
     "toolsx"
 )
 
-PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 PLAN TEXT EXACTLY AS REQUESTED
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 💎
 Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 10$ ━━━━━━━━━━━━━━━━
-Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️
+Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ 💎
 Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 15$ ━━━━━━━━━━━━━━━━
-Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑
+Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 💎
 Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 30$"""
@@ -144,7 +147,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     return receipt
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 CLASSIC CLEAN KEYBOARDS (EXACTLY LIKE PHOTO)
+# 🦇 CLASSIC CLEAN KEYBOARDS (ZERO LAG)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main():
     return InlineKeyboardMarkup([
@@ -218,13 +221,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ud: ud[uid] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "TRIAL", "expires": 0}
 
     if await is_joined(user.id, context):
-        # Strictly Text Only for Joined Users
         await update.message.reply_text(
             text=ui_profile(user, context), parse_mode="HTML",
             reply_markup=kb_main(), disable_web_page_preview=True
         )
     else:
-        # Forced Join Message with Image on Top
         caption = (
             "🦇 BATMAN CARD CHECKER 🦇\n\n"
             "Access Required\n"
@@ -234,16 +235,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━━"
         )
         try:
-            # Send the hardcoded welcome image
             await update.message.reply_photo(
                 photo=WELCOME_IMAGE_URL, 
                 caption=caption, 
                 parse_mode="HTML", 
                 reply_markup=kb_force()
             )
-        except Exception as e:
-            # Fallback to text only if the image URL fails to load
-            print(f"⚠️ Welcome image failed to send: {e}")
+        except Exception:
             await update.message.reply_text(text=caption, parse_mode="HTML", reply_markup=kb_force())
 
 async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -565,7 +563,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     async def safe_edit(t, kb):
         try:
-            # Delete the photo and replace with pure text to avoid ads/images anywhere else
             if q.message.photo:
                 try: await q.message.delete()
                 except: pass
@@ -602,14 +599,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(PLAN_TEXT, kb_price())
         
     elif d in ("pay10", "pay15", "pay30"):
-        if d == "pay10":
-            amt, plan_name, days = "10$", "✨ Cᴏʀᴇ ✨", "7"
-        elif d == "pay15":
-            amt, plan_name, days = "15$", "⭐ Eʟɪᴛᴇ ⭐", "15"
-        else:
-            amt, plan_name, days = "30$", "👑 Rᴏᴏᴛ 👑", "30"
+        # Ultra-fast zero lag response
+        amt = d.replace("pay", "$")
         await safe_edit(
-            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nAᴄᴄᴇꜱꜱ ➺ {plan_name}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nTᴏᴛᴀʟ ➺ {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Payment coming soon.\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.",
+            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\n⏳ Payment address added will soon.",
             kb_back("mprice")
         )
         
