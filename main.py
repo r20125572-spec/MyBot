@@ -50,15 +50,27 @@ DOWNLOADED_PHOTO_PATH = None
 PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀
 Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
-Pʀɪᴄᴇ ➺ 10$ ━━━━━━━━━━━━━━━━
+Pʀɪᴄᴇ ➺ 10$ 
+━━━━━━━━━━━━━━━━
 Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️
 Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
-Pʀɪᴄᴇ ➺ 15$ ━━━━━━━━━━━━━━━━
+Pʀɪᴄᴇ ➺ 15$ 
+━━━━━━━━━━━━━━━━
 Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑
 Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 30$"""
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 UI FORMATTER FOR STARS & PLANS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_styled_plan(raw_plan: str) -> str:
+    plan_upper = raw_plan.upper()
+    if plan_upper == "CORE": return "✨ Cᴏʀᴇ ✨"
+    elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
+    elif plan_upper == "ROOT": return "👑 Rᴏᴏᴛ 👑"
+    else: return "Tʀɪᴀʟ"
 
 async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -80,7 +92,7 @@ def gen_receipt(): return f"BATCARD-{random.randint(100000, 999999)}-CHK"
 
 def is_premium_active(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     ud = context.bot_data.get('user_data', {}).get(str(user_id), {})
-    return ud.get('plan', 'FREE') != 'FREE' and ud.get('expires', 0) > time.time()
+    return ud.get('plan', 'TRIAL') != 'TRIAL' and ud.get('expires', 0) > time.time()
 
 def download_photo():
     global DOWNLOADED_PHOTO_PATH
@@ -114,20 +126,32 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE):
     u = user.username or "None"
     uid_str = str(user.id)
     ud = context.bot_data.get('user_data', {}).get(uid_str, {})
-    plan = ud.get('plan', 'FREE').upper()
+    raw_plan = ud.get('plan', 'TRIAL').upper()
     expires = ud.get('expires', 0)
     now = time.time()
-    if plan != 'FREE' and expires <= now:
-        plan = 'FREE'; ud['plan'] = 'FREE'; ud['expires'] = 0
-    credits = "∞" if plan != 'FREE' else ud.get('credits', 150)
-    lines = [f"Uꜱᴇʀ ➺ {u}", f"Uꜱᴇʀ ID ➺ <code>{user.id}</code>", f"Pʟᴀɴ ➺ {plan}", f"Cʀᴇᴅɪᴛꜱ ➺ {credits}"]
-    if plan != 'FREE' and expires > now:
+    
+    if raw_plan != 'TRIAL' and expires <= now:
+        raw_plan = 'TRIAL'; ud['plan'] = 'TRIAL'; ud['expires'] = 0
+        
+    plan_str = get_styled_plan(raw_plan)
+    is_premium = raw_plan != 'TRIAL'
+    credits = "∞" if is_premium else ud.get('credits', 150)
+    
+    lines = [
+        f"Uꜱᴇʀ ➺ {u}", 
+        f"Uꜱᴇʀ ID ➺ <code>{user.id}</code>", 
+        f"Pʟᴀɴ ➺ {plan_str}", 
+        f"Cʀᴇᴅɪᴛꜱ ➺ {credits}"
+    ]
+    
+    if is_premium and expires > now:
         exp_date = datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')
         remaining = int((expires - now) / 86400)
         remaining_hrs = int(((expires - now) % 86400) / 3600)
         lines.append(f"Exᴘɪʀᴇꜱ ➺ {exp_date}")
         if remaining > 0: lines.append(f"Rᴇᴍᴀɪɴɪɴɢ ➺ {remaining} Dᴀʏꜱ {remaining_hrs} Hʀꜱ")
         else: lines.append(f"Rᴇᴍᴀɪɴɪɴɢ ➺ {remaining_hrs} Hʀꜱ")
+        
     lines.append(f"Jᴏɪɴᴇᴅ ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
     lines.append(f"Dᴇᴠ ➺ <a href='{DEV_LINK}'>Batman</a>")
     return "\n".join(lines)
@@ -140,10 +164,11 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
         name = chat.first_name or "Unknown"; username = chat.username or "None"
     except: pass
     uid_str = str(user_id)
-    ud = context.bot_data.setdefault('user_data', {}).setdefault(uid_str, {"name": name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "FREE", "expires": 0})
+    ud = context.bot_data.setdefault('user_data', {}).setdefault(uid_str, {"name": name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "TRIAL", "expires": 0})
     ud["name"] = name; ud["plan"] = plan; ud["expires"] = time.time() + (days * 86400)
     exp_date = datetime.fromtimestamp(ud["expires"]).strftime('%Y-%m-%d %H:%M')
-    txt = (f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n━━━━━━━━━━━━━━━━━━━━\n\nUꜱᴇʀ ➺ {name}\nUꜱᴇʀɴᴀᴍᴇ ➺ @{username}\nAᴄᴄᴇꜱꜱ ➺ {plan.upper()}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nExᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴛ ID ➺ <code>{receipt}</code>\n\n━━━━━━━━━━━━━━━━━━━━\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.")
+    styled_plan = get_styled_plan(plan)
+    txt = (f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n━━━━━━━━━━━━━━━━━━━━\n\nUꜱᴇʀ ➺ {name}\nUꜱᴇʀɴᴀᴍᴇ ➺ @{username}\nAᴄᴄᴇꜱꜱ ➺ {styled_plan}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\nExᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴛ ID ➺ <code>{receipt}</code>\n\n━━━━━━━━━━━━━━━━━━━━\nPʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID.")
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except: pass
     return receipt
@@ -222,7 +247,7 @@ async def fetch_bin(url: str) -> dict:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud = context.bot_data.setdefault('user_data', {}); uid = str(user.id)
-    if uid not in ud: ud[uid] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "FREE", "expires": 0}
+    if uid not in ud: ud[uid] = {"name": user.first_name, "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "TRIAL", "expires": 0}
 
     if await is_joined(user.id, context):
         await update.message.reply_text(
@@ -288,13 +313,15 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = await context.bot.get_chat(target_id); name = u.first_name or "N/A"; username = u.username or "None"; uid = u.id
     except: pass
     udata = context.bot_data.get('user_data', {}).get(str(uid), {})
-    plan = udata.get('plan', 'FREE').upper(); expires = udata.get('expires', 0); now = time.time()
-    if plan != 'FREE' and expires <= now: plan = 'FREE'
-    credits = "∞" if plan != 'FREE' else udata.get('credits', 150)
-    txt = (f"━━━━━━━━━━━━━━━━━━━━\n🦇 USER INFO\n━━━━━━━━━━━━━━━━━━━━\n\nName ➺ {name}\nUsername ➺ @{username}\nUser ID ➺ <code>{uid}</code>\nJoined Bot ➺ {udata.get('joined', 'N/A')}\nPlan ➺ {plan}\nCredits ➺ {credits}\n")
-    if plan != 'FREE' and expires > now:
+    raw_plan = udata.get('plan', 'TRIAL').upper(); expires = udata.get('expires', 0); now = time.time()
+    if raw_plan != 'TRIAL' and expires <= now: raw_plan = 'TRIAL'
+    
+    plan_str = get_styled_plan(raw_plan)
+    credits = "∞" if raw_plan != 'TRIAL' else udata.get('credits', 150)
+    txt = (f"━━━━━━━━━━━━━━━━━━━━\n🦇 USER INFO\n━━━━━━━━━━━━━━━━━━━━\n\nName ➺ {name}\nUsername ➺ @{username}\nUser ID ➺ <code>{uid}</code>\nJoined Bot ➺ {udata.get('joined', 'N/A')}\nPlan ➺ {plan_str}\nCredits ➺ {credits}\n")
+    if raw_plan != 'TRIAL' and expires > now:
         txt += f"Expires ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\nRemaining ➺ {int((expires - now) / 86400)} Days {int(((expires - now) % 86400) / 3600)} Hrs\n"
-    else: txt += "Status ➺ Inactive / Free\n"
+    else: txt += "Status ➺ Inactive / Trial\n"
     txt += "━━━━━━━━━━━━━━━━━━━━"
     await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -311,7 +338,7 @@ async def cmd_gen_key(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     if update.effective_user.id != OWNER_ID: return
     code = "KEY-" + gen_code(12)
     context.bot_data.setdefault('keys', {})[code] = {"plan": plan, "days": days, "used": False}
-    await update.message.reply_text(f"✅ PREMIUM KEY GENERATED\n━━━━━━━━━━━━━━━━━━━━\n\nKey: <code>{code}</code>\nPlan: {plan.upper()}\nDays: {days}\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text(f"✅ PREMIUM KEY GENERATED\n━━━━━━━━━━━━━━━━━━━━\n\nKey: <code>{code}</code>\nPlan: {get_styled_plan(plan)}\nDays: {days}\n━━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_key10(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "core", 7)
 async def cmd_key20(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_gen_key(update, context, "elite", 15)
@@ -319,10 +346,10 @@ async def cmd_key30(update: Update, context: ContextTypes.DEFAULT_TYPE): await c
 
 async def _grant_premium(uid: int, plan: str, days: int, update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
-    if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "FREE", "expires": 0}
+    if uid_str not in ud: ud[uid_str] = {"name": "User", "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "credits": 150, "plan": "TRIAL", "expires": 0}
     ud[uid_str]["plan"] = plan; ud[uid_str]["expires"] = time.time() + (days * 86400)
     receipt = await send_activation_msg(uid, plan, days, context)
-    await update.message.reply_text(f"✅ Granted {days} Days ({plan.upper()}) to <code>{uid}</code>\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
+    await update.message.reply_text(f"✅ Granted {days} Days ({get_styled_plan(plan)}) to <code>{uid}</code>\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
 
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -355,7 +382,7 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = await resolve_user(context.args[0], context)
     if not uid: await update.message.reply_text("❌ User not found.", parse_mode="HTML"); return
     ud = context.bot_data.setdefault('user_data', {}); uid_str = str(uid)
-    if uid_str in ud: ud[uid_str]["plan"] = "FREE"; ud[uid_str]["expires"] = 0; await update.message.reply_text(f"✅ Removed premium from <code>{uid}</code>", parse_mode="HTML")
+    if uid_str in ud: ud[uid_str]["plan"] = "TRIAL"; ud[uid_str]["expires"] = 0; await update.message.reply_text(f"✅ Removed premium from <code>{uid}</code>", parse_mode="HTML")
     else: await update.message.reply_text("❌ User not found.", parse_mode="HTML")
 
 async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -363,9 +390,9 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = context.bot_data.get('user_data', {}); txt = "🦇 ACTIVE PLANS\n━━━━━━━━━━━━━━━━━━━━\n\n"; found = False; now = time.time()
     for uid, data in users.items():
         exp = data.get('expires', 0)
-        if data.get('plan', 'FREE') != 'FREE' and exp > now:
+        if data.get('plan', 'TRIAL') != 'TRIAL' and exp > now:
             found = True; remaining = int((exp - now) / 86400)
-            txt += f"ID: <code>{uid}</code>\nPlan: {data.get('plan', 'FREE').upper()}\nRemaining: {remaining} Days\nExp: {datetime.fromtimestamp(exp).strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━━━━━\n"
+            txt += f"ID: <code>{uid}</code>\nPlan: {get_styled_plan(data.get('plan', 'TRIAL'))}\nCredits: ∞\nRemaining: {remaining} Days\nExp: {datetime.fromtimestamp(exp).strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━━━━━\n"
     if not found: txt += "❌ No active plans."
     await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -381,7 +408,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: await update.message.reply_text("❌ Usage: /rm <code>", parse_mode="HTML"); return
     code = context.args[0].upper(); codes, keys = context.bot_data.get('codes', {}), context.bot_data.get('keys', {}); uid = str(update.effective_user.id)
     ud = context.bot_data.setdefault('user_data', {})
-    if uid not in ud: ud[uid] = {"name": "User", "credits": 150, "plan": "FREE", "expires": 0}
+    if uid not in ud: ud[uid] = {"name": "User", "credits": 150, "plan": "TRIAL", "expires": 0}
     if code in codes and not codes[code]['used']:
         codes[code]['used'] = True; ud[uid]["credits"] += codes[code]['value']
         await update.message.reply_text(f"✅ Redeemed! Added {codes[code]['value']} credits.\nNew Balance: {ud[uid]['credits']}", parse_mode="HTML")
@@ -389,7 +416,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keys[code]['used'] = True; p, d = keys[code]['plan'], keys[code]['days']
         ud[uid]["plan"] = p; ud[uid]["expires"] = time.time() + (d * 86400)
         receipt = await send_activation_msg(int(uid), p, d, context)
-        await update.message.reply_text(f"✅ Activated {p.upper()} for {d} days.\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"✅ Activated {get_styled_plan(p)} for {d} days.\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>", parse_mode="HTML")
     else: await update.message.reply_text("❌ Invalid or used code.", parse_mode="HTML")
 
 async def cmd_onchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -603,13 +630,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif d in ("pay10", "pay15", "pay30"):
         if d == "pay10":
-            amt, plan_name, days = "10$", "CORE 🎀", "7"
+            amt, plan_name, days = "10$", "✨ Cᴏʀᴇ ✨", "7"
         elif d == "pay15":
-            amt, plan_name, days = "15$", "ELITE ⭐️", "15"
+            amt, plan_name, days = "15$", "⭐ Eʟɪᴛᴇ ⭐", "15"
         else:
-            amt, plan_name, days = "30$", "ROOT 👑", "30"
+            amt, plan_name, days = "30$", "👑 Rᴏᴏᴛ 👑", "30"
         await safe_edit(
-            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nAᴄᴄᴇꜱꜱ ➺ {plan_name}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nTᴏᴛᴀʟ ➺ {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Payment coming soon.\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.",
+            f"━━━━━━━━━━━━━━━━━━━━\nPAYMENT - {amt}\n━━━━━━━━━━━━━━━━━━━━\n\nAᴄᴄᴇꜱꜱ ➺ {plan_name}\nDᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\nCʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ\nTᴏᴛᴀʟ ➺ {amt}\n\n━━━━━━━━━━━━━━━━━━━━\n⏳ Payment coming soon.\n\nContact <a href='{DEV_LINK}'>Batman</a> for manual payment.",
             kb_back("mprice")
         )
         
