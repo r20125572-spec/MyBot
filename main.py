@@ -405,6 +405,9 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇🦇🦇 GATE COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇🦇🦇 GATE COMMANDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_card(text: str) -> Optional[dict]:
     text = text.strip()
     for sep in ['|', '/', ' ']:
@@ -484,10 +487,15 @@ async def handle_gate_cmd(gate: str, update: Update, context: ContextTypes.DEFAU
     if not context.bot_data.get(f'{gate}_on', True):
         await update.message.reply_text(f"❌ {GATE_NAMES[gate]} gate is currently OFF.", parse_mode="HTML"); return
     if not context.args:
-        await update.message.reply_text(f"❌ Usage: /{gate} cc|mm|yy|cvv\n\nExample: /{gate} 4532010123456789|03|28|353", parse_mode="HTML"); return
+        # Custom usage message format
+        if gate == "pp":
+            usage_msg = "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/pp email|pass"
+        else:
+            usage_msg = f"⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/{gate} cc|mm|yy|cvv"
+        await update.message.reply_text(usage_msg, parse_mode="HTML"); return
     card = parse_card(" ".join(context.args))
     if not card:
-        await update.message.reply_text("❌ Invalid card format!\n\ncc|mm|yy|cvv\ncc/mm/yy/cvv\ncc mm yy cvv\n\nExample: 4532010123456789|03|28|353", parse_mode="HTML"); return
+        await update.message.reply_text("❌ Invalid card format!\n\ncc|mm|yy|cvv\ncc/mm/yy/cvv\ncc mm yy cvv", parse_mode="HTML"); return
     if not is_premium_active(user.id, context):
         ud = context.bot_data.setdefault('user_data', {}).get(uid_str, {})
         cost = GATE_COST.get(gate, 1); credits = ud.get('credits', 150)
@@ -509,7 +517,6 @@ async def cmd_pp(update: Update, context: ContextTypes.DEFAULT_TYPE): await hand
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("sh", update, context)
 async def cmd_pyu(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("pyu", update, context)
 async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE): await handle_gate_cmd("b3", update, context)
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 100% BULLETPROOF CALLBACK SYSTEM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
