@@ -30,7 +30,7 @@ GROUP_LINK = "https://t.me/batcardchkGroup"
 SUPPORT_LINK = "https://t.me/cardchkSupport"
 
 # 🦇 WELCOME IMAGE (Only shows on first-time forced join screen)
-WELCOME_IMAGE_URL = "https://example.com/batman.jpg"
+WELCOME_IMAGE_URL = "https://telegra.ph/file/YOUR_REAL_IMAGE_LINK_HERE.jpg"
 
 GATE_COST = {"chk": 1, "pp": 1, "sh": 2, "pyu": 1, "b3": 1}
 GATE_NAMES = {"chk": "Stripe", "pp": "PayPal", "sh": "Shopify", "pyu": "PayU", "b3": "Braintree"}
