@@ -2,146 +2,132 @@ import urllib.request
 import urllib.error
 import json
 import asyncio
-import logging
 import time
-from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
+from config import get_bin_info, kb_result
+from plans import deduct_credit
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 BRAintree API CONFIGURATION 🦇
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 B3_API_URL = "https://avs.blaze.indevs.in/api/b3"
+GATE_NAME = "Bʀᴀɪɴᴛʀᴇᴇ 0$"
 
-def kb_b3():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🦇 CARD X CHK", url="https://t.me/Batcardchk")],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman", url="https://t.me/Batmancardchk")]
-    ])
-
-def format_b3_response(card: str, raw: dict, user, time_taken: float) -> str:
-    try:
-        message = raw.get("message", "")
-        status = raw.get("status", "")
-        
-        # Check for APPROVED based on your exact API response
-        if "Nice! New payment method added" in message or status == "processed":
-            approved = True
-        else:
-            approved = False
-            
-    except Exception:
-        approved = False
-
-    u = user.username or user.first_name
-    status_txt = "Cᴀʀᴅ Aᴜᴛʜᴇᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
-    
-    # Get gateway info
-    gateway_txt = raw.get("gateway", "B3")
-    
-    return (
-        f"Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\n"
-        f"Tɪᴍᴇ ➺ {time_taken:.2f}s\n"
-        f"Uꜱᴇʀ ➺ {u}\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"<code>{card}</code>\n"
-        f"{status_txt}\n"
-        f"Gᴀᴛᴇᴡᴀʏ ➺ {gateway_txt}\n"
-        f"Rᴇꜱᴘ ➺ {message}\n"
-        f"━━━━━━━━━━━━━━━━\n\n"
-        f"✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ."
-    )
-
-async def check_b3(card: str) -> dict:
-    """Send card to B3 API"""
-    try:
-        url = f"{B3_API_URL}?cc={card}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        
-        loop = asyncio.get_running_loop()
-        def do_req():
-            with urllib.request.urlopen(req, timeout=120) as response:
-                return json.loads(response.read().decode('utf-8'))
-                
-        return await loop.run_in_executor(None, do_req)
-        
-    except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}"}
-    except Exception as e:
-        return {"error": str(e)}
+def get_styled_plan(raw_plan: str) -> str:
+    plan_upper = raw_plan.upper()
+    if plan_upper == "CORE": return "✨ Cᴏʀᴇ ✨"
+    elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
+    elif plan_upper == "ROOT": return "👑 Rᴏᴏᴛ 👑"
+    else: return "Tʀɪᴀʟ"
 
 async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /b3 command"""
     user = update.effective_user
-    card = ""
     
-    # Check if replied to a message (grab card from replied text)
-    if update.message.reply_to_message and update.message.reply_to_message.text:
-        card = update.message.reply_to_message.text.strip()
-    # Check if passed in arguments
-    elif context.args:
+    if not context.bot_data.get('b3_on', True):
+        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
+        return
+    
+    card = None
+    if context.args: 
         card = " ".join(context.args).strip()
-    
-    # Clean card format (allow spaces or |)
-    card = card.replace(" ", "|")
-    
-    if not card or "|" not in card or len(card.split("|")) != 4:
+    elif update.message.reply_to_message and update.message.reply_to_message.text: 
+        card = update.message.reply_to_message.text.strip()
+        
+    if not card:
+        # Exact requested warning text without old examples
         await update.message.reply_text(
-            "❌ INVALID FORMAT\n\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "REPLY TO A MESSAGE WITH CARDS\n"
-            "OR SEND: /b3 cc|mm|yy|cvv\n"
-            "━━━━━━━━━━━━━━━━━━",
+            "⚠️ Uꜱᴀɢᴇ: Rᴇᴍʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ ᴏʀ ꜱᴇɴᴅ\n/b3 cc|mm|yy|cvv", 
             parse_mode="HTML"
         )
         return
-
-    # Send processing message
-    status_msg = await update.message.reply_text(
-        f"⏳ Checking B3 Gate...\n\n"
-        f"Card: <code>{card.split('|')[0]}...{card.split('|')[-1]}</code>",
-        parse_mode="HTML"
-    )
     
-    # Start timer
+    if not deduct_credit(user.id):
+        await update.message.reply_text("Buy the PLANS and Start the checking you trils cradits are empty.", parse_mode="HTML")
+        return
+    
+    # Clean card format
+    card = card.replace(" ", "|")
+    
+    msg = await update.message.reply_text("⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
     start_time = time.time()
     
-    # Call API
-    result = await check_b3(card)
-    time_taken = time.time() - start_time
-    
-    if "error" in result:
-        try:
-            await status_msg.edit_text(
-                f"❌ B3 GATE ERROR\n\n"
-                f"Error: {result['error']}\n"
-                f"━━━━━━━━━━━━━━━━━━",
-                parse_mode="HTML"
-            )
-        except: pass
-        return
-        
-    # Format and send final result
-    response_text = format_b3(card, result, user, time_taken)
-    
     try:
-        await status_msg.edit_text(
-            text=response_text,
-            parse_mode="HTML",
-            reply_markup=kb_b3(),
+        loop = asyncio.get_running_loop()
+        
+        # Fast API call using threads (since we use urllib)
+        def do_req():
+            url = f"{B3_API_URL}?cc={card}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=120) as response:
+                return json.loads(response.read().decode('utf-8'))
+        
+        # Super fast parallel execution: API + BIN Lookup
+        tasks = [
+            loop.run_in_executor(None, do_req), 
+            get_bin_info(card[:6])
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        api_data = results[0]
+        bin_data = results[1] if not isinstance(results[1], Exception) else {"error": True}
+        
+        if isinstance(api_data, Exception): raise api_data
+        
+        # Extract exact new JSON response fields
+        message = str(api_data.get("message", ""))
+        status = str(api_data.get("status", ""))
+        
+        # Status logic: Approved if "processed" or "Nice! New payment method added"
+        is_approved = status.lower() == "processed" or "Nice! New payment method added" in message
+        
+        if is_approved:
+            status_ui = "APPROVED ✅"
+        else:
+            status_ui = "Dᴇᴄʟɪɴᴇᴅ ❌"
+            
+        # Get BIN Info
+        bin_txt = "N/A"
+        if not bin_data.get("error"):
+            s = str(bin_data.get("scheme", "N/A")).upper()
+            b = bin_data.get("bank", "N/A")
+            country = str(bin_data.get("country", "N/A")).upper()
+            flag = bin_data.get("country_emoji", "")
+            bin_txt = f"{s} - {b} - {flag} {country}"
+            
+        # Get User's Current Plan (Trial/Elite/Root) dynamically
+        ud = context.bot_data.get('user_data', {}).get(str(user.id), {})
+        raw_plan = ud.get('plan', 'TRIAL').upper()
+        
+        # Check if plan expired to revert to Trial
+        if raw_plan != 'TRIAL' and ud.get('expires', 0) <= time.time():
+            raw_plan = 'TRIAL'
+            
+        plan_ui = get_styled_plan(raw_plan)
+        username = user.first_name or "User"
+        
+        # Exact Requested Premium UI Design
+        text = (
+            f"[ 𖥷iТ ] ➺ {status_ui}\n"
+            f"🔍 ➺ {card}\n"
+            f"Gᴀᴛᴇ ➺ {GATE_NAME} 💳 🟢\n"
+            f"Rᴀᴡ ➺ {message if message else 'NO RESPONSE'}\n"
+            f"Iɴꜰᴏ ➺ {bin_txt}\n"
+            f"Uꜱᴇʀ ➺ {username} 👑 ({plan_ui})\n"
+            f"Pʀᴏ ➺ Batman ⚡"
+        )
+        
+        await msg.edit_text(
+            text, 
+            parse_mode="HTML", 
+            reply_markup=kb_result(), 
             disable_web_page_preview=True
         )
-    except Exception:
-        try:
-            await status_msg.delete()
-            await update.message.reply_text(
-                text=response_text,
-                parse_mode="HTML",
-                reply_markup=kb_b3(),
-                disable_web_page_preview=True
-            )
-        except: pass
+        
+    except urllib.error.HTTPError as e:
+        await msg.edit_text(f"❌ Eʀʀᴏʀ ➤ HTTP {e.code}", parse_mode="HTML")
+    except Exception as e:
+        await msg.edit_text(f"❌ Eʀʀᴏʀ ➤ <code>{str(e)[:100]}</code>", parse_mode="HTML")
 
 def get_b3_handler():
-    """Return the b3 command handler for main.py"""
     return CommandHandler("b3", cmd_b3)
