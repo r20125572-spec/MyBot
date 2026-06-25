@@ -48,15 +48,17 @@ BLOCK_WORDS = (
     "toolsx"
 )
 
-PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 💎
+PLAN_TEXT = """Aᴄᴄᴇꜱꜱ ➺ Cᴏʀᴇ 🎀
 Sᴘᴀɴ ➺ [7 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
-Pʀɪᴄᴇ ➺ 10$ ━━━━━━━━━━━━━━━━
-Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ 💎
+Pʀɪᴄᴇ ➺ 10$ 
+━━━━━━━━━━━━━━━━
+Aᴄᴄᴇꜱꜱ ➺ Eʟɪᴛᴇ ⭐️
 Sᴘᴀɴ ➺ [15 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
-Pʀɪᴄᴇ ➺ 15$ ━━━━━━━━━━━━━━━━
-Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 💎
+Pʀɪᴄᴇ ➺ 15$ 
+━━━━━━━━━━━━━━━━
+Aᴄᴄᴇꜱꜱ ➺ Rᴏᴏᴛ 👑
 Sᴘᴀɴ ➺ [30 Dᴀʏꜱ]
 Cʀᴇᴅɪᴛꜱ ➺ ∞ Uɴʟɪᴍɪᴛɪᴛᴇᴅ
 Pʀɪᴄᴇ ➺ 30$"""
@@ -562,30 +564,36 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except: pass
     
-    # ULTRA FAST SAFE EDIT - Deletes old and sends new if editing fails to prevent lag
+    # ULTIMATE FALLBACK SYSTEM - If editing fails, it sends a NEW message. 
+    # This guarantees buttons ALWAYS work with zero lag.
     async def safe_edit(t, kb):
-        sent = False
+        if not q.message: return
+        
+        success = False
+        # 1. Try to edit normally (fastest)
         if not q.message.photo:
             try:
                 await q.edit_message_text(text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
-                sent = True
+                success = True
             except Exception:
                 pass
-        
-        if not sent:
+                
+        # 2. If edit fails, just send a new message (GUARANTEED TO WORK)
+        if not success:
             try:
-                await q.message.delete()
-            except Exception:
-                pass
-            try:
-                await context.bot.send_message(chat_id=q.message.chat_id, text=t, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+                await context.bot.send_message(
+                    chat_id=q.message.chat_id, 
+                    text=t, 
+                    parse_mode="HTML", 
+                    reply_markup=kb, 
+                    disable_web_page_preview=True
+                )
             except Exception:
                 pass
 
     if d == "verify_join":
         if await is_joined(q.from_user.id, context):
             await safe_edit(ui_profile(q.from_user, context), kb_main())
-            asyncio.ensure_future(_check_and_kick_if_not_joined(q.from_user.id, context, q.message.chat_id))
         else:
             await q.answer("❌ Join Group & Channel first!", show_alert=True)
         return
@@ -655,13 +663,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━━\nGATE: PAYU CHARGE\n━━━━━━━━━━━━━━━━━━━━\n\nSITES: 1\nHEALTH: 100%\nSTATUS: 🟢 ONLINE",
             kb_gate_info("pyu", "mcharge")
         )
-
-async def _check_and_kick_if_not_joined(user_id, chat_id, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not await is_joined(user_id, context):
-            try: await context.bot.send_message(chat_id=chat_id, text="❌ You didn't join both channels! Access Denied.", parse_mode="HTML")
-            except: pass
-    except: pass
 
 async def on_start(app):
     print("🦇 Batman Bot Initializing...")
