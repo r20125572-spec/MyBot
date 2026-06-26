@@ -53,10 +53,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MAX_MSG = 4000  # safe buffer below Telegram's 4096 limit
+MAX_MSG = 4000  # Telegram limit is 4096, keep buffer
 
 
-# ── Bold unicode font ─────────────────────────────────────────────────────────
+# ── Bold unicode font (kept from original) ───────────────────────────────────
 
 def B(text: str) -> str:
     bold_map = {
@@ -76,7 +76,7 @@ def B(text: str) -> str:
     return "".join(bold_map.get(ch, ch) for ch in text)
 
 
-# ── Static text blocks ────────────────────────────────────────────────────────
+# ── Static text blocks ───────────────────────────────────────────────────────
 
 CHECKER_STATUS_TEXT = (
     "\U0001d402\U0001d41a\U0001d42d\U0001d41e\U0001d42c \U0001d412\U0001d42d\U0001d41a\U0001d42d\U0001d42e\U0001d42c:\n"
@@ -154,7 +154,7 @@ PAYMENT_PENDING_TEXT = (
 )
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_styled_plan(raw_plan: str) -> str:
     p = raw_plan.upper()
@@ -263,6 +263,23 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
         except Exception:
             continue
     return None
+
+
+async def send_chunks(send_fn, text: str, **kwargs):
+    """Send a message, splitting into chunks if it exceeds Telegram's limit."""
+    if len(text) <= MAX_MSG:
+        await send_fn(text, **kwargs)
+        return
+    lines = text.split("\n")
+    chunk = ""
+    for line in lines:
+        if len(chunk) + len(line) + 1 > MAX_MSG:
+            await send_fn(chunk, **kwargs)
+            chunk = line + "\n"
+        else:
+            chunk += line + "\n"
+    if chunk.strip():
+        await send_fn(chunk, **kwargs)
 
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
@@ -398,7 +415,7 @@ async def process_gate(
     if not card:
         await update.message.reply_text(
             f"U\u1d1b\u1d00\u0262\u1d07: <code>/{gate_key} cc|mm|yy|cvv</code>",
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return
     ud         = get_user_data(update.effective_user.id, context)
@@ -420,7 +437,7 @@ async def process_gate(
     if not api_url:
         await msg.edit_text(
             f"G\u1d00\u1d1b\u1d07 API URL \u0274\u1d0f\u1d1c \u1d1c\u1d07\u1d1b. O\u1d21\u0274\u1d07\u0280: /seturl {gate_key} &lt;url&gt;",
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return
     try:
@@ -507,9 +524,10 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── /rm ───────────────────────────────────────────────────────────────────────
+# ── /rm ──────────────────────────────────────────────────────────────────────
 
 async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # FIX: use &lt;&gt; so HTML parser does not choke on <code> placeholder
     if not context.args:
         await update.message.reply_text(
             "U\u1d1b\u1d00\u0262\u1d07: /rm &lt;code&gt;", parse_mode="HTML"
@@ -539,7 +557,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("I\u0274\u1d20\u1d00\u029f\u026a\u1d05 \u1d0f\u0280 \u1d00\u029f\u0280\u1d07\u1d00\u1d05y \u1d1c\u1d1c\u1d07\u1d05 \u1d04\u1d0f\u1d05\u1d07.")
 
 
-# ── /info — OWNER ONLY ────────────────────────────────────────────────────────
+# ── /info — OWNER ONLY: full styled user profile ──────────────────────────────
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -547,12 +565,15 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     target_id, target_name, target_username, target_lastname = None, "N/A", None, ""
 
+    # Priority 1: reply to message
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        ru              = update.message.reply_to_message.from_user
-        target_id       = ru.id
-        target_name     = ru.first_name or "N/A"
+        ru             = update.message.reply_to_message.from_user
+        target_id      = ru.id
+        target_name    = ru.first_name or "N/A"
         target_username = ru.username or None
         target_lastname = ru.last_name or ""
+
+    # Priority 2: argument — user_id or @username
     elif context.args:
         raw = context.args[0].strip().lstrip("@")
         if raw.lstrip("-").isdigit():
@@ -570,6 +591,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     continue
 
     if not target_id:
+        # FIX: &lt;&gt; so HTML parser does not see <user_id> as a tag
         await update.message.reply_text(
             "U\u1d1b\u1d00\u0262\u1d07:\n"
             "/info &lt;user_id&gt;\n"
@@ -579,6 +601,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # If we only have an ID, fetch name/username from Telegram
     if target_name == "N/A":
         try:
             chat = await context.bot.get_chat(target_id)
@@ -593,6 +616,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username_display = f"@{target_username}" if target_username else "None"
 
+    # Read stored data — do NOT auto-create a fake profile for unknown users
     all_users = context.bot_data.get("user_data", {})
     uid_str   = str(target_id)
     has_data  = uid_str in all_users
@@ -607,9 +631,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if raw_plan != "TRIAL" and expires <= now:
             raw_plan = "TRIAL"; udata["plan"] = "TRIAL"; udata["expires"] = 0; expires = 0
     else:
-        raw_plan = "TRIAL"; expires = 0
-        joined = "N\u1d07\u1d20\u1d07\u0280 \u1d1c\u1d1c\u1d07\u1d05 \u1d1b\u029c\u1d07 \u0299\u1d0f\u1d1c"
-        credits_val = 150
+        raw_plan = "TRIAL"; expires = 0; joined = "N\u1d07\u1d20\u1d07\u0280 \u1d1c\u1d1c\u1d07\u1d05 \u1d1b\u029c\u1d07 \u0299\u1d0f\u1d1c"; credits_val = 150
 
     is_premium = raw_plan != "TRIAL" and expires > now
     credits    = "\u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u1d07\u1d05" if is_premium else f"{credits_val}/150"
@@ -681,11 +703,12 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── /gen ──────────────────────────────────────────────────────────────────────
+# ── /gen ─────────────────────────────────────────────────────────────────────
 
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
+    # FIX: &lt;credits&gt; not <credits>
     if not context.args:
         await update.message.reply_text(
             "U\u1d1b\u1d00\u0262\u1d07: /gen &lt;credits&gt;", parse_mode="HTML"
@@ -758,6 +781,7 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
+    # FIX: &lt;&gt; not <>
     if len(context.args) < 2:
         await update.message.reply_text(
             "U\u1d1b\u1d00\u0262\u1d07: /sub &lt;user_id&gt; &lt;days&gt;", parse_mode="HTML"
@@ -778,6 +802,7 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
+    # FIX: &lt;&gt; not <>
     if not context.args:
         await update.message.reply_text(
             "U\u1d1b\u1d00\u0262\u1d07: /resub &lt;user_id&gt;", parse_mode="HTML"
@@ -798,7 +823,7 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("U\u1d1b\u026a\u029f \u029c\u1d00\u1d1c \u0274\u1d0f \u1d00\u1d04\u1d1b\u026a\u1d20\u1d07 \u1d18\u029f\u1d00\u0274.")
 
 
-# ── /allplans — upgraded, only premium, full info, auto-chunked ───────────────
+# ── /allplans — UPGRADED with full user info, chunked to avoid too_long ───────
 
 async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -808,11 +833,13 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now       = time.time()
     line      = "\u2501" * 20
 
-    premium_users = [
-        (uid_str, ud, ud.get("plan", "TRIAL").upper(), ud.get("expires", 0))
-        for uid_str, ud in all_users.items()
-        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > now
-    ]
+    # Collect only active premium users
+    premium_users = []
+    for uid_str, ud in all_users.items():
+        raw_plan = ud.get("plan", "TRIAL").upper()
+        expires  = ud.get("expires", 0)
+        if raw_plan != "TRIAL" and expires > now:
+            premium_users.append((uid_str, ud, raw_plan, expires))
 
     if not premium_users:
         await update.message.reply_text(
@@ -825,6 +852,7 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Build header
     header = (
         f"{line}\n"
         f"\U0001F464 L\u026a\u1d20\u1d07 P\u0280\u1d07\u1d0d\u026a\u1d1c\u1d0d U\u1d1c\u1d07\u0280\u1d1c\n"
@@ -832,13 +860,19 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"T\u1d0f\u1d1b\u1d00\u029f \u279a {len(premium_users)} U\u1d1c\u1d07\u0280\u1d1c\n"
         f"{line}\n\n"
     )
-    current = header
+
+    # Build one block per user, send in chunks
+    chunks     = [header]
+    current    = header
 
     for uid_str, ud, raw_plan, expires in premium_users:
-        name          = ud.get("name", "Unknown")
-        stored_uname  = ud.get("username", None)
+        name     = ud.get("name", "Unknown")
+        uname    = ud.get("username", None) or ud.get("name", None)
+        joined   = ud.get("joined", "N/A")
+
+        # Try to get stored username cleanly
+        stored_uname = ud.get("username", None)
         uname_display = f"@{stored_uname}" if stored_uname else "None"
-        joined        = ud.get("joined", "N/A")
 
         remaining_secs = expires - now
         remaining_days = int(remaining_secs / 86400)
@@ -859,16 +893,18 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"J\u1d0f\u026a\u0274\u1d07\u1d05  \u279a {joined}\n"
             f"E\u02e3\u1d18\u026a\u0280\u1d07\u1d04  \u279a {exp_str}\n"
             f"R\u1d07\u1d0d\u1d00\u026a\u0274\u026a\u0274\u0262 \u279a {remaining_str}\n"
-            "S\u1d1b\u1d00\u1d1b\u1d1c\u1d1c  \u279a \u2705 A\u1d04\u1d1b\u026a\u1d20\u1d07\n"
+            f"S\u1d1b\u1d00\u1d1b\u1d1c\u1d1c  \u279a \u2705 A\u1d04\u1d1b\u026a\u1d20\u1d07\n"
             f"{line}\n\n"
         )
 
+        # If adding this block would exceed limit, send current chunk and start new
         if len(current) + len(block) > MAX_MSG:
             await update.message.reply_text(current, parse_mode="HTML")
             current = block
         else:
             current += block
 
+    # Send whatever is left
     if current.strip():
         await update.message.reply_text(current, parse_mode="HTML")
 
@@ -878,6 +914,7 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
+    # FIX: &lt;&gt; not <>
     if len(context.args) < 2:
         await update.message.reply_text(
             "U\u1d1b\u1d00\u0262\u1d07: /seturl &lt;gate&gt; &lt;url&gt;\n"
@@ -910,6 +947,199 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(txt, parse_mode="HTML")
 
 
-# ── /killb **…**
+# ── /killbot / /onbot ─────────────────────────────────────────────────────────
 
-_This response is too long to display in full._
+async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data["maintenance"] = True
+    await update.message.reply_text("B\u1d0f\u1d1b \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 OFF \u2014 M\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07 \u1d0d\u1d0f\u1d05\u1d07.")
+
+
+async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data["maintenance"] = False
+    await update.message.reply_text("B\u1d0f\u1d1b \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 ON \u2014 B\u1d0f\u1d1b \u026a\u1d1c \u0274\u1d0f\u1d21 \u1d00\u1d20\u1d00\u026a\u029f\u1d00\u0299\u029f\u1d07.")
+
+
+# ── Gate toggles ──────────────────────────────────────────────────────────────
+
+async def _gate_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE, gate: str, state: bool):
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data[f"{gate}_on"] = state
+    await update.message.reply_text(f"G\u1d00\u1d1b\u1d07 [{GATE_NAMES[gate]}] \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 {'ON' if state else 'OFF'}.")
+
+async def cmd_onchk(u, c):   await _gate_toggle(u, c, "chk",  True)
+async def cmd_offchk(u, c):  await _gate_toggle(u, c, "chk",  False)
+async def cmd_onpp(u, c):    await _gate_toggle(u, c, "pp",   True)
+async def cmd_offpp(u, c):   await _gate_toggle(u, c, "pp",   False)
+async def cmd_onsh(u, c):    await _gate_toggle(u, c, "sh",   True)
+async def cmd_offsh(u, c):   await _gate_toggle(u, c, "sh",   False)
+async def cmd_onpyu(u, c):   await _gate_toggle(u, c, "pyu",  True)
+async def cmd_offpyu(u, c):  await _gate_toggle(u, c, "pyu",  False)
+async def cmd_onb3(u, c):    await _gate_toggle(u, c, "b3",   True)
+async def cmd_offb3(u, c):   await _gate_toggle(u, c, "b3",   False)
+async def cmd_onau(u, c):    await _gate_toggle(u, c, "au",   True)
+async def cmd_offau(u, c):   await _gate_toggle(u, c, "au",   False)
+async def cmd_onmss(u, c):   await _gate_toggle(u, c, "mss",  True)
+async def cmd_offmss(u, c):  await _gate_toggle(u, c, "mss",  False)
+async def cmd_onmpp2(u, c):  await _gate_toggle(u, c, "mpp2", True)
+async def cmd_offmpp2(u, c): await _gate_toggle(u, c, "mpp2", False)
+
+
+# ── Callback handler — use send_message (not edit) for BUY NOW compatibility ──
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data  = query.data
+    user  = query.from_user
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    if context.bot_data.get("maintenance", False) and user.id != OWNER_ID:
+        try:
+            await query.answer("Bot is under maintenance.", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    # Helper: always send a NEW message so it works whether the original
+    # was a text message, a photo caption, or anything else (fixes BUY NOW)
+    async def send(text: str, markup: InlineKeyboardMarkup):
+        try:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+        except Exception as ex:
+            logger.error(f"callback send [{data}]: {ex}")
+            try:
+                await query.answer(f"Error: {str(ex)[:200]}", show_alert=True)
+            except Exception:
+                pass
+
+    try:
+        if data == "bmain":
+            await send(ui_profile(user, context), kb_main())
+        elif data == "mprice":
+            await send(PLAN_TEXT, kb_price())
+        elif data == "pay10":
+            await send(
+                "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u2014 10$ (C\u1d0f\u0280\u1d07 | 7 D\u1d00y\u1d1c)\n\n" + PAYMENT_PENDING_TEXT,
+                kb_payment(),
+            )
+        elif data == "pay15":
+            await send(
+                "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u2014 15$ (E\u029f\u026a\u1d1b\u1d07 | 15 D\u1d00y\u1d1c)\n\n" + PAYMENT_PENDING_TEXT,
+                kb_payment(),
+            )
+        elif data == "pay30":
+            await send(
+                "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u2014 30$ (R\u1d0f\u1d0f\u1d1b | 30 D\u1d00y\u1d1c)\n\n" + PAYMENT_PENDING_TEXT,
+                kb_payment(),
+            )
+        elif data == "mgates":
+            await send(CHECKER_STATUS_TEXT, kb_gate_main())
+        elif data == "mauth":
+            await send(AUTH_MENU_TEXT, kb_auth_gates())
+        elif data == "iau":
+            await send(STRIPE_AUTH_TEXT, kb_back("mauth"))
+        elif data == "ib3":
+            await send(BRAINTREE_TEXT, kb_back("mauth"))
+        elif data == "mcharge":
+            await send(CHARGE_MENU_TEXT, kb_charge_gates())
+        elif data == "ichk":
+            await send(gate_info_text("STRIPE CHARGE",  "chk", 1), kb_back("mcharge"))
+        elif data == "ipp":
+            await send(gate_info_text("PAYPAL CHARGE",  "pp",  1), kb_back("mcharge"))
+        elif data == "ish":
+            await send(gate_info_text("SHOPIFY CHARGE", "sh",  1), kb_back("mcharge"))
+        elif data == "ipyu":
+            await send(gate_info_text("PAYU CHARGE",    "pyu", 1), kb_back("mcharge"))
+        elif data == "mmass":
+            await send(MASS_MENU_TEXT, kb_mass_gates())
+        elif data == "imss":
+            await send(gate_info_text("STRIPE MASS",  "mss",  1), kb_back("mmass"))
+        elif data == "impp2":
+            await send(gate_info_text("PAYPAL MASS",  "mpp2", 1), kb_back("mmass"))
+        else:
+            logger.warning(f"Unknown callback: {data}")
+    except Exception as ex:
+        logger.error(f"callback_handler error [{data}]: {ex}")
+        try:
+            await query.answer(f"Error: {str(ex)[:200]}", show_alert=True)
+        except Exception:
+            pass
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, maintenance_check, block=False))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, anti_ad_filter,    block=False))
+
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("ping",     cmd_ping))
+    app.add_handler(get_bin_handler())
+    app.add_handler(CommandHandler("plan",     cmd_plan))
+    app.add_handler(CommandHandler("rm",       cmd_rm))
+    app.add_handler(CommandHandler("chk",      cmd_chk))
+    app.add_handler(CommandHandler("pp",       cmd_pp))
+    app.add_handler(CommandHandler("sh",       cmd_sh))
+    app.add_handler(CommandHandler("pyu",      cmd_pyu))
+    app.add_handler(CommandHandler("b3",       cmd_b3))
+    app.add_handler(CommandHandler("au",       cmd_au))
+    app.add_handler(CommandHandler("mss",      cmd_mss))
+    app.add_handler(CommandHandler("mpp2",     cmd_mpp2))
+    app.add_handler(CommandHandler("info",     cmd_info))
+    app.add_handler(CommandHandler("allcm",    cmd_allcm))
+    app.add_handler(CommandHandler("gen",      cmd_gen))
+    app.add_handler(CommandHandler("key10",    cmd_key10))
+    app.add_handler(CommandHandler("key20",    cmd_key20))
+    app.add_handler(CommandHandler("key30",    cmd_key30))
+    app.add_handler(CommandHandler("oneday",   cmd_oneday))
+    app.add_handler(CommandHandler("threeday", cmd_threeday))
+    app.add_handler(CommandHandler("sub",      cmd_sub))
+    app.add_handler(CommandHandler("resub",    cmd_resub))
+    app.add_handler(CommandHandler("allplans", cmd_allplans))
+    app.add_handler(CommandHandler("seturl",   cmd_seturl))
+    app.add_handler(CommandHandler("geturl",   cmd_geturl))
+    app.add_handler(CommandHandler("killbot",  cmd_killbot))
+    app.add_handler(CommandHandler("onbot",    cmd_onbot))
+
+    for cmd, func in [
+        ("onchk",  cmd_onchk),  ("offchk",  cmd_offchk),
+        ("onpp",   cmd_onpp),   ("offpp",   cmd_offpp),
+        ("onsh",   cmd_onsh),   ("offsh",   cmd_offsh),
+        ("onpyu",  cmd_onpyu),  ("offpyu",  cmd_offpyu),
+        ("onb3",   cmd_onb3),   ("offb3",   cmd_offb3),
+        ("onau",   cmd_onau),   ("offau",   cmd_offau),
+        ("onmss",  cmd_onmss),  ("offmss",  cmd_offmss),
+        ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2),
+    ]:
+        app.add_handler(CommandHandler(cmd, func))
+
+    app.add_handler(CallbackQueryHandler(callback_handler))
+
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if isinstance(context.error, Conflict):
+            return
+        logger.error(f"Exception: {context.error}")
+
+    app.add_error_handler(error_handler)
+    print("🦇 Online!")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
