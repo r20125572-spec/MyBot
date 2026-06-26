@@ -27,9 +27,6 @@ GROUP_LINK         = "https://t.me/batcardchkGroup"
 SUPPORT_LINK       = "https://t.me/cardchkSupport"
 BOT_LINK           = "https://t.me/Batmancardchk_bot"
 
-# ── CHANGE THIS to your real GitHub raw image URL ────────────────────────────
-WELCOME_IMAGE_URL = "https://raw.githubusercontent.com/username/repo/main/batman.jpg"
-
 GATE_NAMES = {
     "chk":  "Stripe Charge",
     "pp":   "PayPal Charge",
@@ -72,6 +69,28 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+# ── Bold Unicode helper for button text ──────────────────────────────────────
+
+def B(text: str) -> str:
+    """Convert ASCII text to Unicode bold dark characters for buttons."""
+    bold_map = {
+        'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘', 'F': '𝗙',
+        'G': '𝗚', 'H': '𝗛', 'I': '𝗜', 'J': '𝗝', 'K': '𝗞', 'L': '𝗟',
+        'M': '𝗠', 'N': '𝗡', 'O': '𝗢', 'P': '𝗣', 'Q': '𝗤', 'R': '𝗥',
+        'S': '𝗦', 'T': '𝗧', 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫',
+        'Y': '𝗬', 'Z': '𝗭',
+        'a': '𝗮', 'b': '𝗯', 'c': '𝗰', 'd': '𝗱', 'e': '𝗲', 'f': '𝗳',
+        'g': '𝗴', 'h': '𝗵', 'i': '𝗶', 'j': '𝗷', 'k': '𝗸', 'l': '𝗹',
+        'm': '𝗺', 'n': '𝗻', 'o': '𝗼', 'p': '𝗽', 'q': '𝗾', 'r': '𝗿',
+        's': '𝘀', 't': '𝘁', 'u': '𝘂', 'v': '𝘃', 'w': '𝘄', 'x': '𝘅',
+        'y': '𝘆', 'z': '𝘇',
+        '0': '𝟬', '1': '𝟭', '2': '𝟮', '3': '𝟯', '4': '𝟰',
+        '5': '𝟱', '6': '𝟲', '7': '𝟳', '8': '𝟴', '9': '𝟵',
+    }
+    return "".join(bold_map.get(ch, ch) for ch in text)
+
 
 # ── Unicode small-caps text blocks ──────────────────────────────────────────
 
@@ -145,8 +164,8 @@ PAYMENT_PENDING_TEXT = (
     "\u2501" * 20 + "\n"
     "P\u1d00y\u1d0d\u1d07\u0274\u1d1b A\u1d05\u1d05\u0280\u1d07\u1d1b\u1d04\n"
     "\u2501" * 20 + "\n\n"
-    "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d00\u1d05\u1d05\u0280\u1d07\u1d1b\u1d04 \u1d21\u026a\u029f\u029f \u0299\u1d07 \u1d00\u1d05\u1d05\u1d07\u1d05 \u1d1c\u029c\u1d0f\u0280\u1d1b\u029f\u029f\u029f y.\n\n"
-    "F\u1d0f\u0280 \u1d18\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d04\u1d0f\u0274\u1d1b\u1d00\u1d04\u1d1b \u1d1b\u029c\u0280\u1d0f\u1d1c\u0262\u029c \u1d04\u1d1c\u1d18\u1d18\u1d0f\u0280\u1d1b.\n\n"
+    "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d00\u1d05\u1d05\u0280\u1d07\u1d1b\u1d04 \u1d21\u026a\u029f\u029f \u0299\u1d07 \u1d00\u1d05\u1d05\u1d07\u1d05 \u1d1c\u029f\u1d0f\u0280\u1d1b\u029f\u029f\u029f y.\n\n"
+    "F\u1d0f\u0280 \u1d18\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d04\u1d0f\u0274\u1d1b\u1d00\u1d04\u1d1b \u1d1b\u0280\u1d0f\u1d1c\u0262\u029c \u1d04\u1d1c\u1d18\u1d18\u1d0f\u0280\u1d1b.\n\n"
     "\u2501" * 20
 )
 
@@ -292,116 +311,96 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     return None
 
 
-async def send_welcome_photo(
-    update: Update, caption: str, markup: InlineKeyboardMarkup
-) -> None:
-    try:
-        await update.message.reply_photo(
-            photo=WELCOME_IMAGE_URL,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=markup,
-        )
-    except Exception as e:
-        logger.warning(f"send_welcome_photo (url): {e}")
-        await update.message.reply_text(
-            caption,
-            parse_mode="HTML",
-            reply_markup=markup,
-            disable_web_page_preview=True,
-        )
-
-
-# ── Keyboard helpers ─────────────────────────────────────────────────────────
+# ── Keyboard helpers (all bold dark) ─────────────────────────────────────────
 
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("CHECKER", callback_data="mgates"),
-            InlineKeyboardButton("BUY NOW", callback_data="mprice"),
+            InlineKeyboardButton(B("CHECKER"), callback_data="mgates"),
+            InlineKeyboardButton(B("BUY NOW"), callback_data="mprice"),
         ],
         [
-            InlineKeyboardButton("UPDATES", url=CHANNEL_LINK),
-            InlineKeyboardButton("GROUP",   url=GROUP_LINK),
+            InlineKeyboardButton(B("UPDATES"), url=CHANNEL_LINK),
+            InlineKeyboardButton(B("GROUP"),   url=GROUP_LINK),
         ],
-        [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)],
+        [InlineKeyboardButton(B("SUPPORT"), url=SUPPORT_LINK)],
     ])
 
 
 def kb_force() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("JOIN CHANNEL", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("JOIN GROUP",   url=GROUP_LINK)],
-        [InlineKeyboardButton("VERIFY",       callback_data="verify_join")],
+        [InlineKeyboardButton(B("JOIN CHANNEL"), url=CHANNEL_LINK)],
+        [InlineKeyboardButton(B("JOIN GROUP"),   url=GROUP_LINK)],
+        [InlineKeyboardButton(B("VERIFY"),       callback_data="verify_join")],
     ])
 
 
 def kb_back(cb: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("BACK", callback_data=cb)]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(B("BACK"), callback_data=cb)]])
 
 
 def kb_bin_result() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Batcardchk", url=BOT_LINK)]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(B("Batcardchk"), url=BOT_LINK)]])
 
 
 def kb_price() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("10$PAY", callback_data="pay10"),
-            InlineKeyboardButton("15$PAY", callback_data="pay15"),
-            InlineKeyboardButton("30$PAY", callback_data="pay30"),
+            InlineKeyboardButton(B("10$PAY"), callback_data="pay10"),
+            InlineKeyboardButton(B("15$PAY"), callback_data="pay15"),
+            InlineKeyboardButton(B("30$PAY"), callback_data="pay30"),
         ],
-        [InlineKeyboardButton("BACK", callback_data="bmain")],
+        [InlineKeyboardButton(B("BACK"), callback_data="bmain")],
     ])
 
 
 def kb_payment() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("SUPPORT", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("BACK",    callback_data="mprice")],
+        [InlineKeyboardButton(B("SUPPORT"), url=SUPPORT_LINK)],
+        [InlineKeyboardButton(B("BACK"),    callback_data="mprice")],
     ])
 
 
 def kb_gate_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("AUTH",   callback_data="mauth"),
-            InlineKeyboardButton("CHARGE", callback_data="mcharge"),
-            InlineKeyboardButton("MASS",   callback_data="mmass"),
+            InlineKeyboardButton(B("AUTH"),   callback_data="mauth"),
+            InlineKeyboardButton(B("CHARGE"), callback_data="mcharge"),
+            InlineKeyboardButton(B("MASS"),   callback_data="mmass"),
         ],
-        [InlineKeyboardButton("BACK", callback_data="bmain")],
+        [InlineKeyboardButton(B("BACK"), callback_data="bmain")],
     ])
 
 
 def kb_auth_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("STRIPE",    callback_data="iau"),
-            InlineKeyboardButton("BRAINTREE", callback_data="ib3"),
+            InlineKeyboardButton(B("STRIPE"),    callback_data="iau"),
+            InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3"),
         ],
-        [InlineKeyboardButton("BACK", callback_data="mgates")],
+        [InlineKeyboardButton(B("BACK"), callback_data="mgates")],
     ])
 
 
 def kb_charge_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("STRIPE",  callback_data="ichk"),
-            InlineKeyboardButton("PAYPAL",  callback_data="ipp"),
+            InlineKeyboardButton(B("STRIPE"),  callback_data="ichk"),
+            InlineKeyboardButton(B("PAYPAL"),  callback_data="ipp"),
         ],
         [
-            InlineKeyboardButton("SHOPIFY", callback_data="ish"),
-            InlineKeyboardButton("PAYU",    callback_data="ipyu"),
+            InlineKeyboardButton(B("SHOPIFY"), callback_data="ish"),
+            InlineKeyboardButton(B("PAYU"),    callback_data="ipyu"),
         ],
-        [InlineKeyboardButton("BACK", callback_data="mgates")],
+        [InlineKeyboardButton(B("BACK"), callback_data="mgates")],
     ])
 
 
 def kb_mass_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("STRIPE MASS", callback_data="imss")],
-        [InlineKeyboardButton("PAYPAL MASS", callback_data="impp2")],
-        [InlineKeyboardButton("BACK",        callback_data="mgates")],
+        [InlineKeyboardButton(B("STRIPE MASS"), callback_data="imss")],
+        [InlineKeyboardButton(B("PAYPAL MASS"), callback_data="impp2")],
+        [InlineKeyboardButton(B("BACK"),        callback_data="mgates")],
     ])
 
 
@@ -432,7 +431,7 @@ async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if update.message:
                 await update.message.reply_text(
-                    "B\u1d0f\u1d1b \u026a\u1d1c \u1d1c\u1d1c\u029f\u026a\u1d07\u0274\u1d1b\u029f\u029f y \u1d1c\u0274\u1d05\u1d07\u0280 \u1d0d\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07."
+                    "B\u1d0f\u1d1b \u026a\u0274 \u1d1c\u1d1c\u029f\u026a\u1d07\u0274\u1d1b\u029f\u029f y \u1d1c\u0274\u1d05\u1d07\u0280 \u1d0d\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07."
                 )
         except Exception:
             pass
@@ -578,7 +577,7 @@ async def process_gate(
             disable_web_page_preview=True,
         )
     except aiohttp.ServerTimeoutError:
-        await msg.edit_text("T\u026a\u1d0d\u1d07\u1d0f\u1d1c\u1d1b \u2014 G\u1d00\u1d1b\u1d07 \u1d05\u026a\u1d05 \u0274\u1d0f\u1d1c \u0280\u1d07\u1d1c\u1d18\u1d0f\u0274\u1d05.")
+        await msg.edit_text("T\u026a\u1d0d\u1d07\u1d0f\u1d1c\u1d1b \u2014 G\u1d00\u1d1b\u1d07 \u1d05\u026a\u1d05 \u0274\u1d0f\u1d1c \u0280\u1d07\u1d04\u1d18\u1d0f\u1d05.")
     except Exception as e:
         logger.error(f"process_gate [{gate_key}]: {e}")
         await msg.edit_text(f"E\u0280\u0280\u1d0f\u0280: <code>{str(e)[:120]}</code>", parse_mode="HTML")
@@ -594,7 +593,7 @@ async def cmd_mss(u, c):  await process_gate(u, c, "mss",  "Stripe Mass")
 async def cmd_mpp2(u, c): await process_gate(u, c, "mpp2", "PayPal Mass")
 
 
-# ── /start ───────────────────────────────────────────────────────────────────
+# ── /start (no image, text only) ─────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -602,9 +601,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud.setdefault("joined", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     ud.setdefault("name",   user.first_name or "User")
     if await is_joined(user.id, context):
-        await send_welcome_photo(update, ui_profile(user, context), kb_main())
+        await update.message.reply_text(
+            ui_profile(user, context),
+            parse_mode="HTML",
+            reply_markup=kb_main(),
+            disable_web_page_preview=True,
+        )
     else:
-        await send_welcome_photo(update, FORCED_JOIN_CAPTION, kb_force())
+        await update.message.reply_text(
+            FORCED_JOIN_CAPTION,
+            parse_mode="HTML",
+            reply_markup=kb_force(),
+            disable_web_page_preview=True,
+        )
 
 
 # ── /ping ────────────────────────────────────────────────────────────────────
@@ -798,7 +807,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     txt = (
         f"{line}\n"
-        "👤 USER INFO\n"
+        "\U0001F464 USER INFO\n"
         f"{line}\n\n"
         f"Name       \u279a {target_name}\n"
         f"Username   \u279a {username_display}\n"
@@ -981,6 +990,353 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not uid:
         await update.message.reply_text("U\u1d1b\u026a\u029f \u0274\u1d0f\u1d1c \u1d0a\u1d0f\u1d1c\u0274\u1d05.")
         return
-    ud = get_user_data(uid, context) **…**
+    ud = get_user_data(uid, context)
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    expires  = ud.get("expires", 0)
+    now      = time.time()
+    if raw_plan != "TRIAL" and expires > now:
+        remaining = int((expires - now) / 86400)
+        days = remaining
+        plan = raw_plan.lower()
+    else:
+        await update.message.reply_text("U\u1d1b\u026a\u029f \u0262\u1d00\u1d1b \u0274\u1d0f \u1d00\u1d04\u1d1b\u026a\u1d20\u1d07 \u1d18\u029f\u1d00\u0274.")
+        return
+    await _grant(uid, plan, days, update, context)
 
-_This response is too long to display in full._
+
+# ── /allplans ────────────────────────────────────────────────────────────────
+
+async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    all_users = context.bot_data.get("user_data", {})
+    now       = time.time()
+    line      = "\u2501" * 18
+    if not all_users:
+        await update.message.reply_text("N\u1d0f \u1d1c\u1d1b\u1d07\u0280\u1d05 \u0262\u1d07\u1d07\u0274.")
+        return
+    txt = f"ALL USER PLANS\n{line}\nTotal: {len(all_users)}\n{line}\n\n"
+    for uid_str, ud in all_users.items():
+        raw_plan = ud.get("plan", "TRIAL").upper()
+        expires  = ud.get("expires", 0)
+        name     = ud.get("name", "Unknown")
+        if raw_plan != "TRIAL" and expires > now:
+            remaining = int((expires - now) / 86400)
+            txt += f"[{uid_str}] {name} \u279a {get_styled_plan(raw_plan)} ({remaining}d left)\n"
+        else:
+            txt += f"[{uid_str}] {name} \u279a TRIAL\n"
+    txt += f"\n{line}"
+    await update.message.reply_text(txt, parse_mode="HTML")
+
+
+# ── /seturl / /geturl ────────────────────────────────────────────────────────
+
+async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "U\u1d1b\u1d00\u0262\u1d07: /seturl &lt;gate&gt; &lt;url&gt;\nGates: chk, pp, sh, pyu, b3, au, mss, mpp2",
+            parse_mode="HTML",
+        )
+        return
+    gate = context.args[0].lower().strip()
+    url  = context.args[1].strip()
+    if gate not in GATE_NAMES:
+        await update.message.reply_text(f"I\u0274\u1d20\u1d00\u029f\u026a\u1d05 \u0262\u1d00\u1d1b\u1d07: {gate}")
+        return
+    context.bot_data[f"gate_url_{gate}"] = url
+    await update.message.reply_text(f"G\u1d00\u1d1b\u1d07 [{GATE_NAMES[gate]}] URL \u1d1c\u1d05\u1d05\u1d00\u1d1b\u1d07\u1d05:\n<code>{url}</code>", parse_mode="HTML")
+
+
+async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    line = "\u2501" * 18
+    txt  = f"GATE URLs\n{line}\n\n"
+    for gate, name in GATE_NAMES.items():
+        url = context.bot_data.get(f"gate_url_{gate}") or GATE_URLS.get(gate, "NOT SET")
+        status = "ON" if context.bot_data.get(f"{gate}_on", True) else "OFF"
+        txt += f"{name} [{gate}]:\n  URL: <code>{url}</code>\n  Status: {status}\n\n"
+    txt += line
+    await update.message.reply_text(txt, parse_mode="HTML")
+
+
+# ── Gate toggle commands ─────────────────────────────────────────────────────
+
+async def _gate_toggle(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, gate: str, state: bool
+):
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data[f"{gate}_on"] = state
+    s = "ON" if state else "OFF"
+    await update.message.reply_text(f"G\u1d00\u1d1b\u1d07 [{GATE_NAMES[gate]}] \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 {s}.")
+
+
+async def cmd_onchk(u, c):  await _gate_toggle(u, c, "chk",  True)
+async def cmd_offchk(u, c): await _gate_toggle(u, c, "chk",  False)
+async def cmd_onpp(u, c):   await _gate_toggle(u, c, "pp",   True)
+async def cmd_offpp(u, c):  await _gate_toggle(u, c, "pp",   False)
+async def cmd_onsh(u, c):   await _gate_toggle(u, c, "sh",   True)
+async def cmd_offsh(u, c):  await _gate_toggle(u, c, "sh",   False)
+async def cmd_onpyu(u, c):  await _gate_toggle(u, c, "pyu",  True)
+async def cmd_offpyu(u, c): await _gate_toggle(u, c, "pyu",  False)
+async def cmd_onb3(u, c):   await _gate_toggle(u, c, "b3",   True)
+async def cmd_offb3(u, c):  await _gate_toggle(u, c, "b3",   False)
+async def cmd_onau(u, c):   await _gate_toggle(u, c, "au",   True)
+async def cmd_offau(u, c):  await _gate_toggle(u, c, "au",   False)
+async def cmd_onmss(u, c):  await _gate_toggle(u, c, "mss",  True)
+async def cmd_offmss(u, c): await _gate_toggle(u, c, "mss",  False)
+async def cmd_onmpp2(u, c): await _gate_toggle(u, c, "mpp2", True)
+async def cmd_offmpp2(u, c):await _gate_toggle(u, c, "mpp2", False)
+
+
+# ── /killbot / /onbot ────────────────────────────────────────────────────────
+
+async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data["maintenance"] = True
+    await update.message.reply_text("B\u1d0f\u1d1b \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 OFF \u2014 M\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07 \u1d0d\u1d0f\u1d05\u1d07.")
+
+
+async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data["maintenance"] = False
+    await update.message.reply_text("B\u1d0f\u1d1b \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 ON \u2014 B\u1d0f\u1d1b \u026a\u1d1c \u0274\u1d0f\u1d21 \u1d00\u1d20\u1d00\u026a\u029f\u1d00\u0299\u029f\u1d07.")
+
+
+# ── Callback query handler ───────────────────────────────────────────────────
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+    user  = query.from_user
+    uid   = user.id
+
+    # ── Force join verify ──
+    if data == "verify_join":
+        if await is_joined(uid, context):
+            ud = get_user_data(uid, context)
+            ud.setdefault("joined", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            ud.setdefault("name",   user.first_name or "User")
+            await query.edit_message_text(
+                ui_profile(user, context),
+                parse_mode="HTML",
+                reply_markup=kb_main(),
+                disable_web_page_preview=True,
+            )
+        else:
+            await query.answer("Y\u1d0f\u1d1c \u0262\u1d00\u1d1b\u1d07 \u0280\u1d07q\u1d1c\u026a\u0280\u1d07\u1d05 \u1d20\u1d0f\u026a\u0274 \u1d04\u029c\u1d00\u0274\u0274\u1d07\u029f\u1d05!", show_alert=True)
+
+    # ── Main menu ──
+    elif data == "bmain":
+        await query.edit_message_text(
+            ui_profile(user, context),
+            parse_mode="HTML",
+            reply_markup=kb_main(),
+            disable_web_page_preview=True,
+        )
+
+    # ── Price / plan ──
+    elif data == "mprice":
+        await query.edit_message_text(
+            PLAN_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_price(),
+            disable_web_page_preview=True,
+        )
+    elif data == "pay10":
+        await query.edit_message_text(
+            PAYMENT_PENDING_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_payment(),
+            disable_web_page_preview=True,
+        )
+    elif data == "pay15":
+        await query.edit_message_text(
+            PAYMENT_PENDING_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_payment(),
+            disable_web_page_preview=True,
+        )
+    elif data == "pay30":
+        await query.edit_message_text(
+            PAYMENT_PENDING_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_payment(),
+            disable_web_page_preview=True,
+        )
+
+    # ── Gate menu ──
+    elif data == "mgates":
+        await query.edit_message_text(
+            CHECKER_STATUS_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_gate_main(),
+            disable_web_page_preview=True,
+        )
+
+    # ── Auth gates ──
+    elif data == "mauth":
+        await query.edit_message_text(
+            AUTH_MENU_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_auth_gates(),
+            disable_web_page_preview=True,
+        )
+    elif data == "iau":
+        await query.edit_message_text(
+            STRIPE_AUTH_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_back("mauth"),
+            disable_web_page_preview=True,
+        )
+    elif data == "ib3":
+        await query.edit_message_text(
+            BRAINTREE_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_back("mauth"),
+            disable_web_page_preview=True,
+        )
+
+    # ── Charge gates ──
+    elif data == "mcharge":
+        await query.edit_message_text(
+            CHARGE_MENU_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_charge_gates(),
+            disable_web_page_preview=True,
+        )
+    elif data == "ichk":
+        await query.edit_message_text(
+            gate_info_text("STRIPE CHARGE", "chk", 1),
+            parse_mode="HTML",
+            reply_markup=kb_back("mcharge"),
+            disable_web_page_preview=True,
+        )
+    elif data == "ipp":
+        await query.edit_message_text(
+            gate_info_text("PAYPAL CHARGE", "pp", 1),
+            parse_mode="HTML",
+            reply_markup=kb_back("mcharge"),
+            disable_web_page_preview=True,
+        )
+    elif data == "ish":
+        await query.edit_message_text(
+            gate_info_text("SHOPIFY CHARGE", "sh", 1),
+            parse_mode="HTML",
+            reply_markup=kb_back("mcharge"),
+            disable_web_page_preview=True,
+        )
+    elif data == "ipyu":
+        await query.edit_message_text(
+            gate_info_text("PAYU CHARGE", "pyu", 1),
+            parse_mode="HTML",
+            reply_markup=kb_back("mcharge"),
+            disable_web_page_preview=True,
+        )
+
+    # ── Mass gates ──
+    elif data == "mmass":
+        await query.edit_message_text(
+            MASS_MENU_TEXT,
+            parse_mode="HTML",
+            reply_markup=kb_mass_gates(),
+            disable_web_page_preview=True,
+        )
+    elif data == "imss":
+        await query.edit_message_text(
+            gate_info_text("STRIPE MASS", "mss", 1),
+            parse_mode="HTML",
+            reply_markup=kb_back("mmass"),
+            disable_web_page_preview=True,
+        )
+    elif data == "impp2":
+        await query.edit_message_text(
+            gate_info_text("PAYPAL MASS", "mpp2", 1),
+            parse_mode="HTML",
+            reply_markup=kb_back("mmass"),
+            disable_web_page_preview=True,
+        )
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Middleware
+    app.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND, maintenance_check, block=False
+    ))
+    app.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND, anti_ad_filter, block=False
+    ))
+
+    # User commands
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("ping",  cmd_ping))
+    app.add_handler(CommandHandler("bin",   cmd_bin))
+    app.add_handler(CommandHandler("plan",  cmd_plan))
+    app.add_handler(CommandHandler("rm",    cmd_rm))
+
+    # Gate commands
+    app.add_handler(CommandHandler("chk",  cmd_chk))
+    app.add_handler(CommandHandler("pp",   cmd_pp))
+    app.add_handler(CommandHandler("sh",   cmd_sh))
+    app.add_handler(CommandHandler("pyu",  cmd_pyu))
+    app.add_handler(CommandHandler("b3",   cmd_b3))
+    app.add_handler(CommandHandler("au",   cmd_au))
+    app.add_handler(CommandHandler("mss",  cmd_mss))
+    app.add_handler(CommandHandler("mpp2", cmd_mpp2))
+
+    # Owner commands
+    app.add_handler(CommandHandler("info",      cmd_info))
+    app.add_handler(CommandHandler("allcm",     cmd_allcm))
+    app.add_handler(CommandHandler("gen",       cmd_gen))
+    app.add_handler(CommandHandler("key10",     cmd_key10))
+    app.add_handler(CommandHandler("key20",     cmd_key20))
+    app.add_handler(CommandHandler("key30",     cmd_key30))
+    app.add_handler(CommandHandler("sub",       cmd_sub))
+    app.add_handler(CommandHandler("resub",     cmd_resub))
+    app.add_handler(CommandHandler("allplans",  cmd_allplans))
+    app.add_handler(CommandHandler("oneday",    cmd_oneday))
+    app.add_handler(CommandHandler("threeday",  cmd_threeday))
+    app.add_handler(CommandHandler("seturl",    cmd_seturl))
+    app.add_handler(CommandHandler("geturl",    cmd_geturl))
+    app.add_handler(CommandHandler("onchk",     cmd_onchk))
+    app.add_handler(CommandHandler("offchk",    cmd_offchk))
+    app.add_handler(CommandHandler("onpp",      cmd_onpp))
+    app.add_handler(CommandHandler("offpp",     cmd_offpp))
+    app.add_handler(CommandHandler("onsh",      cmd_onsh))
+    app.add_handler(CommandHandler("offsh",     cmd_offsh))
+    app.add_handler(CommandHandler("onpyu",     cmd_onpyu))
+    app.add_handler(CommandHandler("offpyu",    cmd_offpyu))
+    app.add_handler(CommandHandler("onb3",      cmd_onb3))
+    app.add_handler(CommandHandler("offb3",     cmd_offb3))
+    app.add_handler(CommandHandler("onau",      cmd_onau))
+    app.add_handler(CommandHandler("offau",     cmd_offau))
+    app.add_handler(CommandHandler("onmss",     cmd_onmss))
+    app.add_handler(CommandHandler("offmss",    cmd_offmss))
+    app.add_handler(CommandHandler("onmpp2",    cmd_onmpp2))
+    app.add_handler(CommandHandler("offmpp2",   cmd_offmpp2))
+    app.add_handler(CommandHandler("killbot",   cmd_killbot))
+    app.add_handler(CommandHandler("onbot",     cmd_onbot))
+
+    # Callback queries
+    app.add_handler(CallbackQueryHandler(callback_handler))
+
+    # Start bot
+    logger.info("Batman Card Checker Bot starting...")
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Conflict:
+        logger.error("Bot token conflict — another instance is running.")
+
+
+if __name__ == "__main__":
+    main()
