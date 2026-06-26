@@ -26,7 +26,9 @@ CHANNEL_LINK       = "https://t.me/Batcardchk"
 GROUP_LINK         = "https://t.me/batcardchkGroup"
 SUPPORT_LINK       = "https://t.me/cardchkSupport"
 BOT_LINK           = "https://t.me/Batmancardchk_bot"
-WELCOME_IMAGE_PATH = "/app/batman.jpg"
+
+# ── CHANGE THIS to your real GitHub raw image URL ────────────────────────────
+WELCOME_IMAGE_URL = "https://raw.githubusercontent.com/username/repo/main/batman.jpg"
 
 GATE_NAMES = {
     "chk":  "Stripe Charge",
@@ -75,9 +77,9 @@ logger = logging.getLogger(__name__)
 
 CHECKER_STATUS_TEXT = (
     "\U0001d402\U0001d41a\U0001d42d\U0001d41e\U0001d42c \U0001d412\U0001d42d\U0001d41a\U0001d42d\U0001d42e\U0001d42c:\n"
-    "A\u1d1c\u1d1b\u029c G\u1d00\u1d1b\u1d07\u1d04   \u279a 2\n"
-    "M\u1d00\u1d1bꜱ G\u1d00\u1d1b\u1d07\u1d04  \u279a 2\n"
-    "C\u029c\u1d00\u0280\u0262\u1d07 G\u1d00\u1d1b\u1d07\u1d04 \u279a 4\n"
+    "A\u1d1c\u1d1b\u029c G\u1d00\u1d1b\u1d07   \u279a 2\n"
+    "M\u1d00\u1d1b\u1d1c G\u1d00\u1d1b\u1d07  \u279a 2\n"
+    "C\u029c\u1d00\u0280\u0262\u1d07 G\u1d00\u1d1b\u1d07 \u279a 4\n"
     "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "S\u1d07\u029f\u1d07\u1d04\u1d1b \u1d00 G\u1d00\u1d1b\u1d07 \u279a C\u1d00\u1d1b\u1d07\u0262\u1d0f\u0280y"
 )
@@ -119,43 +121,45 @@ MASS_MENU_TEXT = (
 )
 
 PLAN_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501" * 20 + "\n"
     "B\u1d00\u1d1b\u1d0d\u1d00\u0274 P\u0280\u1d07\u1d0d\u026a\u1d1c\u1d0d P\u029f\u1d00\u0274\u1d04\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    "\u2501" * 20 + "\n\n"
     "A\u1d04\u1d04\u1d07\u1d1b\u1d04 \u279a C\u1d0f\u0280\u1d07 \U0001F380\n"
     "S\u1d18\u1d00\u0274   \u279a [7 D\u1d00y\u1d1c]\n"
     "C\u0280\u1d07\u1d05\u026a\u1d1b\u1d04 \u279a \u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u026a\u1d1b\u1d07\u1d05\n"
     "P\u0280\u026a\u1d04\u1d07  \u279a 10$\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501" * 16 + "\n"
     "A\u1d04\u1d04\u1d07\u1d1b\u1d04 \u279a E\u029f\u026a\u1d1b\u1d07 \u2b50\ufe0f\n"
     "S\u1d18\u1d00\u0274   \u279a [15 D\u1d00y\u1d1c]\n"
     "C\u0280\u1d07\u1d05\u026a\u1d1b\u1d04 \u279a \u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u026a\u1d1b\u1d07\u1d05\n"
     "P\u0280\u026a\u1d04\u1d07  \u279a 15$\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501" * 16 + "\n"
     "A\u1d04\u1d04\u1d07\u1d1b\u1d04 \u279a R\u1d0f\u1d0f\u1d1b \U0001F451\n"
     "S\u1d18\u1d00\u0274   \u279a [30 D\u1d00y\u1d1c]\n"
     "C\u0280\u1d07\u1d05\u026a\u1d1b\u1d04 \u279a \u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u026a\u1d1b\u1d07\u1d05\n"
     "P\u0280\u026a\u1d04\u1d07  \u279a 30$\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501" * 20
 )
 
 PAYMENT_PENDING_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501" * 20 + "\n"
     "P\u1d00y\u1d0d\u1d07\u0274\u1d1b A\u1d05\u1d05\u0280\u1d07\u1d1b\u1d04\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
-    "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d00\u1d05\u1d05\u0280\u1d07\u1d1b\u1d04 \u1d21\u026a\u029f\u029f \u0299\u1d07 \u1d00\u1d05\u1d05\u1d07\u1d05 \u1d1b\u1d07\u1d00y.\n\n"
+    "\u2501" * 20 + "\n\n"
+    "P\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d00\u1d05\u1d05\u0280\u1d07\u1d1b\u1d04 \u1d21\u026a\u029f\u029f \u0299\u1d07 \u1d00\u1d05\u1d05\u1d07\u1d05 \u1d1c\u029c\u1d0f\u0280\u1d1b\u029f\u029f\u029f y.\n\n"
     "F\u1d0f\u0280 \u1d18\u1d00y\u1d0d\u1d07\u0274\u1d1b \u1d04\u1d0f\u0274\u1d1b\u1d00\u1d04\u1d1b \u1d1b\u029c\u0280\u1d0f\u1d1c\u0262\u029c \u1d04\u1d1c\u1d18\u1d18\u1d0f\u0280\u1d1b.\n\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501" * 20
 )
 
 FORCED_JOIN_CAPTION = (
     "BATMAN CARD CHECKER\n\n"
     "A\u1d04\u1d04\u1d07\u1d1b\u1d04 R\u1d07q\u1d1c\u026a\u0280\u1d07\u1d05\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-    "J\u1d0f\u026a\u0274 \u1d0f\u1d1c\u0280 \u1d04\u029c\u1d00\u0274\u0274\u1d07\u029f \u1d00\u0274\u1d05 \u0262\u0280\u1d0f\u1d1c\u1d18 \u1d1b\u1d0f \u1d1c\u0274\u029f\u1d0f\u1d04\u1d04 \u1d1b\u029c\u1d07 \u0299\u1d0f\u1d1b.\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501" * 20 + "\n"
+    "J\u1d0f\u026a\u0274 \u1d0f\u1d1c\u0280 \u1d04\u029c\u1d00\u0274\u0274\u1d07\u029f \u1d00\u0274\u1d05 \u0262\u0280\u1d0f\u1d1c\u1d18 \u1d1b\u1d0f \u1d1c\u1d07 \u1d1b\u029c\u1d07 \u0299\u1d0f\u1d1c.\n"
+    "\u2501" * 20
 )
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_styled_plan(raw_plan: str) -> str:
     p = raw_plan.upper()
@@ -174,10 +178,10 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
         context.bot_data["user_data"] = {}
     if uid not in context.bot_data["user_data"]:
         context.bot_data["user_data"][uid] = {
-            "name": "User",
-            "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "name":    "User",
+            "joined":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "credits": 150,
-            "plan": "TRIAL",
+            "plan":    "TRIAL",
             "expires": 0,
         }
     return context.bot_data["user_data"][uid]
@@ -192,17 +196,19 @@ def gen_receipt() -> str:
 
 
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
-    uname = user.username or "None"
-    ud = get_user_data(user.id, context)
+    ud       = get_user_data(user.id, context)
     raw_plan = ud.get("plan", "TRIAL").upper()
-    expires = ud.get("expires", 0)
-    now = time.time()
+    expires  = ud.get("expires", 0)
+    now      = time.time()
     if raw_plan != "TRIAL" and expires <= now:
-        raw_plan = "TRIAL"
-        ud["plan"] = "TRIAL"
+        raw_plan      = "TRIAL"
+        ud["plan"]    = "TRIAL"
         ud["expires"] = 0
+        expires       = 0
     is_premium = raw_plan != "TRIAL"
-    credits = "\u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u1d07\u1d05" if is_premium else f"{ud.get('credits', 150)}/150"
+    credits    = "\u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u1d07\u1d05" if is_premium else f"{ud.get('credits', 150)}/150"
+    uname_raw  = user.username
+    uname      = f"@{uname_raw}" if uname_raw else "None"
     lines = [
         f"U\u1d1b\u026a\u029f    \u279a {uname}",
         f"U\u1d1b\u026a\u029f ID \u279a <code>{user.id}</code>",
@@ -210,14 +216,14 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"C\u0280\u1d07\u1d05\u026a\u1d1b\u1d04 \u279a {credits}",
     ]
     if is_premium and expires > now:
-        exp_date = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
-        remaining = int((expires - now) / 86400)
-        remaining_hrs = int(((expires - now) % 86400) / 3600)
+        exp_date    = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+        remaining_d = int((expires - now) / 86400)
+        remaining_h = int(((expires - now) % 86400) / 3600)
         lines.append(f"E\u02e3\u1d18\u026a\u0280\u1d07\u1d04  \u279a {exp_date}")
-        if remaining > 0:
-            lines.append(f"R\u1d07\u1d0d\u1d00\u026a\u0274\u026a\u0274\u0262 \u279a {remaining}d {remaining_hrs}h")
+        if remaining_d > 0:
+            lines.append(f"R\u1d07\u1d0d\u1d00\u026a\u0274\u026a\u0274\u0262 \u279a {remaining_d}d {remaining_h}h")
         else:
-            lines.append(f"R\u1d07\u1d0d\u1d00\u026a\u0274\u026a\u0274\u0262 \u279a {remaining_hrs}h")
+            lines.append(f"R\u1d07\u1d0d\u1d00\u026a\u0274\u026a\u0274\u0262 \u279a {remaining_h}h")
     lines.append(f"J\u1d0f\u026a\u0274\u1d07\u1d05  \u279a {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
     lines.append(f"D\u1d07\u1d20    \u279a <a href='{DEV_LINK}'>Batman</a>")
     return "\n".join(lines)
@@ -226,30 +232,32 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
 async def send_activation_msg(
     user_id: int, plan: str, days: int, context: ContextTypes.DEFAULT_TYPE
 ) -> str:
-    receipt = gen_receipt()
-    name, username = "Unknown", "None"
+    receipt  = gen_receipt()
+    name     = "Unknown"
+    username = None
     try:
-        chat = await context.bot.get_chat(user_id)
-        name = chat.first_name or "Unknown"
-        username = chat.username or "None"
+        chat     = await context.bot.get_chat(user_id)
+        name     = chat.first_name or "Unknown"
+        username = chat.username or None
     except Exception:
         pass
     ud = get_user_data(user_id, context)
-    ud["name"] = name
-    ud["plan"] = plan
+    ud["name"]    = name
+    ud["plan"]    = plan
     ud["expires"] = time.time() + (days * 86400)
-    exp_date = datetime.fromtimestamp(ud["expires"]).strftime("%Y-%m-%d %H:%M")
+    exp_date      = datetime.fromtimestamp(ud["expires"]).strftime("%Y-%m-%d %H:%M")
+    uname_display = f"@{username}" if username else "None"
     txt = (
         "C\u1d0f\u0274\u0262\u0280\u1d00\u1d1b\u1d1c\u029f\u1d00\u1d1b\u026a\u1d0f\u0274\u1d1b! Y\u1d0f\u1d1c\u0280 \u1d00\u1d04\u1d04\u1d07\u1d1c\u1d04 \u029c\u1d00\u1d1b \u0299\u1d07\u1d07\u0274 \u1d00\u1d04\u1d1b\u026a\u1d20\u1d00\u1d1b\u1d07\u1d05.\n"
-        "\u2501" * 20 + "\n\n"
+        + "\u2501" * 20 + "\n\n"
         f"U\u1d1b\u026a\u029f     \u279a {name}\n"
-        f"U\u1d1b\u026a\u029f\u0274\u1d00\u1d0d\u1d07 \u279a @{username}\n"
+        f"U\u1d1b\u026a\u029f\u0274\u1d00\u1d0d\u1d07 \u279a {uname_display}\n"
         f"A\u1d04\u1d04\u1d07\u1d1b\u1d04   \u279a {get_styled_plan(plan)}\n"
         f"D\u1d1c\u0280\u1d00\u1d1b\u026a\u1d0f\u0274  \u279a {days} D\u1d00y\u1d1c\n"
         "C\u0280\u1d07\u1d05\u026a\u1d1b\u1d04   \u279a \u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u1d07\u1d05\n"
         f"E\u02e3\u1d18\u026a\u0280\u1d07\u1d04   \u279a {exp_date}\n"
         f"R\u1d07\u1d04\u1d07\u026a\u1d18\u1d1b  \u279a <code>{receipt}</code>\n\n"
-        "\u2501" * 20 + "\n"
+        + "\u2501" * 20 + "\n"
         "P\u029f\u1d07\u1d00\u1d1b\u1d07 \u1d1c\u1d00\u1d20\u1d07 \u1d1b\u029c\u026a\u1d1c \u0280\u1d07\u1d04\u1d07\u026a\u1d18\u1d1b ID."
     )
     try:
@@ -275,7 +283,6 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
     target = target.strip().lstrip("@")
     if target.lstrip("-").isdigit():
         return int(target)
-    # Try to get the chat by username
     for attempt in (f"@{target}", target):
         try:
             chat = await context.bot.get_chat(attempt)
@@ -288,20 +295,15 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
 async def send_welcome_photo(
     update: Update, caption: str, markup: InlineKeyboardMarkup
 ) -> None:
-    sent = False
     try:
-        with open(WELCOME_IMAGE_PATH, "rb") as img:
-            await update.message.reply_photo(
-                photo=img,
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=markup,
-            )
-            sent = True
+        await update.message.reply_photo(
+            photo=WELCOME_IMAGE_URL,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
     except Exception as e:
-        logger.warning(f"send_welcome_photo (file): {e}")
-    if not sent:
-        # Fall back to text if image cannot be sent
+        logger.warning(f"send_welcome_photo (url): {e}")
         await update.message.reply_text(
             caption,
             parse_mode="HTML",
@@ -309,6 +311,8 @@ async def send_welcome_photo(
             disable_web_page_preview=True,
         )
 
+
+# ── Keyboard helpers ─────────────────────────────────────────────────────────
 
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -416,6 +420,8 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 
+# ── Middleware ───────────────────────────────────────────────────────────────
+
 async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user:
         return
@@ -426,7 +432,7 @@ async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if update.message:
                 await update.message.reply_text(
-                    "B\u1d0f\u1d1b \u026a\u1d1c \u1d04\u1d1c\u0280\u0280\u1d07\u0274\u1d1b\u029f\u029f\u029f y \u1d1c\u0274\u1d05\u1d07\u0280 \u1d0d\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07."
+                    "B\u1d0f\u1d1b \u026a\u1d1c \u1d1c\u1d1c\u029f\u026a\u1d07\u0274\u1d1b\u029f\u029f y \u1d1c\u0274\u1d05\u1d07\u0280 \u1d0d\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07."
                 )
         except Exception:
             pass
@@ -451,9 +457,11 @@ async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
+# ── BIN lookup ───────────────────────────────────────────────────────────────
+
 async def fetch_bin(url: str) -> dict:
     try:
-        req = urllib.request.Request(
+        req  = urllib.request.Request(
             url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"}
         )
         loop = asyncio.get_running_loop()
@@ -464,6 +472,8 @@ async def fetch_bin(url: str) -> dict:
     except Exception:
         return {}
 
+
+# ── Gate processing ──────────────────────────────────────────────────────────
 
 async def _api_request(
     session: aiohttp.ClientSession, url: str, card: str, site: str
@@ -490,10 +500,7 @@ async def process_gate(
     card = None
     if context.args:
         card = context.args[0]
-    elif (
-        update.message.reply_to_message
-        and update.message.reply_to_message.text
-    ):
+    elif update.message.reply_to_message and update.message.reply_to_message.text:
         card = update.message.reply_to_message.text.strip()
     if not card:
         await update.message.reply_text(
@@ -501,8 +508,8 @@ async def process_gate(
             parse_mode="HTML",
         )
         return
-    ud = get_user_data(update.effective_user.id, context)
-    raw_plan = ud.get("plan", "TRIAL").upper()
+    ud         = get_user_data(update.effective_user.id, context)
+    raw_plan   = ud.get("plan", "TRIAL").upper()
     is_premium = raw_plan != "TRIAL" and ud.get("expires", 0) > time.time()
     if not is_premium:
         credits = ud.get("credits", 150)
@@ -512,14 +519,14 @@ async def process_gate(
             )
             return
         ud["credits"] = credits - 1
-    bin_num = card[:6]
-    msg = await update.message.reply_text("P\u0280\u1d0f\u1d04\u1d07\u1d1b\u1d1c\u026a\u0274\u0262...")
+    bin_num    = card[:6]
+    msg        = await update.message.reply_text("P\u0280\u1d0f\u1d04\u1d07\u1d1c\u1d1c\u026a\u0274\u0262...")
     start_time = time.time()
-    api_url = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
-    site_url = GATE_SITES.get(gate_key, "example.com")
+    api_url    = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
+    site_url   = GATE_SITES.get(gate_key, "example.com")
     if not api_url:
         await msg.edit_text(
-            f"G\u1d00\u1d1b\u1d07 API URL \u0274\u1d0f\u1d1b \u1d1b\u1d07\u1d1b. O\u1d21\u0274\u1d07\u0280: /seturl {gate_key} &lt;url&gt;",
+            f"G\u1d00\u1d1b\u1d07 API URL \u0274\u1d0f\u1d1c \u1d1c\u1d07\u1d1b. O\u1d21\u0274\u1d07\u0280: /seturl {gate_key} &lt;url&gt;",
             parse_mode="HTML",
         )
         return
@@ -531,10 +538,8 @@ async def process_gate(
                 get_bin_info(bin_num),
                 return_exceptions=True,
             )
-        data = results[0] if not isinstance(results[0], Exception) else {}
-        bin_data = (
-            results[1] if not isinstance(results[1], Exception) else {"error": True}
-        )
+        data     = results[0] if not isinstance(results[0], Exception) else {}
+        bin_data = results[1] if not isinstance(results[1], Exception) else {"error": True}
         if isinstance(results[0], Exception):
             raise results[0]
         raw_response = str(
@@ -544,16 +549,16 @@ async def process_gate(
             w in raw_response.lower() for w in ["approved", "captured", "success"]
         )
         status_ui = "APPROVED \u2705" if is_approved else "DECLINED \u274c"
-        bin_txt = "N/A"
+        bin_txt   = "N/A"
         if not bin_data.get("error"):
-            s = str(bin_data.get("scheme", "N/A")).upper()
-            b = bin_data.get("bank", "N/A")
+            s       = str(bin_data.get("scheme", "N/A")).upper()
+            b       = bin_data.get("bank", "N/A")
             country = str(bin_data.get("country", "N/A")).upper()
-            flag = bin_data.get("country_emoji", "")
+            flag    = bin_data.get("country_emoji", "")
             bin_txt = f"{s} - {b} - {flag} {country}"
         if raw_plan != "TRIAL" and ud.get("expires", 0) <= time.time():
             raw_plan = "TRIAL"
-        plan_ui = get_styled_plan(raw_plan)
+        plan_ui    = get_styled_plan(raw_plan)
         first_name = update.effective_user.first_name or "User"
         time_taken = f"{time.time() - start_time:.2f}"
         text = (
@@ -573,7 +578,7 @@ async def process_gate(
             disable_web_page_preview=True,
         )
     except aiohttp.ServerTimeoutError:
-        await msg.edit_text("T\u026a\u1d0d\u1d07\u1d0f\u1d1c\u1d1b \u2014 G\u1d00\u1d1b\u1d07 \u1d05\u026a\u1d05 \u0274\u1d0f\u1d1b \u0280\u1d07\u1d1b\u1d18\u1d0f\u0274\u1d05.")
+        await msg.edit_text("T\u026a\u1d0d\u1d07\u1d0f\u1d1c\u1d1b \u2014 G\u1d00\u1d1b\u1d07 \u1d05\u026a\u1d05 \u0274\u1d0f\u1d1c \u0280\u1d07\u1d1c\u1d18\u1d0f\u0274\u1d05.")
     except Exception as e:
         logger.error(f"process_gate [{gate_key}]: {e}")
         await msg.edit_text(f"E\u0280\u0280\u1d0f\u0280: <code>{str(e)[:120]}</code>", parse_mode="HTML")
@@ -589,20 +594,26 @@ async def cmd_mss(u, c):  await process_gate(u, c, "mss",  "Stripe Mass")
 async def cmd_mpp2(u, c): await process_gate(u, c, "mpp2", "PayPal Mass")
 
 
+# ── /start ───────────────────────────────────────────────────────────────────
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    ud = get_user_data(user.id, context)
+    ud   = get_user_data(user.id, context)
     ud.setdefault("joined", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    ud.setdefault("name", user.first_name or "User")
+    ud.setdefault("name",   user.first_name or "User")
     if await is_joined(user.id, context):
         await send_welcome_photo(update, ui_profile(user, context), kb_main())
     else:
         await send_welcome_photo(update, FORCED_JOIN_CAPTION, kb_force())
 
 
+# ── /ping ────────────────────────────────────────────────────────────────────
+
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Pong! Bot is online.")
 
+
+# ── /bin ─────────────────────────────────────────────────────────────────────
 
 async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -622,15 +633,15 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await fetch_bin(f"https://lookup.binlist.net/{bin_num}")
     if not data or "scheme" not in data:
         try:
-            await status.edit_text("BIN \u0274\u1d0f\u1d1b \u1d00\u1d20\u1d00\u026a\u029f\u1d00\u0299\u029f\u1d07.")
+            await status.edit_text("BIN \u0274\u1d0f\u1d1c \u1d00\u1d20\u1d00\u026a\u029f\u1d00\u0299\u029f\u1d07.")
         except Exception:
             pass
         return
-    c_data = data.get("country") or {}
-    b_data = data.get("bank") or {}
-    user = update.effective_user
-    ud = get_user_data(user.id, context)
-    raw_plan = ud.get("plan", "TRIAL").upper()
+    c_data       = data.get("country") or {}
+    b_data       = data.get("bank")    or {}
+    user         = update.effective_user
+    ud           = get_user_data(user.id, context)
+    raw_plan     = ud.get("plan", "TRIAL").upper()
     if raw_plan != "TRIAL" and ud.get("expires", 0) <= time.time():
         raw_plan = "TRIAL"
     brand        = (data.get("scheme") or "N/A").upper()
@@ -663,6 +674,8 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+# ── /plan ────────────────────────────────────────────────────────────────────
+
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         PLAN_TEXT,
@@ -672,13 +685,15 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── /rm ─────────────────────────────────────────────────────────────────────
+
 async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("U\u1d1b\u1d00\u0262\u1d07: /rm &lt;code&gt;", parse_mode="HTML")
         return
-    code = context.args[0].upper()
-    uid  = update.effective_user.id
-    ud   = get_user_data(uid, context)
+    code  = context.args[0].upper()
+    uid   = update.effective_user.id
+    ud    = get_user_data(uid, context)
     codes = context.bot_data.get("codes", {})
     keys  = context.bot_data.get("keys",  {})
     if code in codes and not codes[code]["used"]:
@@ -690,7 +705,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif code in keys and not keys[code]["used"]:
         keys[code]["used"] = True
         p, d = keys[code]["plan"], keys[code]["days"]
-        ud["plan"] = p
+        ud["plan"]    = p
         ud["expires"] = time.time() + (d * 86400)
         receipt = await send_activation_msg(uid, p, d, context)
         await update.message.reply_text(
@@ -701,97 +716,127 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("I\u0274\u1d20\u1d00\u029f\u026a\u1d05 \u1d0f\u0280 \u1d00\u029f\u0280\u1d07\u1d00\u1d05y \u1d1c\u1d1c\u1d07\u1d05 \u1d04\u1d0f\u1d05\u1d07.")
 
 
+# ── /info — OWNER ONLY ────────────────────────────────────────────────────────
+
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
 
-    target_id = None
-    target_name = "N/A"
-    target_username = "None"
+    target_id       = None
+    target_name     = "N/A"
+    target_username = None
+    target_lastname = ""
 
-    # Priority 1: reply to a message
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        ru = update.message.reply_to_message.from_user
+        ru              = update.message.reply_to_message.from_user
         target_id       = ru.id
         target_name     = ru.first_name or "N/A"
-        target_username = ru.username   or "None"
-
-    # Priority 2: argument provided
+        target_username = ru.username or None
+        target_lastname = ru.last_name or ""
     elif context.args:
         raw = context.args[0].strip().lstrip("@")
-        # Try numeric ID first
         if raw.lstrip("-").isdigit():
             target_id = int(raw)
         else:
-            # Try fetching by username via Telegram API
             for attempt in (f"@{raw}", raw):
                 try:
-                    chat = await context.bot.get_chat(attempt)
+                    chat            = await context.bot.get_chat(attempt)
                     target_id       = chat.id
                     target_name     = chat.first_name or "N/A"
-                    target_username = chat.username   or "None"
+                    target_username = chat.username or None
+                    target_lastname = getattr(chat, "last_name", "") or ""
                     break
                 except Exception:
                     continue
 
     if not target_id:
         await update.message.reply_text(
-            "U\u1d1b\u026a\u029f \u0274\u1d0f\u1d1b \u1d00\u1d20\u1d00\u026a\u029f\u1d00\u0299\u029f\u1d07. \n\n"
-            "U\u1d1b\u1d00\u0262\u1d07:\n"
-            "/info &lt;user_id&gt;\n"
-            "/info @username\n"
-            "Or reply to a user message.",
+            "Usage:\n/info &lt;user_id&gt;\n/info @username\nOr reply to any user message.",
             parse_mode="HTML",
         )
         return
 
-    # If we got ID but not name/username, try API lookup
     if target_name == "N/A":
         try:
-            chat = await context.bot.get_chat(target_id)
+            chat            = await context.bot.get_chat(target_id)
             target_name     = chat.first_name or "N/A"
-            target_username = chat.username   or "None"
+            target_username = chat.username or None
+            target_lastname = getattr(chat, "last_name", "") or ""
         except Exception:
             pass
 
-    # Also pull any last_name
-    last_name = ""
-    try:
-        chat = await context.bot.get_chat(target_id)
-        last_name = chat.last_name or ""
-        if last_name:
-            target_name = f"{target_name} {last_name}"
-    except Exception:
-        pass
+    if target_lastname:
+        target_name = f"{target_name} {target_lastname}"
 
-    udata    = get_user_data(target_id, context)
-    raw_plan = udata.get("plan", "TRIAL").upper()
-    expires  = udata.get("expires", 0)
-    now      = time.time()
-    if raw_plan != "TRIAL" and expires <= now:
-        raw_plan = "TRIAL"
-    credits = "\u221e U\u0274\u029f\u026a\u1d0d\u026a\u1d1b\u1d07\u1d05" if raw_plan != "TRIAL" else f"{udata.get('credits', 150)}/150"
+    username_display = f"@{target_username}" if target_username else "None"
+
+    all_users = context.bot_data.get("user_data", {})
+    uid_str   = str(target_id)
+    has_data  = uid_str in all_users
+    now       = time.time()
+
+    if has_data:
+        udata       = all_users[uid_str]
+        raw_plan    = udata.get("plan", "TRIAL").upper()
+        expires     = udata.get("expires", 0)
+        joined      = udata.get("joined", "N/A")
+        credits_val = udata.get("credits", 150)
+        if raw_plan != "TRIAL" and expires <= now:
+            raw_plan         = "TRIAL"
+            udata["plan"]    = "TRIAL"
+            udata["expires"] = 0
+            expires          = 0
+    else:
+        raw_plan    = "TRIAL"
+        expires     = 0
+        joined      = "Never used the bot"
+        credits_val = 150
+
+    is_premium = raw_plan != "TRIAL" and expires > now
+    credits    = "\u221e Unlimited" if is_premium else f"{credits_val}/150"
+    line       = "\u2501" * 20
 
     txt = (
-        "\u2501" * 20 + "\n"
-        "USER INFO\n"
-        "\u2501" * 20 + "\n\n"
-        f"N\u1d00\u1d0d\u1d07     \u279a {target_name}\n"
-        f"U\u1d1b\u026a\u029f\u0274\u1d00\u1d0d\u1d07 \u279a @{target_username}\n"
-        f"U\u1d1b\u026a\u029f ID  \u279a <code>{target_id}</code>\n"
-        f"P\u029f\u1d00\u0274     \u279a {get_styled_plan(raw_plan)}\n"
-        f"C\u0280\u1d07\u1d05\u026a\u1d1b\u1d04  \u279a {credits}\n"
+        f"{line}\n"
+        "👤 USER INFO\n"
+        f"{line}\n\n"
+        f"Name       \u279a {target_name}\n"
+        f"Username   \u279a {username_display}\n"
+        f"User ID    \u279a <code>{target_id}</code>\n"
+        f"Plan       \u279a {get_styled_plan(raw_plan)}\n"
+        f"Credits    \u279a {credits}\n"
+        f"Joined     \u279a {joined}\n"
     )
-    if raw_plan != "TRIAL" and expires > now:
+
+    if is_premium:
+        exp_str        = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+        remaining_secs = expires - now
+        remaining_days = int(remaining_secs / 86400)
+        remaining_hrs  = int((remaining_secs % 86400) / 3600)
+        remaining_mins = int((remaining_secs % 3600) / 60)
+        if remaining_days > 0:
+            remaining_str = f"{remaining_days}d {remaining_hrs}h"
+        elif remaining_hrs > 0:
+            remaining_str = f"{remaining_hrs}h {remaining_mins}m"
+        else:
+            remaining_str = f"{remaining_mins}m"
         txt += (
-            f"E\u02e3\u1d18\u026a\u0280\u1d07\u1d04  \u279a {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
-            f"R\u1d07\u1d0d\u1d00\u026a\u0274\u026a\u0274\u0262 \u279a {int((expires - now) / 86400)} D\u1d00y\u1d1c\n"
+            f"Plan End   \u279a {exp_str}\n"
+            f"Remaining  \u279a {remaining_str}\n"
+            f"Status     \u279a \u2705 Active\n"
         )
     else:
-        txt += "S\u1d1b\u1d00\u1d1b\u1d1c\u1d04   \u279a I\u0274\u1d00\u1d04\u1d1b\u026a\u1d20\u1d07 / T\u0280\u026a\u1d00\u029f\n"
-    txt += "\u2501" * 20
+        txt += (
+            "Plan End   \u279a No Active Plan\n"
+            "Remaining  \u279a N/A\n"
+            "Status     \u279a \u274c Inactive / Trial\n"
+        )
+
+    txt += f"\n{line}"
     await update.message.reply_text(txt, parse_mode="HTML")
 
+
+# ── /allcm ───────────────────────────────────────────────────────────────────
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -818,6 +863,8 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── /gen ─────────────────────────────────────────────────────────────────────
+
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -837,6 +884,8 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("I\u0274\u1d20\u1d00\u029f\u026a\u1d05 \u1d00\u1d0d\u1d0f\u1d1c\u0274\u1d1b.")
 
+
+# ── Key generation ───────────────────────────────────────────────────────────
 
 async def _gen_key(
     update: Update, context: ContextTypes.DEFAULT_TYPE, plan: str, days: int
@@ -858,6 +907,8 @@ async def cmd_key20(u, c): await _gen_key(u, c, "elite", 15)
 async def cmd_key30(u, c): await _gen_key(u, c, "root",  30)
 
 
+# ── Grant helper ─────────────────────────────────────────────────────────────
+
 async def _grant(
     uid: int, plan: str, days: int,
     update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -871,6 +922,8 @@ async def _grant(
         parse_mode="HTML",
     )
 
+
+# ── /oneday / /threeday ──────────────────────────────────────────────────────
 
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -896,6 +949,8 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── /sub / /resub ────────────────────────────────────────────────────────────
+
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -906,7 +961,7 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message.reply_text("U\u1d1b\u026a\u029f \u0274\u1d0f\u1d1b \u1d0a\u1d0f\u1d1c\u0274\u1d05.")
+        await update.message.reply_text("U\u1d1b\u026a\u029f \u0274\u1d0f\u1d1c \u1d0a\u1d0f\u1d1c\u0274\u1d05.")
         return
     try:
         days = int(context.args[1])
@@ -924,327 +979,8 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message.reply_text("U\u1d1b\u026a\u029f \u0274\u1d0f\u1d1b \u1d0a\u1d0f\u1d1c\u0274\u1d05.")
+        await update.message.reply_text("U\u1d1b\u026a\u029f \u0274\u1d0f\u1d1c \u1d0a\u1d0f\u1d1c\u0274\u1d05.")
         return
-    ud = get_user_data(uid, context)
-    ud["plan"]    = "TRIAL"
-    ud["expires"] = 0
-    await update.message.reply_text(f"R\u1d07\u1d0d\u1d0f\u1d20\u1d07\u1d05 \u1d18\u0280\u1d07\u1d0d\u026a\u1d1c\u1d0d \u1d0a\u0280\u1d0f\u1d0d <code>{uid}</code>", parse_mode="HTML")
+    ud = get_user_data(uid, context) **…**
 
-
-async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-    users = context.bot_data.get("user_data", {})
-    line  = "\u2501" * 20
-    txt   = f"ACTIVE PLANS\n{line}\n\n"
-    found = False
-    now   = time.time()
-    for uid, data in users.items():
-        exp  = data.get("expires", 0)
-        plan = data.get("plan", "TRIAL")
-        if plan != "TRIAL" and exp > now:
-            found = True
-            txt  += (
-                f"ID        \u279a <code>{uid}</code>\n"
-                f"Plan      \u279a {get_styled_plan(plan)}\n"
-                f"Remaining \u279a {int((exp - now) / 86400)} D\u1d00y\u1d1c\n"
-                f"{line}\n"
-            )
-    if not found:
-        txt += "N\u1d0f \u1d00\u1d04\u1d1b\u026a\u1d20\u1d07 \u1d18\u029f\u1d00\u0274\u1d1c."
-    await update.message.reply_text(txt, parse_mode="HTML")
-
-
-async def cmd_delcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-    if not context.args:
-        await update.message.reply_text("U\u1d1b\u1d00\u0262\u1d07: /delcode &lt;code&gt;", parse_mode="HTML")
-        return
-    code  = context.args[0]
-    codes = context.bot_data.get("codes", {})
-    keys  = context.bot_data.get("keys",  {})
-    if code in codes:
-        del codes[code]
-        await update.message.reply_text("C\u1d0f\u1d05\u1d07 \u1d05\u1d07\u029f\u1d07\u1d1b\u1d07\u1d05.")
-    elif code in keys:
-        del keys[code]
-        await update.message.reply_text("K\u1d07y \u1d05\u1d07\u029f\u1d07\u1d1b\u1d07\u1d05.")
-    else:
-        await update.message.reply_text("N\u1d0f\u1d1b \u1d0a\u1d0f\u1d1c\u0274\u1d05.")
-
-
-async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "U\u1d1b\u1d00\u0262\u1d07: /seturl &lt;gate&gt; &lt;url&gt;\n"
-            "R\u1d07\u1d0d\u1d0f\u1d20\u1d07: /seturl chk remove\n"
-            "G\u1d00\u1d1b\u1d07\u1d1c: chk pp sh pyu b3 au mss mpp2",
-            parse_mode="HTML",
-        )
-        return
-    gate = context.args[0].lower()
-    url  = " ".join(context.args[1:])
-    if gate not in GATE_NAMES:
-        await update.message.reply_text(
-            f"U\u0274\u1d04\u0274\u1d0f\u1d21\u0274 \u0262\u1d00\u1d1b\u1d07: {gate}\nV\u1d00\u029f\u026a\u1d05: chk pp sh pyu b3 au mss mpp2"
-        )
-        return
-    if url.lower() == "remove":
-        context.bot_data.pop(f"gate_url_{gate}", None)
-        await update.message.reply_text(f"R\u1d07\u1d0d\u1d0f\u1d20\u1d07\u1d05 {GATE_NAMES[gate]} URL.")
-        return
-    context.bot_data[f"gate_url_{gate}"] = url
-    await update.message.reply_text(
-        f"{GATE_NAMES[gate]} URL \u1d1c\u1d07\u1d1b.\n<code>{url}</code>", parse_mode="HTML"
-    )
-
-
-async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-    line = "\u2501" * 20
-    txt  = f"GATE API URLs\n{line}\n\n"
-    for gate, name in GATE_NAMES.items():
-        override   = context.bot_data.get(f"gate_url_{gate}", "")
-        config_url = GATE_URLS.get(gate, "")
-        active     = override if override else config_url
-        source     = "Override" if override else "Config"
-        status     = "ON" if context.bot_data.get(f"{gate}_on", True) else "OFF"
-        txt += f"{name} [{status}] [{source}]\n<code>{active or 'Not set'}</code>\n\n"
-    txt += line
-    await update.message.reply_text(txt, parse_mode="HTML")
-
-
-async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-    context.bot_data["maintenance"] = True
-    await update.message.reply_text("M\u1d00\u026a\u0274\u1d1b\u1d07\u0274\u1d00\u0274\u1d04\u1d07 M\u1d0f\u1d05\u1d07 ON. U\u1d1b\u026a\u029f /onbot \u1d1b\u1d0f \u0280\u1d07\u1d1c\u1d1c\u1d1c.")
-
-
-async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-    context.bot_data["maintenance"] = False
-    await update.message.reply_text("B\u1d0f\u1d1b \u026a\u1d1c \u0299\u1d00\u1d04\u1d04 \u1d0f\u0274\u029f\u026a\u0274\u1d07!")
-
-
-def _toggle(gate: str, label: str, state: bool):
-    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id != OWNER_ID:
-            return
-        context.bot_data[f"{gate}_on"] = state
-        await update.message.reply_text(f"{label} \u2014 {'ON' if state else 'OFF'}")
-    return handler
-
-
-cmd_onchk   = _toggle("chk",  "STRIPE CHARGE",  True)
-cmd_offchk  = _toggle("chk",  "STRIPE CHARGE",  False)
-cmd_onpp    = _toggle("pp",   "PAYPAL CHARGE",  True)
-cmd_offpp   = _toggle("pp",   "PAYPAL CHARGE",  False)
-cmd_onsh    = _toggle("sh",   "SHOPIFY CHARGE", True)
-cmd_offsh   = _toggle("sh",   "SHOPIFY CHARGE", False)
-cmd_onpyu   = _toggle("pyu",  "PAYU CHARGE",    True)
-cmd_offpyu  = _toggle("pyu",  "PAYU CHARGE",    False)
-cmd_onb3    = _toggle("b3",   "BRAINTREE AUTH", True)
-cmd_offb3   = _toggle("b3",   "BRAINTREE AUTH", False)
-cmd_onau    = _toggle("au",   "STRIPE AUTH",    True)
-cmd_offau   = _toggle("au",   "STRIPE AUTH",    False)
-cmd_onmss   = _toggle("mss",  "STRIPE MASS",    True)
-cmd_offmss  = _toggle("mss",  "STRIPE MASS",    False)
-cmd_onmpp2  = _toggle("mpp2", "PAYPAL MASS",    True)
-cmd_offmpp2 = _toggle("mpp2", "PAYPAL MASS",    False)
-
-
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    d = q.data
-    try:
-        await q.answer()
-    except Exception:
-        pass
-
-    if context.bot_data.get("maintenance", False) and q.from_user.id != OWNER_ID:
-        try:
-            await q.answer("Bot is under maintenance.", show_alert=True)
-        except Exception:
-            pass
-        return
-
-    async def reply(text: str, markup: InlineKeyboardMarkup):
-        try:
-            await context.bot.send_message(
-                chat_id=q.message.chat_id,
-                text=text,
-                parse_mode="HTML",
-                reply_markup=markup,
-                disable_web_page_preview=True,
-            )
-        except Exception as ex:
-            logger.error(f"reply failed [{d}]: {ex}")
-            try:
-                await q.answer(f"Error: {str(ex)[:200]}", show_alert=True)
-            except Exception:
-                pass
-
-    try:
-        if d == "verify_join":
-            if await is_joined(q.from_user.id, context):
-                await reply(ui_profile(q.from_user, context), kb_main())
-            else:
-                await q.answer("Join channel and group first!", show_alert=True)
-
-        elif d == "bmain":
-            await reply(ui_profile(q.from_user, context), kb_main())
-
-        elif d == "mprice":
-            await reply(PLAN_TEXT, kb_price())
-
-        elif d == "pay10":
-            await reply(
-                "PAYMENT \u2014 10$ (C\u1d0f\u0280\u1d07 | 7 D\u1d00y\u1d1c)\n\n" + PAYMENT_PENDING_TEXT,
-                kb_payment(),
-            )
-
-        elif d == "pay15":
-            await reply(
-                "PAYMENT \u2014 15$ (E\u029f\u026a\u1d1b\u1d07 | 15 D\u1d00y\u1d1c)\n\n" + PAYMENT_PENDING_TEXT,
-                kb_payment(),
-            )
-
-        elif d == "pay30":
-            await reply(
-                "PAYMENT \u2014 30$ (R\u1d0f\u1d0f\u1d1b | 30 D\u1d00y\u1d1c)\n\n" + PAYMENT_PENDING_TEXT,
-                kb_payment(),
-            )
-
-        elif d == "mgates":
-            await reply(CHECKER_STATUS_TEXT, kb_gate_main())
-
-        elif d == "mauth":
-            await reply(AUTH_MENU_TEXT, kb_auth_gates())
-
-        elif d == "iau":
-            await reply(STRIPE_AUTH_TEXT, kb_back("mauth"))
-
-        elif d == "ib3":
-            await reply(BRAINTREE_TEXT, kb_back("mauth"))
-
-        elif d == "mcharge":
-            await reply(CHARGE_MENU_TEXT, kb_charge_gates())
-
-        elif d == "ichk":
-            await reply(gate_info_text("Stripe Charge",  "chk", 1), kb_back("mcharge"))
-
-        elif d == "ipp":
-            await reply(gate_info_text("PayPal Charge",  "pp",  1), kb_back("mcharge"))
-
-        elif d == "ish":
-            await reply(gate_info_text("Shopify Charge", "sh",  2), kb_back("mcharge"))
-
-        elif d == "ipyu":
-            await reply(gate_info_text("PayU Charge",    "pyu", 1), kb_back("mcharge"))
-
-        elif d == "mmass":
-            await reply(MASS_MENU_TEXT, kb_mass_gates())
-
-        elif d == "imss":
-            await reply(gate_info_text("Stripe Mass",  "mss",  2), kb_back("mmass"))
-
-        elif d == "impp2":
-            await reply(gate_info_text("PayPal Mass",  "mpp2", 2), kb_back("mmass"))
-
-        else:
-            logger.warning(f"Unknown callback: {d}")
-
-    except Exception as ex:
-        logger.error(f"on_callback error [{d}]: {ex}")
-        try:
-            await q.answer(f"Error: {str(ex)[:200]}", show_alert=True)
-        except Exception:
-            pass
-
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    if isinstance(context.error, Conflict):
-        return
-    logger.error(f"Unhandled error: {context.error}", exc_info=context.error)
-
-
-async def on_start(app: Application):
-    print("Batman Bot starting...")
-    try:
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        await asyncio.sleep(1)
-    except Exception:
-        pass
-
-
-def main():
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(on_start)
-        .build()
-    )
-
-    app.add_error_handler(error_handler)
-    app.add_handler(MessageHandler(filters.ALL, maintenance_check), group=-1)
-
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("ping",     cmd_ping))
-    app.add_handler(CommandHandler("plan",     cmd_plan))
-    app.add_handler(CommandHandler("buy",      cmd_plan))
-    app.add_handler(CommandHandler("bin",      cmd_bin))
-    app.add_handler(CommandHandler("rm",       cmd_rm))
-    app.add_handler(CommandHandler("chk",      cmd_chk))
-    app.add_handler(CommandHandler("pp",       cmd_pp))
-    app.add_handler(CommandHandler("sh",       cmd_sh))
-    app.add_handler(CommandHandler("pyu",      cmd_pyu))
-    app.add_handler(CommandHandler("b3",       cmd_b3))
-    app.add_handler(CommandHandler("au",       cmd_au))
-    app.add_handler(CommandHandler("mss",      cmd_mss))
-    app.add_handler(CommandHandler("mpp2",     cmd_mpp2))
-    app.add_handler(CommandHandler("info",     cmd_info))
-    app.add_handler(CommandHandler("allcm",    cmd_allcm))
-    app.add_handler(CommandHandler("gen",      cmd_gen))
-    app.add_handler(CommandHandler("key10",    cmd_key10))
-    app.add_handler(CommandHandler("key20",    cmd_key20))
-    app.add_handler(CommandHandler("key30",    cmd_key30))
-    app.add_handler(CommandHandler("oneday",   cmd_oneday))
-    app.add_handler(CommandHandler("threeday", cmd_threeday))
-    app.add_handler(CommandHandler("sub",      cmd_sub))
-    app.add_handler(CommandHandler("resub",    cmd_resub))
-    app.add_handler(CommandHandler("allplans", cmd_allplans))
-    app.add_handler(CommandHandler("delcode",  cmd_delcode))
-    app.add_handler(CommandHandler("seturl",   cmd_seturl))
-    app.add_handler(CommandHandler("geturl",   cmd_geturl))
-    app.add_handler(CommandHandler("killbot",  cmd_killbot))
-    app.add_handler(CommandHandler("onbot",    cmd_onbot))
-
-    for cmd, func in [
-        ("onchk",   cmd_onchk),  ("offchk",  cmd_offchk),
-        ("onpp",    cmd_onpp),   ("offpp",   cmd_offpp),
-        ("onsh",    cmd_onsh),   ("offsh",   cmd_offsh),
-        ("onpyu",   cmd_onpyu),  ("offpyu",  cmd_offpyu),
-        ("onb3",    cmd_onb3),   ("offb3",   cmd_offb3),
-        ("onau",    cmd_onau),   ("offau",   cmd_offau),
-        ("onmss",   cmd_onmss),  ("offmss",  cmd_offmss),
-        ("onmpp2",  cmd_onmpp2), ("offmpp2", cmd_offmpp2),
-    ]:
-        app.add_handler(CommandHandler(cmd, func))
-
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter))
-    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, anti_ad_filter))
-
-    print("Batman Bot Online!")
-    app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == "__main__":
-    main()
+_This response is too long to display in full._
