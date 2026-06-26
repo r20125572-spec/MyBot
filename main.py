@@ -20,8 +20,6 @@ from config import (
     GATE_URLS, GATE_SITES, API_TIMEOUT, get_bin_info, kb_result,
 )
 
-CHANNEL_USERNAME   = "@Batcardchk"
-GROUP_USERNAME     = "@batcardchkGroup"
 CHANNEL_LINK       = "https://t.me/Batcardchk"
 GROUP_LINK         = "https://t.me/batcardchkGroup"
 SUPPORT_LINK       = "https://t.me/cardchkSupport"
@@ -169,14 +167,6 @@ PAYMENT_PENDING_TEXT = (
     "\u2501" * 20
 )
 
-FORCED_JOIN_CAPTION = (
-    "BATMAN CARD CHECKER\n\n"
-    "A\u1d04\u1d04\u1d07\u1d1b\u1d04 R\u1d07q\u1d1c\u026a\u0280\u1d07\u1d05\n"
-    "\u2501" * 20 + "\n"
-    "J\u1d0f\u026a\u0274 \u1d0f\u1d1c\u0280 \u1d04\u029c\u1d00\u0274\u0274\u1d07\u029f \u1d00\u0274\u1d05 \u0262\u0280\u1d0f\u1d1c\u1d18 \u1d1b\u1d0f \u1d1c\u1d07 \u1d1b\u029c\u1d07 \u0299\u1d0f\u1d1c.\n"
-    "\u2501" * 20
-)
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -286,18 +276,6 @@ async def send_activation_msg(
     return receipt
 
 
-async def is_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    async def check(chat_id: str) -> bool:
-        try:
-            status = (
-                await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-            ).status
-            return status not in ("left", "kicked")
-        except Exception:
-            return False
-    return await check(CHANNEL_USERNAME) and await check(GROUP_USERNAME)
-
-
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     target = target.strip().lstrip("@")
     if target.lstrip("-").isdigit():
@@ -324,14 +302,6 @@ def kb_main() -> InlineKeyboardMarkup:
             InlineKeyboardButton(B("GROUP"),   url=GROUP_LINK),
         ],
         [InlineKeyboardButton(B("SUPPORT"), url=SUPPORT_LINK)],
-    ])
-
-
-def kb_force() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("JOIN CHANNEL"), url=CHANNEL_LINK)],
-        [InlineKeyboardButton(B("JOIN GROUP"),   url=GROUP_LINK)],
-        [InlineKeyboardButton(B("VERIFY"),       callback_data="verify_join")],
     ])
 
 
@@ -593,27 +563,19 @@ async def cmd_mss(u, c):  await process_gate(u, c, "mss",  "Stripe Mass")
 async def cmd_mpp2(u, c): await process_gate(u, c, "mpp2", "PayPal Mass")
 
 
-# ── /start (no image, text only) ─────────────────────────────────────────────
+# ── /start (no image, no force join) ─────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud   = get_user_data(user.id, context)
     ud.setdefault("joined", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     ud.setdefault("name",   user.first_name or "User")
-    if await is_joined(user.id, context):
-        await update.message.reply_text(
-            ui_profile(user, context),
-            parse_mode="HTML",
-            reply_markup=kb_main(),
-            disable_web_page_preview=True,
-        )
-    else:
-        await update.message.reply_text(
-            FORCED_JOIN_CAPTION,
-            parse_mode="HTML",
-            reply_markup=kb_force(),
-            disable_web_page_preview=True,
-        )
+    await update.message.reply_text(
+        ui_profile(user, context),
+        parse_mode="HTML",
+        reply_markup=kb_main(),
+        disable_web_page_preview=True,
+    )
 
 
 # ── /ping ────────────────────────────────────────────────────────────────────
@@ -1115,25 +1077,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data  = query.data
     user  = query.from_user
-    uid   = user.id
-
-    # ── Force join verify ──
-    if data == "verify_join":
-        if await is_joined(uid, context):
-            ud = get_user_data(uid, context)
-            ud.setdefault("joined", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            ud.setdefault("name",   user.first_name or "User")
-            await query.edit_message_text(
-                ui_profile(user, context),
-                parse_mode="HTML",
-                reply_markup=kb_main(),
-                disable_web_page_preview=True,
-            )
-        else:
-            await query.answer("Y\u1d0f\u1d1c \u0262\u1d00\u1d1b\u1d07 \u0280\u1d07q\u1d1c\u026a\u0280\u1d07\u1d05 \u1d20\u1d0f\u026a\u0274 \u1d04\u029c\u1d00\u0274\u0274\u1d07\u029f\u1d05!", show_alert=True)
 
     # ── Main menu ──
-    elif data == "bmain":
+    if data == "bmain":
         await query.edit_message_text(
             ui_profile(user, context),
             parse_mode="HTML",
