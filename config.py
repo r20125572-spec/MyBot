@@ -8,7 +8,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # 🦇 BOT CONFIGURATION 🦇
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BOT_TOKEN = "8813507423:AAFWkdkk8Je4kB93AB5fu6qQ0-8eo-jlRKE"
+BOT_TOKEN = "8774596040:AAFGArSQUWOu5k_xRLyShiYy2y04uYzlPG4"
 OWNER_ID = 8283904645
 VERSION = "V4.2"
 DEV_LINK = "https://t.me/Batmancardchk"
@@ -26,37 +26,31 @@ BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-da
 BOT_PHOTO = "batman.jpg"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE API URLs & SITES
+# 🦇 GATE API URLs & SITES (Updated with new gates)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS = {
-    "chk": "https://stripe-auth-test-production.up.railway.app/st0",
-    "pp":  "https://pp-auth-test-production.up.railway.app/pp",
-    "sh":  "https://shopify-auth-test-production.up.railway.app/sh",
-    "pyu": "https://payu-auth-test-production.up.railway.app/pyu",
-    "b3":  "",
+    "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
+    "pp":   "https://pp-auth-test-production.up.railway.app/pp",
+    "sh":   "https://shopify-auth-test-production.up.railway.app/sh",
+    "pyu":  "https://payu-auth-test-production.up.railway.app/pyu",
+    "b3":   "",
+    "au":   "https://stripe-auth-test-production.up.railway.app/st0",
+    "mss":  "https://stripe-auth-test-production.up.railway.app/st0",
+    "mpp2": "https://pp-auth-test-production.up.railway.app/pp",
 }
 
 GATE_SITES = {
-    "chk": "fashionspicex.com",
-    "pp":  "example.com",
-    "sh":  "example.com",
-    "pyu": "example.com",
-    "b3":  "example.com",
+    "chk":  "fashionspicex.com",
+    "pp":   "example.com",
+    "sh":   "example.com",
+    "pyu":  "example.com",
+    "b3":   "example.com",
+    "au":   "fashionspicex.com",
+    "mss":  "fashionspicex.com",
+    "mpp2": "example.com",
 }
 
 API_TIMEOUT = 120
-
-# Direct gate variables
-CHK_API = GATE_URLS.get("chk", "")
-CHK_SITE = GATE_SITES.get("chk", "example.com")
-PP_API = GATE_URLS.get("pp", "")
-PP_SITE = GATE_SITES.get("pp", "example.com")
-SH_API = GATE_URLS.get("sh", "")
-SH_SITE = GATE_SITES.get("sh", "example.com")
-PYU_API = GATE_URLS.get("pyu", "")
-PYU_SITE = GATE_SITES.get("pyu", "example.com")
-B3_API = GATE_URLS.get("b3", "")
-B3_SITE = GATE_SITES.get("b3", "example.com")
 
 async def get_bin_info(bin_num: str) -> dict:
     try:
