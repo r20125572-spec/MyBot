@@ -19,6 +19,7 @@ from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK, BOT_PHOTO, BOT_PHOTO_URL,
     GATE_URLS, GATE_SITES, API_TIMEOUT, get_bin_info, kb_result,
 )
+from bin import get_bin_handler
 
 CHANNEL_LINK       = "https://t.me/Batcardchk"
 GROUP_LINK         = "https://t.me/batcardchkGroup"
@@ -34,22 +35,6 @@ GATE_NAMES = {
     "au":   "Stripe Auth",
     "mss":  "Stripe Mass",
     "mpp2": "PayPal Mass",
-}
-
-COUNTRY_CURRENCY = {
-    "US": "USD", "GB": "GBP", "EU": "EUR", "FR": "EUR", "DE": "EUR",
-    "IT": "EUR", "ES": "EUR", "NL": "EUR", "BE": "EUR", "AT": "EUR",
-    "PT": "EUR", "GR": "EUR", "IE": "EUR", "FI": "EUR", "SK": "EUR",
-    "SI": "EUR", "LT": "EUR", "LV": "EUR", "EE": "EUR", "CY": "EUR",
-    "MT": "EUR", "LU": "EUR", "CA": "CAD", "AU": "AUD", "JP": "JPY",
-    "CN": "CNY", "IN": "INR", "BR": "BRL", "MX": "MXN", "KR": "KRW",
-    "RU": "RUB", "CH": "CHF", "SE": "SEK", "NO": "NOK", "DK": "DKK",
-    "PL": "PLN", "CZ": "CZK", "HU": "HUF", "TR": "TRY", "ZA": "ZAR",
-    "SG": "SGD", "HK": "HKD", "NZ": "NZD", "SA": "SAR", "AE": "AED",
-    "AR": "ARS", "CL": "CLP", "CO": "COP", "PH": "PHP", "MY": "MYR",
-    "TH": "THB", "ID": "IDR", "PK": "PKR", "NG": "NGN", "EG": "EGP",
-    "UA": "UAH", "RO": "RON", "BG": "BGN", "HR": "HRK", "RS": "RSD",
-    "IL": "ILS", "VN": "VND", "BD": "BDT", "LK": "LKR", "KE": "KES",
 }
 
 BLOCK_WORDS = (
@@ -92,44 +77,44 @@ CHECKER_STATUS_TEXT = (
     "A\u1d1c\u1d1b\u029c G\u1d00\u1d1b\u1d07   \u279a 2\n"
     "M\u1d00\u1d1b\u1d1c G\u1d00\u1d1b\u1d07  \u279a 2\n"
     "C\u029c\u1d00\u0280\u0262\u1d07 G\u1d00\u1d1b\u1d07 \u279a 4\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "S\u1d07\u029f\u1d07\u1d04\u1d1b \u1d00 G\u1d00\u1d1b\u1d07 \u279a C\u1d00\u1d1b\u1d07\u0262\u1d0f\u0280y"
 )
 
 AUTH_MENU_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "S\u1d07\u029f\u1d07\u1d04\u1d1b A\u1d1c\u1d1b\u029c G\u1d00\u1d1b\u1d07 \u279a\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
 )
 
 STRIPE_AUTH_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "G\u1d00\u1d1b\u1d07    \u279a S\u1d1b\u0280\u026a\u1d18\u1d07 0$\n"
     "C\u1d0f\u1d0d\u1d0d\u1d00\u0274\u1d05 \u279a /chk\n"
     "S\u026a\u1d1b\u1d07\u1d04   \u279a 16\n"
     "H\u1d07\u1d00\u029f\u1d1b\u029c  \u279a 100%\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
 )
 
 BRAINTREE_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "G\u1d00\u1d1b\u1d07    \u279a B\u0280\u1d00\u026a\u0274\u1d1b\u0280\u1d07\u1d07 0$\n"
     "C\u1d0f\u1d0d\u1d0d\u1d00\u0274\u1d05 \u279a /b3\n"
     "S\u026a\u1d1b\u1d07\u1d04   \u279a 2\n"
     "H\u1d07\u1d00\u029f\u1d1b\u029c  \u279a 100%\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
 )
 
 CHARGE_MENU_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "S\u1d07\u029f\u1d07\u1d04\u1d1b C\u029c\u1d00\u0280\u0262\u1d07 G\u1d00\u1d1b\u1d07 \u279a\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
 )
 
 MASS_MENU_TEXT = (
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "S\u1d07\u029f\u1d07\u1d04\u1d1b M\u1d00\u1d1b\u1d00 G\u1d00\u1d1b\u1d07 \u279a\n"
-    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
 )
 
 PLAN_TEXT = (
@@ -273,15 +258,6 @@ async def anti_ad_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception: pass
             return
 
-async def fetch_bin(url: str) -> dict:
-    try:
-        req = urllib.request.Request(url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"})
-        loop = asyncio.get_running_loop()
-        def do_req():
-            with urllib.request.urlopen(req, timeout=10) as r: return json.loads(r.read().decode("utf-8"))
-        return await loop.run_in_executor(None, do_req)
-    except Exception: return {}
-
 async def _api_request(session: aiohttp.ClientSession, url: str, card: str, site: str) -> dict:
     async with session.get(url, params={"cc": card, "site": site}) as resp:
         try: data = await resp.json(content_type=None)
@@ -346,26 +322,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(), disable_web_page_preview=True)
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("Pong! Bot is online.")
-
-async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: await update.message.reply_text("U\u1d1b\u1d00\u0262\u1d07: /bin <BIN>\nE\u02e3\u1d00\u1d0d\u1d18\u029f\u1d07: /bin 453201", parse_mode="HTML"); return
-    bin_num = "".join(filter(str.isdigit, context.args[0]))[:6]
-    if len(bin_num) < 6: await update.message.reply_text("I\u0274\u1d20\u1d00\u029f\u026a\u1d05 BIN!"); return
-    status = await update.message.reply_text(f"L\u1d0f\u1d0f\u1d04\u026a\u0274\u0262 \u1d1c\u1d18 BIN: <code>{bin_num}</code>...", parse_mode="HTML")
-    data = await fetch_bin(f"https://lookup.binlist.net/{bin_num}")
-    if not data or "scheme" not in data:
-        try: await status.edit_text("BIN \u0274\u1d0f\u1d1c \u1d00\u1d20\u1d00\u026i\u029f\u1d00\u0299\u029f\u1d07.")
-        except Exception: pass
-        return
-    c_data = data.get("country") or {}; b_data = data.get("bank") or {}; user = update.effective_user
-    ud = get_user_data(user.id, context); raw_plan = ud.get("plan", "TRIAL").upper()
-    if raw_plan != "TRIAL" and ud.get("expires", 0) <= time.time(): raw_plan = "TRIAL"
-    brand = (data.get("scheme") or "N/A").upper(); level = (data.get("brand") or "N/A").upper(); bank = (b_data.get("name") or "N/A").upper()
-    country_code = (c_data.get("alpha2") or "N/A").upper(); country_flag = c_data.get("emoji", ""); country_name = (c_data.get("name") or "N/A").upper()
-    card_type = (data.get("type") or "N/A").upper(); currency = COUNTRY_CURRENCY.get(country_code, "N/A")
-    txt = f"\U0001D401\U0001D422\U0001D427 \u279b <code>{bin_num}</code>\n\U0001D401\U0001D42B\U0001D41A\U0001D427\U0001D41D \u279b {brand}\n\U0001D40B\U0001D41E\U0001D42F\U0001D41E\U0001D425 \u279b {level}\n\U0001D401\U0001D41A\U0001D427\U0001D424 \u279b {bank}\n\U0001D402\U0001D428\U0001D42E\U0001D427\U0001D42D\U0001D42B\U0001D432 \u279b {country_flag} {country_name}\n\U0001D413\U0001D432\U0001D429\U0001D41E \u279b {card_type}\n\U0001D402\U0001D432\U0001D42B\U0001D42B\U0001D41E\U0001D427\U0001D41C\U0001D432 \u279b {currency}\n\U0001D41C\U0001D41E\U0001D42B \u279b {user.first_name or 'User'} ({get_styled_plan(raw_plan)})\n\U0001D403\U0001D41E\U0001D42F \u279b Batman"
-    try: await status.edit_text(txt, parse_mode="HTML", reply_markup=kb_bin_result(), disable_web_page_preview=True)
-    except Exception: pass
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(PLAN_TEXT, parse_mode="HTML", reply_markup=kb_price(), disable_web_page_preview=True)
 
@@ -435,7 +391,7 @@ async def cmd_key30(u, c): await _gen_key(u, c, "root", 30)
 
 async def _grant(uid: int, plan: str, days: int, update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = get_user_data(uid, context); ud["plan"] = plan; ud["expires"] = time.time() + (days * 86400)
-    receipt = await send_activation_msg(uid, plan, days, context); await update.message.reply_text(f"G\u0280\u1d00\u0274\u1d1b\u1d07\u1d05 {days} D\u1d00y\u1d1c ({get_styled_plan(plan)}) \u1d1b\u1d0f <code>{uid}</code>\nR\u1d07\u1d04\u1d07\u026a\u1d18\u1d1b \u279a <code>{receipt}</code>", parse_mode="HTML")
+    receipt = await send_activation_msg(uid, plan, days, context); await update.message.reply_text(f"G\u0280\u1d00\u0274\u1d1b\u1d07\u1d05 {days} D\u1d00y\u1d1c ({get_styled_plan(plan)}) \u1d1b\u0d0f <code>{uid}</code>\nR\u1d07\u1d04\u1d07\u026a\u1d18\u1d1b \u279a <code>{receipt}</code>", parse_mode="HTML")
 
 async def cmd_oneday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -519,7 +475,7 @@ async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    context.bot_data["maintenance"] = False; await update.message.reply_text("B\u1d0f\u1d1b \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 ON \u2014 B\u1d0f\u1d1b \u026a\u1d1c \u0274\u1d0f\u1d21 \u1d00\u1d20\u1d00\u026i\u029f\u1d00\u0299\u029f\u1d07.")
+    context.bot_data["maintenance"] = False; await update.message.reply_text("B\u1d0f\u1d1b \u1d1b\u1d1c\u0280\u0274\u1d07\u1d05 ON \u2014 B\u1d0f\u1d1b \u026a\u1d1c \u0274\u1d0f\u1d21 \u1d00\u1d20\u1d00\u026a\u029f\u1d00\u0299\u029f\u1d07.")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); data = query.data; user = query.from_user
@@ -545,7 +501,10 @@ def main():
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, anti_ad_filter, block=False))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("ping", cmd_ping))
-    app.add_handler(CommandHandler("bin", cmd_bin))
+    
+    # Connect your new custom bin.py file here
+    app.add_handler(get_bin_handler())
+    
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("rm", cmd_rm))
     app.add_handler(CommandHandler("chk", cmd_chk))
