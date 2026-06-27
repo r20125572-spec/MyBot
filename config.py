@@ -4,30 +4,21 @@ import json
 import asyncio
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BOT CONFIGURATION 🦇
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-BOT_TOKEN = "8774596040:AAFGArSQUWOu5k_xRLyShiYy2y04uYzlPG4"
-OWNER_ID = 8283904645
-VERSION = "V4.2"
-DEV_LINK = "https://t.me/Batmancardchk"
+BOT_TOKEN  = "8976757848:AAFFntwBHHi_-Y7oRmNrbq-zSJIutEO2mhU"
+OWNER_ID   = 8283904645
+VERSION    = "V4.2"
+DEV_LINK   = "https://t.me/Batmancardchk"
 
 CHANNEL_USERNAME = "@Batcardchk"
-GROUP_USERNAME = "@batcardchkGroup"
-CHANNEL_LINK = "https://t.me/Batcardchk"
-GROUP_LINK = "https://t.me/batcardchkGroup"
-SUPPORT_LINK = "https://t.me/failurefr_07"
+GROUP_USERNAME   = "@batcardchkGroup"
+CHANNEL_LINK     = "https://t.me/Batcardchk"
+GROUP_LINK       = "https://t.me/batcardchkGroup"
+SUPPORT_LINK     = "https://t.me/failurefr_07"
+BOT_LINK         = "https://t.me/Batmancardchk_bot"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 BATMAN PHOTO
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
-BOT_PHOTO = "batman.jpg"
+BOT_PHOTO     = "batman.jpg"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE API URLs & SITES
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
     "pp":   "https://pp-auth-test-production.up.railway.app/pp",
@@ -65,51 +56,30 @@ async def get_bin_info(bin_num: str) -> dict:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
 
-        data = await asyncio.get_running_loop().run_in_executor(None, fetch)
-
-        bank_name = "N/A"
+        data          = await asyncio.get_running_loop().run_in_executor(None, fetch)
+        bank_name     = "N/A"
         if data.get("bank"):
             bank_name = data["bank"].get("name", "N/A")
-
-        country_name = "N/A"
+        country_name  = "N/A"
         country_emoji = ""
         if data.get("country"):
-            country_name = data["country"].get("name", "N/A").upper()
+            country_name  = data["country"].get("name", "N/A").upper()
             country_emoji = data["country"].get("emoji", "")
-
         return {
-            "scheme": data.get("scheme", "N/A"),
-            "type": data.get("type", "N/A"),
-            "bank": bank_name,
-            "country": country_name,
+            "scheme":        data.get("scheme", "N/A"),
+            "type":          data.get("type",   "N/A"),
+            "bank":          bank_name,
+            "country":       country_name,
             "country_emoji": country_emoji,
-            "error": False,
+            "error":         False,
         }
     except Exception:
         pass
     return {"error": True}
 
 
-def ui_result(card, gate, bin_txt, country, flag, raw, user, approved, time_taken="0.00"):
-    u = user.username or user.first_name
-    status = "Cᴀʀᴅ Cʜᴀʀɢᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
-    info = "{} - {}{}".format(bin_txt, country, flag) if bin_txt and bin_txt != "N/A" else "{}{}".format(country, flag)
-    return (
-        "Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\n"
-        "Tɪᴍᴇ ➺ {}s\n"
-        "Uꜱᴇʀ ➺ {}\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "<code>{}</code>\n"
-        "{}\n"
-        "Iɴꜰᴏ ➺ {}\n"
-        "━━━━━━━━━━━━━━━━\n\n"
-        "✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ."
-    ).format(time_taken, u, card, status, info)
-
-
-def kb_result():
+def kb_result() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🦇 CARD X CHK", url="https://t.me/Batcardchk")],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman", url="https://t.me/Batmancardchk")],
+        [InlineKeyboardButton("\U0001f987 CARD X CHK \u2197",             url=CHANNEL_LINK)],
+        [InlineKeyboardButton("\U0001f5e1\ufe0f DEV \u279a Batman \u2197", url=DEV_LINK)],
     ])
