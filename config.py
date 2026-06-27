@@ -26,7 +26,7 @@ BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-da
 BOT_PHOTO = "batman.jpg"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 GATE API URLs & SITES (Updated with new gates)
+# 🦇 GATE API URLs & SITES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
@@ -52,32 +52,64 @@ GATE_SITES = {
 
 API_TIMEOUT = 120
 
+
 async def get_bin_info(bin_num: str) -> dict:
     try:
-        url = f"https://lookup.binlist.net/{bin_num}"
-        req = urllib.request.Request(url, headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"})
+        url = "https://lookup.binlist.net/{}".format(bin_num)
+        req = urllib.request.Request(
+            url,
+            headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
+        )
+
         def fetch():
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode('utf-8'))
+                return json.loads(resp.read().decode("utf-8"))
+
         data = await asyncio.get_running_loop().run_in_executor(None, fetch)
+
         bank_name = "N/A"
-        if data.get("bank"): bank_name = data["bank"].get("name", "N/A")
-        country_name = "N/A"; country_emoji = ""
+        if data.get("bank"):
+            bank_name = data["bank"].get("name", "N/A")
+
+        country_name = "N/A"
+        country_emoji = ""
         if data.get("country"):
             country_name = data["country"].get("name", "N/A").upper()
             country_emoji = data["country"].get("emoji", "")
-        return {"scheme": data.get("scheme", "N/A"), "type": data.get("type", "N/A"), "bank": bank_name, "country": country_name, "country_emoji": country_emoji, "error": False}
-    except Exception: pass
+
+        return {
+            "scheme": data.get("scheme", "N/A"),
+            "type": data.get("type", "N/A"),
+            "bank": bank_name,
+            "country": country_name,
+            "country_emoji": country_emoji,
+            "error": False,
+        }
+    except Exception:
+        pass
     return {"error": True}
+
 
 def ui_result(card, gate, bin_txt, country, flag, raw, user, approved, time_taken="0.00"):
     u = user.username or user.first_name
     status = "Cᴀʀᴅ Cʜᴀʀɢᴇᴅ ✅" if approved else "Cᴀʀᴅ Dᴇᴄʟɪɴᴇᴅ ❌"
-    info = f"{bin_txt} - {country}{flag}" if bin_txt and bin_txt != "N/A" else f"{country}{flag}"
-    return (f"Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\nTɪᴍᴇ ➺ {time_taken}s\nUꜱᴇʀ ➺ {u}\n━━━━━━━━━━━━━━━━\n━━━━━━━━━━━━━━━━\n<code>{card}</code>\n{status}\nIɴꜰᴏ ➺ {info}\n━━━━━━━━━━━━━━━━\n\n✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ.")
+    info = "{} - {}{}".format(bin_txt, country, flag) if bin_txt and bin_txt != "N/A" else "{}{}".format(country, flag)
+    return (
+        "Tᴏᴛᴀʟ Cᴀʀᴅꜱ ➺ 1/1\n"
+        "Tɪᴍᴇ ➺ {}s\n"
+        "Uꜱᴇʀ ➺ {}\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "<code>{}</code>\n"
+        "{}\n"
+        "Iɴꜰᴏ ➺ {}\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "✅ Cʜᴇᴄᴋ Cᴏᴍᴘʟᴇᴛᴇ."
+    ).format(time_taken, u, card, status, info)
+
 
 def kb_result():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🦇 CARD X CHK", url="https://t.me/Batcardchk")],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman", url="https://t.me/Batmancardchk")]
+        [InlineKeyboardButton("🗡️ DEV ➺ Batman", url="https://t.me/Batmancardchk")],
     ])
