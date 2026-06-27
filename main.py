@@ -23,8 +23,8 @@ from bin import get_bin_handler
 
 CHANNEL_LINK  = "https://t.me/Batcardchk"
 GROUP_LINK    = "https://t.me/batcardchkGroup"
-SUPPORT_LINK  = "https://t.me/cardchkSupport"
-BOT_LINK      = "https://t.me/Batmancardchk_bot"
+SUPPORT_LINK  = "https://t.me/failurefr_07"
+BOT_LINK      = "https://t.me/Batcardchk"
 
 BATMAN_PHOTO_PATH = "attached_assets/photo_5906503312989687726_w_(1)_1782576635191.jpg"
 
@@ -106,7 +106,7 @@ AUTH_MENU_TEXT = (
 STRIPE_AUTH_TEXT = (
     "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
     "G\u1d00\u1d1b\u1d07    \u279a S\u1d1b\u0280\u026a\u1d18\u1d07 0$\n"
-    "C\u1d0f\u1d0d\u1d0d\u1d00\u0274\u1d05 \u279a /chk\n"
+    "C\u1d0f\u1d0d\u1d0d\u1d00\u0274\u1d05 \u279a /au\n"
     "S\u026a\u1d1b\u1d07   \u279a 16\n"
     "H\u1d07\u1d00\u029f\u1d1b\u029c  \u279a 100%\n"
     "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
@@ -286,8 +286,8 @@ async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(B("CHECKER"),         callback_data="mgates"),
-            InlineKeyboardButton(B("BUY NOW"),          callback_data="mprice"),
+            InlineKeyboardButton(B("CHECKER"),  callback_data="mgates"),
+            InlineKeyboardButton(B("BUY NOW"),   callback_data="mprice"),
         ],
         [
             InlineKeyboardButton(B("UPDATES") + " \u2197", url=CHANNEL_LINK),
@@ -301,10 +301,6 @@ def kb_main() -> InlineKeyboardMarkup:
 
 def kb_back(cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("\U0001f519 " + B("BACK"), callback_data=cb)]])
-
-
-def kb_bin_result() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(B("Batcardchk") + " \u2197", url=BOT_LINK)]])
 
 
 def kb_price() -> InlineKeyboardMarkup:
@@ -1301,32 +1297,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# ERROR HANDLER - catches ALL errors including Conflict
+# ERROR HANDLER
 # ============================================================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Global error handler that prevents unhandled exceptions from crashing the bot."""
     error = context.error
 
     if isinstance(error, Conflict):
         logger.warning(
-            "CONFLICT detected: Another bot instance is running with the same token. "
+            "CONFLICT: Another bot instance running with same token. "
             "This instance will keep retrying. Kill other instances to resolve."
         )
         return
 
     if isinstance(error, NetworkError):
-        logger.warning("Network error (will auto-retry): %s", error)
+        logger.warning("Network error (auto-retry): %s", error)
         return
 
     if isinstance(error, BadRequest):
-        # BadRequests are usually non-fatal (deleted message, etc.)
         logger.debug("BadRequest (non-fatal): %s", error)
         return
 
-    # Log all other unexpected errors
     logger.error("Unhandled exception: %s", error, exc_info=context.error)
 
-    # Optionally notify owner about critical errors
     if update and hasattr(update, "effective_chat") and update.effective_chat:
         try:
             await context.bot.send_message(
@@ -1339,18 +1331,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 # ============================================================
-# POST-INIT: safely drop pending updates on startup
+# POST-INIT / POST-SHUTDOWN
 # ============================================================
 async def post_init(application: Application) -> None:
-    """Called after Application is initialized. Drops any queued updates."""
-    logger.info("Bot initialized. Dropping any pending updates...")
+    logger.info("Bot initialized. Dropping pending updates...")
     try:
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("Pending updates dropped successfully.")
     except Conflict:
         logger.warning(
-            "Conflict on startup: Another instance is still polling. "
-            "Waiting for it to release..."
+            "Conflict on startup: Another instance still polling. Waiting..."
         )
         await asyncio.sleep(3)
         try:
@@ -1362,12 +1352,8 @@ async def post_init(application: Application) -> None:
         logger.error("Error dropping pending updates: %s", e)
 
 
-# ============================================================
-# POST-SHUTDOWN: clean logout
-# ============================================================
 async def post_shutdown(application: Application) -> None:
-    """Called when the bot is shutting down."""
-    logger.info("Bot shutting down. Releasing webhook/getUpdates lock...")
+    logger.info("Bot shutting down. Releasing getUpdates lock...")
     try:
         await application.bot.delete_webhook(drop_pending_updates=False)
     except Exception:
@@ -1376,11 +1362,9 @@ async def post_shutdown(application: Application) -> None:
 
 
 # ============================================================
-# BUILD AND RUN
+# BUILD & RUN
 # ============================================================
 def build_application() -> Application:
-    """Build the Application with all handlers and error handling."""
-
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -1390,24 +1374,24 @@ def build_application() -> Application:
         .build()
     )
 
-    # ---- Global error handler (MUST be registered) ----
+    # Global error handler
     app.add_error_handler(error_handler)
 
-    # ---- Pre-check filters ----
+    # Pre-check filters
     app.add_handler(MessageHandler(
         filters.ALL & ~filters.COMMAND,
         maintenance_check,
         block=False,
     ))
 
-    # ---- Anti-ad filter (runs before other handlers) ----
+    # Anti-ad filter
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         anti_ad_filter,
         block=False,
     ))
 
-    # ---- Command handlers ----
+    # User commands
     app.add_handler(CommandHandler("start",  cmd_start))
     app.add_handler(CommandHandler("ping",   cmd_ping))
     app.add_handler(CommandHandler("plan",   cmd_plan))
@@ -1426,7 +1410,7 @@ def build_application() -> Application:
     # Bin lookup
     app.add_handler(CommandHandler("bin", get_bin_handler))
 
-    # ---- Owner commands ----
+    # Owner commands
     app.add_handler(CommandHandler("info",      cmd_info))
     app.add_handler(CommandHandler("allcm",     cmd_allcm))
     app.add_handler(CommandHandler("gen",       cmd_gen))
@@ -1461,16 +1445,14 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("onmpp2",  cmd_onmpp2))
     app.add_handler(CommandHandler("offmpp2", cmd_offmpp2))
 
-    # ---- Callback query handler (MUST be last) ----
+    # Callback query handler (must be last)
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     return app
 
 
 def main():
-    """Main entry point with PID lock file to prevent duplicate instances."""
-
-    # ---- PID lock file to prevent multiple instances ----
+    # PID lock file to prevent duplicate instances
     pid_file = "/tmp/batman_bot.pid"
     try:
         if os.path.exists(pid_file):
@@ -1480,29 +1462,25 @@ def main():
                 try:
                     os.kill(int(old_pid), 0)
                     logger.error(
-                        "Another bot instance is already running (PID: %s). "
-                        "Kill it first with: kill %s",
+                        "Another bot instance already running (PID: %s). "
+                        "Kill it first: kill %s",
                         old_pid, old_pid,
                     )
                     return
                 except (ProcessLookupError, ValueError, OSError):
-                    # Old process is dead, stale lock file
                     logger.info("Stale PID file found (PID: %s). Removing it.", old_pid)
                     os.remove(pid_file)
     except Exception as e:
         logger.warning("Error checking PID file: %s", e)
 
-    # Write our PID
     try:
         with open(pid_file, "w") as f:
             f.write(str(os.getpid()))
     except Exception as e:
         logger.warning("Could not write PID file: %s", e)
 
-    # ---- Build application ----
     app = build_application()
 
-    # ---- Handle SIGINT/SIGTERM for clean shutdown ----
     def signal_handler(sig, frame):
         logger.info("Received signal %s, shutting down...", sig)
         try:
@@ -1517,7 +1495,6 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # ---- Start polling with conflict-safe settings ----
     logger.info("=" * 50)
     logger.info("Batman Card Checker Bot Starting...")
     logger.info("Version: %s", VERSION)
@@ -1530,14 +1507,13 @@ def main():
             allowed_updates=Update.ALL_TYPES,
             poll_interval=1.0,
             timeout=10,
-            bootstrap_retries=-1,   # infinite retries on startup
+            bootstrap_retries=-1,
             read_timeout=5,
             write_timeout=5,
             connect_timeout=5,
             pool_timeout=3,
         )
     finally:
-        # Clean up PID file on exit
         try:
             os.remove(pid_file)
         except Exception:
