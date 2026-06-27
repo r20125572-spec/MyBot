@@ -5,7 +5,7 @@ import random
 import asyncio
 from typing import Optional
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
@@ -23,7 +23,8 @@ CHANNEL_LINK  = "https://t.me/Batcardchk"
 GROUP_LINK    = "https://t.me/batcardchkGroup"
 SUPPORT_LINK  = "https://t.me/cardchkSupport"
 BOT_LINK      = "https://t.me/Batmancardchk_bot"
-WELCOME_PHOTO = "https://example.com/batman.jpg"
+
+BATMAN_PHOTO_PATH = "attached_assets/photo_5906503312989687726_w_(1)_1782576635191.jpg"
 
 FORCE_CHANNELS = [
     ("Batcardchk",      CHANNEL_LINK),
@@ -47,6 +48,7 @@ BLOCK_WORDS = (
     ".pw", "telegram.me", "joinchat", "://",
     "a_toolsx", "a-toolsx", "atoolsx", "a tools x", "a_tools",
     "toolsx", "must join our channel", "to use this bot",
+    "t.me/a_toolsx", "t.me/a-toolsx", "@a_toolsx", "@atoolsx",
 )
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -215,9 +217,9 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     credits    = "\u221e Unlimited" if is_premium else "{}/150".format(ud.get("credits", 150))
     uname      = "@{}".format(user.username) if user.username else "None"
     lines = [
-        "Util    \u279a {}".format(uname),
-        "Util ID \u279a <code>{}</code>".format(user.id),
-        "Plan    \u279a {}".format(get_styled_plan(raw_plan)),
+        "User    \u279a {}".format(uname),
+        "User ID \u279a <code>{}</code>".format(user.id),
+        "Access  \u279a {}".format(get_styled_plan(raw_plan)),
         "Credits \u279a {}".format(credits),
     ]
     if is_premium and expires > now:
@@ -231,6 +233,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
             lines.append("Remaining \u279a {}h".format(remaining_h))
     lines.append("Joined  \u279a {}".format(ud.get("joined", datetime.now().strftime("%Y-%m-%d"))))
     lines.append("Dev    \u279a <a href='{}'>Batman</a>".format(DEV_LINK))
+    lines.append("Version \u279a {}".format(VERSION))
     return "\n".join(lines)
 
 
@@ -254,21 +257,22 @@ async def check_force_join(user_id: int, bot) -> bool:
 
 def kb_force_join() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("\U0001f4e2 " + B("JOIN CHANNEL"), url=CHANNEL_LINK)],
-        [InlineKeyboardButton("\U0001f465 " + B("JOIN GROUP"),   url=GROUP_LINK)],
-        [InlineKeyboardButton("\u2705 " + B("VERIFY"),           callback_data="verify_join")],
+        [InlineKeyboardButton(B("JOIN CHANNEL") + " \u2197", url=CHANNEL_LINK)],
+        [InlineKeyboardButton(B("JOIN GROUP") + " \u2197",   url=GROUP_LINK)],
+        [InlineKeyboardButton("\u2705 " + B("VERIFY"),        callback_data="verify_join")],
     ])
 
 
 async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await context.bot.send_photo(
-            chat_id=update.effective_chat.id,
-            photo=WELCOME_PHOTO,
-            caption=FORCE_JOIN_TEXT,
-            reply_markup=kb_force_join(),
-            parse_mode="HTML",
-        )
+        with open(BATMAN_PHOTO_PATH, "rb") as photo_file:
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=photo_file,
+                caption=FORCE_JOIN_TEXT,
+                reply_markup=kb_force_join(),
+                parse_mode="HTML",
+            )
     except Exception:
         await update.effective_message.reply_text(
             FORCE_JOIN_TEXT,
@@ -279,11 +283,17 @@ async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("CHECKER"), callback_data="mgates"),
-         InlineKeyboardButton(B("BUY NOW"), callback_data="mprice")],
-        [InlineKeyboardButton(B("UPDATES"), url=CHANNEL_LINK),
-         InlineKeyboardButton(B("GROUP"),   url=GROUP_LINK)],
-        [InlineKeyboardButton(B("SUPPORT"), url=SUPPORT_LINK)],
+        [
+            InlineKeyboardButton(B("CHECKER"),         callback_data="mgates"),
+            InlineKeyboardButton(B("BUY NOW"),          callback_data="mprice"),
+        ],
+        [
+            InlineKeyboardButton(B("UPDATES") + " \u2197", url=CHANNEL_LINK),
+            InlineKeyboardButton(B("GROUP") + " \u2197",   url=GROUP_LINK),
+        ],
+        [
+            InlineKeyboardButton(B("SUPPORT") + " \u2197", url=SUPPORT_LINK),
+        ],
     ])
 
 
@@ -292,24 +302,24 @@ def kb_back(cb: str) -> InlineKeyboardMarkup:
 
 
 def kb_bin_result() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(B("Batcardchk"), url=BOT_LINK)]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(B("Batcardchk") + " \u2197", url=BOT_LINK)]])
 
 
 def kb_price() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(B("10$PAY"), callback_data="pay10"),
-            InlineKeyboardButton(B("15$PAY"), callback_data="pay15"),
-            InlineKeyboardButton(B("30$PAY"), callback_data="pay30"),
+            InlineKeyboardButton(B("10$ PAY"), callback_data="pay10"),
+            InlineKeyboardButton(B("15$ PAY"), callback_data="pay15"),
+            InlineKeyboardButton(B("30$ PAY"), callback_data="pay30"),
         ],
-        [InlineKeyboardButton(B("SUPPORT"), url=SUPPORT_LINK)],
-        [InlineKeyboardButton("\U0001f519 " + B("BACK"), callback_data="bmain")],
+        [InlineKeyboardButton(B("SUPPORT") + " \u2197", url=SUPPORT_LINK)],
+        [InlineKeyboardButton("\U0001f519 " + B("BACK"),  callback_data="bmain")],
     ])
 
 
 def kb_payment() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("SUPPORT"), url=SUPPORT_LINK)],
+        [InlineKeyboardButton(B("SUPPORT") + " \u2197", url=SUPPORT_LINK)],
         [InlineKeyboardButton("\U0001f519 " + B("BACK"), callback_data="mprice")],
     ])
 
@@ -459,12 +469,13 @@ async def process_gate(
     if not is_premium:
         ud["credits"] = credits - 1
 
-    msg        = await update.message.reply_text("Processing...")
+    msg        = await update.message.reply_text("⚡ Processing...")
     start_time = time.time()
 
     try:
         timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300)
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             results = await asyncio.gather(
                 _api_request(session, api_url, card, site_url),
                 get_bin_info(bin_num),
@@ -622,18 +633,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_new:
         try:
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=WELCOME_PHOTO,
-                caption=(
-                    "\U0001F987 Welcome to Batman Card Checker!\n\n"
-                    "Join our community:\n"
-                    "\U0001F4E2 Channel: {}\n"
-                    "\U0001F465 Group: {}"
-                ).format(CHANNEL_LINK, GROUP_LINK),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
+            with open(BATMAN_PHOTO_PATH, "rb") as photo_file:
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=photo_file,
+                    caption=(
+                        "\U0001F987 <b>Welcome to Batman Card Checker!</b>\n\n"
+                        "Join our community:\n"
+                        "\U0001F4E2 Channel: {}\n"
+                        "\U0001F465 Group: {}"
+                    ).format(CHANNEL_LINK, GROUP_LINK),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
         except Exception:
             pass
 
@@ -646,7 +658,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Pong! Bot is online.")
+    start = time.time()
+    msg = await update.message.reply_text("Pinging...")
+    elapsed = (time.time() - start) * 1000
+    await msg.edit_text("⚡ Pong! Speed: {:.0f}ms".format(elapsed))
 
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -911,11 +926,14 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Grant premium to a user: /sub <user_id_or_username> <days>"""
     if update.effective_user.id != OWNER_ID:
         return
     if len(context.args) < 2:
         await update.message.reply_text(
-            "Usage: /sub &lt;user_id&gt; &lt;days&gt;", parse_mode="HTML"
+            "Usage: /sub &lt;user_id or @username&gt; &lt;days&gt;\n"
+            "Example: /sub @username 30",
+            parse_mode="HTML"
         )
         return
     uid = await resolve_user(context.args[0], context)
@@ -927,28 +945,84 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan = "ROOT" if days >= 30 else "ELITE" if days >= 15 else "CORE"
         await _grant(uid, plan, days, update, context)
     except ValueError:
-        await update.message.reply_text("Invalid days.")
+        await update.message.reply_text("Invalid days. Usage: /sub @username 30")
 
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove/end a user's premium and reset to TRIAL: /resub <user_id_or_username>"""
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
-        await update.message.reply_text("Usage: /resub &lt;user_id&gt;", parse_mode="HTML")
+        await update.message.reply_text(
+            "Usage: /resub &lt;user_id or @username&gt;\n"
+            "This will REMOVE the user's premium and reset to TRIAL.",
+            parse_mode="HTML"
+        )
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
         await update.message.reply_text("User not found.")
         return
-    ud       = get_user_data(uid, context)
+
+    uid_str  = str(uid)
+    all_data = context.bot_data.get("user_data", {})
+
+    if uid_str not in all_data:
+        await update.message.reply_text(
+            "User <code>{}</code> has no data in bot.".format(uid),
+            parse_mode="HTML"
+        )
+        return
+
+    ud       = all_data[uid_str]
     raw_plan = ud.get("plan", "TRIAL").upper()
     expires  = ud.get("expires", 0)
     now      = time.time()
-    if raw_plan != "TRIAL" and expires > now:
-        remaining = int((expires - now) / 86400)
-        await _grant(uid, raw_plan, remaining, update, context)
-    else:
-        await update.message.reply_text("User has no active plan.")
+
+    if raw_plan == "TRIAL" or expires <= now:
+        await update.message.reply_text(
+            "User <code>{}</code> has no active premium to remove.".format(uid),
+            parse_mode="HTML"
+        )
+        return
+
+    old_plan    = get_styled_plan(raw_plan)
+    old_expires = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+
+    ud["plan"]    = "TRIAL"
+    ud["expires"] = 0
+    ud["credits"] = 0
+
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                "\u2501" * 18 + "\n"
+                "\u274c Premium Removed\n"
+                "\u2501" * 18 + "\n\n"
+                "Your premium access has been removed by the owner.\n"
+                "Your account has been reset to Trial.\n\n"
+                "Contact support if you think this is a mistake.\n"
+                "\u2501" * 18
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    line = "\u2501" * 18
+    await update.message.reply_text(
+        "{}\n"
+        "\u2705 Premium Removed\n"
+        "{}\n\n"
+        "User ID   \u279a <code>{}</code>\n"
+        "Old Plan  \u279a {}\n"
+        "Old Expiry \u279a {}\n"
+        "New Plan  \u279a Trial\n"
+        "Status   \u279a \u274c Reset to Trial\n"
+        "{}".format(line, line, uid, old_plan, old_expires, line),
+        parse_mode="HTML",
+    )
 
 
 async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1187,132 +1261,164 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=markup,
                     disable_web_page_preview=True,
                 )
-            except Exception as ex2:
-                logger.error("edit fallback [{}]: {}".format(data, ex2))
-        except Exception as ex:
-            logger.error("edit [{}]: {}".format(data, ex))
-            try:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=markup,
-                    disable_web_page_preview=True,
-                )
             except Exception:
                 pass
 
+    if data == "bmain":
+        await edit(ui_profile(user, context), kb_main())
+    elif data == "mgates":
+        await edit(CHECKER_STATUS_TEXT, kb_gate_main())
+    elif data == "mprice":
+        await edit(PLAN_TEXT, kb_price())
+    elif data == "mauth":
+        await edit(AUTH_MENU_TEXT, kb_auth_gates())
+    elif data == "mcharge":
+        await edit(CHARGE_MENU_TEXT, kb_charge_gates())
+    elif data == "mmass":
+        await edit(MASS_MENU_TEXT, kb_mass_gates())
+    elif data == "iau":
+        await edit(STRIPE_AUTH_TEXT, kb_back("mauth"))
+    elif data == "ib3":
+        await edit(BRAINTREE_TEXT, kb_back("mauth"))
+    elif data in ("ichk", "ipp", "ish", "ipyu"):
+        gate_map = {
+            "ichk": ("chk", "Stripe Charge", 1),
+            "ipp":  ("pp",  "PayPal Charge", 1),
+            "ish":  ("sh",  "Shopify Charge", 1),
+            "ipyu": ("pyu", "PayU Charge", 1),
+        }
+        gk, gn, gc = gate_map[data]
+        await edit(gate_info_text(gn, gk, gc), kb_back("mcharge"))
+    elif data in ("imss", "impp2"):
+        gate_map = {
+            "imss":  ("mss",  "Stripe Mass",  2),
+            "impp2": ("mpp2", "PayPal Mass",  2),
+        }
+        gk, gn, gc = gate_map[data]
+        await edit(gate_info_text(gn, gk, gc), kb_back("mmass"))
+    elif data in ("pay10", "pay15", "pay30"):
+        await edit(PAYMENT_PENDING_TEXT, kb_payment())
+
+
+async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_force_join(update.effective_user.id, context.bot):
+        await send_force_join(update, context)
+        return
+
+    bin_num = None
+    if context.args:
+        bin_num = context.args[0].strip()[:6]
+    elif update.message.reply_to_message and update.message.reply_to_message.text:
+        bin_num = update.message.reply_to_message.text.strip()[:6]
+
+    if not bin_num or not bin_num.isdigit() or len(bin_num) < 6:
+        await update.message.reply_text(
+            "Usage: <code>/bin 411111</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    msg = await update.message.reply_text("🔍 Looking up BIN...")
     try:
-        if data == "bmain":
-            await edit(ui_profile(user, context), kb_main())
-        elif data == "mprice":
-            await edit(PLAN_TEXT, kb_price())
-        elif data == "pay10":
-            await edit(
-                "Payment - 10$ (Core \U0001F380 | 7 Days)\n\n" + PAYMENT_PENDING_TEXT,
-                kb_payment()
-            )
-        elif data == "pay15":
-            await edit(
-                "Payment - 15$ (Elite \u2b50\ufe0f | 15 Days)\n\n" + PAYMENT_PENDING_TEXT,
-                kb_payment()
-            )
-        elif data == "pay30":
-            await edit(
-                "Payment - 30$ (Root \U0001F451 | 30 Days)\n\n" + PAYMENT_PENDING_TEXT,
-                kb_payment()
-            )
-        elif data == "mgates":
-            await edit(CHECKER_STATUS_TEXT, kb_gate_main())
-        elif data == "mauth":
-            await edit(AUTH_MENU_TEXT, kb_auth_gates())
-        elif data == "iau":
-            await edit(STRIPE_AUTH_TEXT, kb_back("mauth"))
-        elif data == "ib3":
-            await edit(BRAINTREE_TEXT, kb_back("mauth"))
-        elif data == "mcharge":
-            await edit(CHARGE_MENU_TEXT, kb_charge_gates())
-        elif data == "ichk":
-            await edit(gate_info_text("STRIPE CHARGE",  "chk", 1), kb_back("mcharge"))
-        elif data == "ipp":
-            await edit(gate_info_text("PAYPAL CHARGE",  "pp",  1), kb_back("mcharge"))
-        elif data == "ish":
-            await edit(gate_info_text("SHOPIFY CHARGE", "sh",  1), kb_back("mcharge"))
-        elif data == "ipyu":
-            await edit(gate_info_text("PAYU CHARGE",    "pyu", 1), kb_back("mcharge"))
-        elif data == "mmass":
-            await edit(MASS_MENU_TEXT, kb_mass_gates())
-        elif data == "imss":
-            await edit(gate_info_text("STRIPE MASS",  "mss",  1), kb_back("mmass"))
-        elif data == "impp2":
-            await edit(gate_info_text("PAYPAL MASS",  "mpp2", 1), kb_back("mmass"))
-        else:
-            logger.warning("Unknown callback: {}".format(data))
-    except Exception as ex:
-        logger.error("callback_handler error [{}]: {}".format(data, ex))
-        try:
-            await query.answer("Error: {}".format(str(ex)[:200]), show_alert=True)
-        except Exception:
-            pass
+        bin_data = await get_bin_info(bin_num)
+        if bin_data.get("error"):
+            await msg.edit_text("BIN not found.")
+            return
+        scheme  = str(bin_data.get("scheme",  "N/A")).upper()
+        b_type  = str(bin_data.get("type",    "N/A")).upper()
+        brand   = str(bin_data.get("brand",   "N/A")).upper()
+        bank    = bin_data.get("bank",    "N/A")
+        country = str(bin_data.get("country", "N/A")).upper()
+        flag    = bin_data.get("country_emoji", "")
+        line    = "\u2501" * 18
+        txt = (
+            "{}\n"
+            "\U0001F4B3 BIN Lookup\n"
+            "{}\n\n"
+            "BIN     \u279a <code>{}</code>\n"
+            "Scheme  \u279a {}\n"
+            "Type    \u279a {}\n"
+            "Brand   \u279a {}\n"
+            "Bank    \u279a {}\n"
+            "Country \u279a {} {}\n"
+            "{}"
+        ).format(line, line, bin_num, scheme, b_type, brand, bank, flag, country, line)
+        await msg.edit_text(txt, parse_mode="HTML", reply_markup=kb_bin_result())
+    except Exception as e:
+        await msg.edit_text("Error: <code>{}</code>".format(str(e)[:100]), parse_mode="HTML")
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .concurrent_updates(True)
+        .read_timeout(10)
+        .write_timeout(10)
+        .connect_timeout(8)
+        .pool_timeout(8)
+        .build()
+    )
 
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, maintenance_check, block=False))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, anti_ad_filter,    block=False))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, maintenance_check), group=-2)
+    app.add_handler(MessageHandler(filters.COMMAND, maintenance_check), group=-2)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter), group=-1)
 
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("ping",     cmd_ping))
-    app.add_handler(get_bin_handler())
     app.add_handler(CommandHandler("plan",     cmd_plan))
     app.add_handler(CommandHandler("rm",       cmd_rm))
-    app.add_handler(CommandHandler("chk",      cmd_chk))
-    app.add_handler(CommandHandler("pp",       cmd_pp))
-    app.add_handler(CommandHandler("sh",       cmd_sh))
-    app.add_handler(CommandHandler("pyu",      cmd_pyu))
-    app.add_handler(CommandHandler("b3",       cmd_b3))
-    app.add_handler(CommandHandler("au",       cmd_au))
-    app.add_handler(CommandHandler("mss",      cmd_mss))
-    app.add_handler(CommandHandler("mpp2",     cmd_mpp2))
+    app.add_handler(CommandHandler("bin",      cmd_bin))
+
+    app.add_handler(CommandHandler("chk",  cmd_chk))
+    app.add_handler(CommandHandler("pp",   cmd_pp))
+    app.add_handler(CommandHandler("sh",   cmd_sh))
+    app.add_handler(CommandHandler("pyu",  cmd_pyu))
+    app.add_handler(CommandHandler("b3",   cmd_b3))
+    app.add_handler(CommandHandler("au",   cmd_au))
+    app.add_handler(CommandHandler("mss",  cmd_mss))
+    app.add_handler(CommandHandler("mpp2", cmd_mpp2))
+
     app.add_handler(CommandHandler("info",     cmd_info))
     app.add_handler(CommandHandler("allcm",    cmd_allcm))
     app.add_handler(CommandHandler("gen",      cmd_gen))
     app.add_handler(CommandHandler("key10",    cmd_key10))
     app.add_handler(CommandHandler("key20",    cmd_key20))
     app.add_handler(CommandHandler("key30",    cmd_key30))
-    app.add_handler(CommandHandler("oneday",   cmd_oneday))
-    app.add_handler(CommandHandler("threeday", cmd_threeday))
     app.add_handler(CommandHandler("sub",      cmd_sub))
     app.add_handler(CommandHandler("resub",    cmd_resub))
     app.add_handler(CommandHandler("allplans", cmd_allplans))
+    app.add_handler(CommandHandler("oneday",   cmd_oneday))
+    app.add_handler(CommandHandler("threeday", cmd_threeday))
     app.add_handler(CommandHandler("seturl",   cmd_seturl))
     app.add_handler(CommandHandler("geturl",   cmd_geturl))
     app.add_handler(CommandHandler("killbot",  cmd_killbot))
     app.add_handler(CommandHandler("onbot",    cmd_onbot))
 
-    for cmd, func in [
-        ("onchk",  cmd_onchk),  ("offchk",  cmd_offchk),
-        ("onpp",   cmd_onpp),   ("offpp",   cmd_offpp),
-        ("onsh",   cmd_onsh),   ("offsh",   cmd_offsh),
-        ("onpyu",  cmd_onpyu),  ("offpyu",  cmd_offpyu),
-        ("onb3",   cmd_onb3),   ("offb3",   cmd_offb3),
-        ("onau",   cmd_onau),   ("offau",   cmd_offau),
-        ("onmss",  cmd_onmss),  ("offmss",  cmd_offmss),
-        ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2),
-    ]:
-        app.add_handler(CommandHandler(cmd, func))
+    app.add_handler(CommandHandler("onchk",   cmd_onchk))
+    app.add_handler(CommandHandler("offchk",  cmd_offchk))
+    app.add_handler(CommandHandler("onpp",    cmd_onpp))
+    app.add_handler(CommandHandler("offpp",   cmd_offpp))
+    app.add_handler(CommandHandler("onsh",    cmd_onsh))
+    app.add_handler(CommandHandler("offsh",   cmd_offsh))
+    app.add_handler(CommandHandler("onpyu",   cmd_onpyu))
+    app.add_handler(CommandHandler("offpyu",  cmd_offpyu))
+    app.add_handler(CommandHandler("onb3",    cmd_onb3))
+    app.add_handler(CommandHandler("offb3",   cmd_offb3))
+    app.add_handler(CommandHandler("onau",    cmd_onau))
+    app.add_handler(CommandHandler("offau",   cmd_offau))
+    app.add_handler(CommandHandler("onmss",   cmd_onmss))
+    app.add_handler(CommandHandler("offmss",  cmd_offmss))
+    app.add_handler(CommandHandler("onmpp2",  cmd_onmpp2))
+    app.add_handler(CommandHandler("offmpp2", cmd_offmpp2))
 
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if isinstance(context.error, Conflict):
-            return
-        logger.error("Exception: {}".format(context.error))
-
-    app.add_error_handler(error_handler)
-    print("\U0001F987 Online!")
-    app.run_polling(drop_pending_updates=True)
+    logger.info("Batman Bot starting...")
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
