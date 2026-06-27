@@ -3,6 +3,8 @@ import time
 import string
 import random
 import asyncio
+import signal
+import os
 from typing import Optional
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
@@ -10,7 +12,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
 )
-from telegram.error import Conflict, BadRequest
+from telegram.error import Conflict, BadRequest, NetworkError
 import aiohttp
 
 from config import (
@@ -469,7 +471,7 @@ async def process_gate(
     if not is_premium:
         ud["credits"] = credits - 1
 
-    msg        = await update.message.reply_text("⚡ Processing...")
+    msg        = await update.message.reply_text("\u26a1 Processing...")
     start_time = time.time()
 
     try:
@@ -661,7 +663,7 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start = time.time()
     msg = await update.message.reply_text("Pinging...")
     elapsed = (time.time() - start) * 1000
-    await msg.edit_text("⚡ Pong! Speed: {:.0f}ms".format(elapsed))
+    await msg.edit_text("\u26a1 Pong! Speed: {:.0f}ms".format(elapsed))
 
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -926,7 +928,6 @@ async def cmd_threeday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Grant premium to a user: /sub <user_id_or_username> <days>"""
     if update.effective_user.id != OWNER_ID:
         return
     if len(context.args) < 2:
@@ -949,7 +950,6 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Remove/end a user's premium and reset to TRIAL: /resub <user_id_or_username>"""
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
@@ -1300,76 +1300,120 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit(PAYMENT_PENDING_TEXT, kb_payment())
 
 
-async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_force_join(update.effective_user.id, context.bot):
-        await send_force_join(update, context)
-        return
+# ============================================================
+# ERROR HANDLER - catches ALL errors including Conflict
+# ============================================================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global error handler that prevents unhandled exceptions from crashing the bot."""
+    error = context.error
 
-    bin_num = None
-    if context.args:
-        bin_num = context.args[0].strip()[:6]
-    elif update.message.reply_to_message and update.message.reply_to_message.text:
-        bin_num = update.message.reply_to_message.text.strip()[:6]
-
-    if not bin_num or not bin_num.isdigit() or len(bin_num) < 6:
-        await update.message.reply_text(
-            "Usage: <code>/bin 411111</code>",
-            parse_mode="HTML"
+    if isinstance(error, Conflict):
+        logger.warning(
+            "CONFLICT detected: Another bot instance is running with the same token. "
+            "This instance will keep retrying. Kill other instances to resolve."
         )
         return
 
-    msg = await update.message.reply_text("🔍 Looking up BIN...")
+    if isinstance(error, NetworkError):
+        logger.warning("Network error (will auto-retry): %s", error)
+        return
+
+    if isinstance(error, BadRequest):
+        # BadRequests are usually non-fatal (deleted message, etc.)
+        logger.debug("BadRequest (non-fatal): %s", error)
+        return
+
+    # Log all other unexpected errors
+    logger.error("Unhandled exception: %s", error, exc_info=context.error)
+
+    # Optionally notify owner about critical errors
+    if update and hasattr(update, "effective_chat") and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text="\u26a0\ufe0f Bot Error:\n<code>{}</code>".format(str(error)[:500]),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+# ============================================================
+# POST-INIT: safely drop pending updates on startup
+# ============================================================
+async def post_init(application: Application) -> None:
+    """Called after Application is initialized. Drops any queued updates."""
+    logger.info("Bot initialized. Dropping any pending updates...")
     try:
-        bin_data = await get_bin_info(bin_num)
-        if bin_data.get("error"):
-            await msg.edit_text("BIN not found.")
-            return
-        scheme  = str(bin_data.get("scheme",  "N/A")).upper()
-        b_type  = str(bin_data.get("type",    "N/A")).upper()
-        brand   = str(bin_data.get("brand",   "N/A")).upper()
-        bank    = bin_data.get("bank",    "N/A")
-        country = str(bin_data.get("country", "N/A")).upper()
-        flag    = bin_data.get("country_emoji", "")
-        line    = "\u2501" * 18
-        txt = (
-            "{}\n"
-            "\U0001F4B3 BIN Lookup\n"
-            "{}\n\n"
-            "BIN     \u279a <code>{}</code>\n"
-            "Scheme  \u279a {}\n"
-            "Type    \u279a {}\n"
-            "Brand   \u279a {}\n"
-            "Bank    \u279a {}\n"
-            "Country \u279a {} {}\n"
-            "{}"
-        ).format(line, line, bin_num, scheme, b_type, brand, bank, flag, country, line)
-        await msg.edit_text(txt, parse_mode="HTML", reply_markup=kb_bin_result())
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Pending updates dropped successfully.")
+    except Conflict:
+        logger.warning(
+            "Conflict on startup: Another instance is still polling. "
+            "Waiting for it to release..."
+        )
+        await asyncio.sleep(3)
+        try:
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Pending updates dropped after retry.")
+        except Exception as e:
+            logger.error("Failed to drop updates after retry: %s", e)
     except Exception as e:
-        await msg.edit_text("Error: <code>{}</code>".format(str(e)[:100]), parse_mode="HTML")
+        logger.error("Error dropping pending updates: %s", e)
 
 
-def main():
+# ============================================================
+# POST-SHUTDOWN: clean logout
+# ============================================================
+async def post_shutdown(application: Application) -> None:
+    """Called when the bot is shutting down."""
+    logger.info("Bot shutting down. Releasing webhook/getUpdates lock...")
+    try:
+        await application.bot.delete_webhook(drop_pending_updates=False)
+    except Exception:
+        pass
+    logger.info("Bot stopped cleanly.")
+
+
+# ============================================================
+# BUILD AND RUN
+# ============================================================
+def build_application() -> Application:
+    """Build the Application with all handlers and error handling."""
+
     app = (
         Application.builder()
         .token(BOT_TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .concurrent_updates(True)
-        .read_timeout(10)
-        .write_timeout(10)
-        .connect_timeout(8)
-        .pool_timeout(8)
         .build()
     )
 
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, maintenance_check), group=-2)
-    app.add_handler(MessageHandler(filters.COMMAND, maintenance_check), group=-2)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_ad_filter), group=-1)
+    # ---- Global error handler (MUST be registered) ----
+    app.add_error_handler(error_handler)
 
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("ping",     cmd_ping))
-    app.add_handler(CommandHandler("plan",     cmd_plan))
-    app.add_handler(CommandHandler("rm",       cmd_rm))
-    app.add_handler(CommandHandler("bin",      cmd_bin))
+    # ---- Pre-check filters ----
+    app.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND,
+        maintenance_check,
+        block=False,
+    ))
 
+    # ---- Anti-ad filter (runs before other handlers) ----
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        anti_ad_filter,
+        block=False,
+    ))
+
+    # ---- Command handlers ----
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("ping",   cmd_ping))
+    app.add_handler(CommandHandler("plan",   cmd_plan))
+    app.add_handler(CommandHandler("rm",     cmd_rm))
+
+    # Gate commands
     app.add_handler(CommandHandler("chk",  cmd_chk))
     app.add_handler(CommandHandler("pp",   cmd_pp))
     app.add_handler(CommandHandler("sh",   cmd_sh))
@@ -1379,22 +1423,27 @@ def main():
     app.add_handler(CommandHandler("mss",  cmd_mss))
     app.add_handler(CommandHandler("mpp2", cmd_mpp2))
 
-    app.add_handler(CommandHandler("info",     cmd_info))
-    app.add_handler(CommandHandler("allcm",    cmd_allcm))
-    app.add_handler(CommandHandler("gen",      cmd_gen))
-    app.add_handler(CommandHandler("key10",    cmd_key10))
-    app.add_handler(CommandHandler("key20",    cmd_key20))
-    app.add_handler(CommandHandler("key30",    cmd_key30))
-    app.add_handler(CommandHandler("sub",      cmd_sub))
-    app.add_handler(CommandHandler("resub",    cmd_resub))
-    app.add_handler(CommandHandler("allplans", cmd_allplans))
-    app.add_handler(CommandHandler("oneday",   cmd_oneday))
-    app.add_handler(CommandHandler("threeday", cmd_threeday))
-    app.add_handler(CommandHandler("seturl",   cmd_seturl))
-    app.add_handler(CommandHandler("geturl",   cmd_geturl))
-    app.add_handler(CommandHandler("killbot",  cmd_killbot))
-    app.add_handler(CommandHandler("onbot",    cmd_onbot))
+    # Bin lookup
+    app.add_handler(CommandHandler("bin", get_bin_handler))
 
+    # ---- Owner commands ----
+    app.add_handler(CommandHandler("info",      cmd_info))
+    app.add_handler(CommandHandler("allcm",     cmd_allcm))
+    app.add_handler(CommandHandler("gen",       cmd_gen))
+    app.add_handler(CommandHandler("key10",     cmd_key10))
+    app.add_handler(CommandHandler("key20",     cmd_key20))
+    app.add_handler(CommandHandler("key30",     cmd_key30))
+    app.add_handler(CommandHandler("sub",       cmd_sub))
+    app.add_handler(CommandHandler("resub",     cmd_resub))
+    app.add_handler(CommandHandler("allplans",  cmd_allplans))
+    app.add_handler(CommandHandler("oneday",    cmd_oneday))
+    app.add_handler(CommandHandler("threeday",  cmd_threeday))
+    app.add_handler(CommandHandler("seturl",    cmd_seturl))
+    app.add_handler(CommandHandler("geturl",    cmd_geturl))
+    app.add_handler(CommandHandler("killbot",   cmd_killbot))
+    app.add_handler(CommandHandler("onbot",     cmd_onbot))
+
+    # Gate toggles
     app.add_handler(CommandHandler("onchk",   cmd_onchk))
     app.add_handler(CommandHandler("offchk",  cmd_offchk))
     app.add_handler(CommandHandler("onpp",    cmd_onpp))
@@ -1412,13 +1461,88 @@ def main():
     app.add_handler(CommandHandler("onmpp2",  cmd_onmpp2))
     app.add_handler(CommandHandler("offmpp2", cmd_offmpp2))
 
+    # ---- Callback query handler (MUST be last) ----
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logger.info("Batman Bot starting...")
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+    return app
+
+
+def main():
+    """Main entry point with PID lock file to prevent duplicate instances."""
+
+    # ---- PID lock file to prevent multiple instances ----
+    pid_file = "/tmp/batman_bot.pid"
+    try:
+        if os.path.exists(pid_file):
+            with open(pid_file, "r") as f:
+                old_pid = f.read().strip()
+            if old_pid:
+                try:
+                    os.kill(int(old_pid), 0)
+                    logger.error(
+                        "Another bot instance is already running (PID: %s). "
+                        "Kill it first with: kill %s",
+                        old_pid, old_pid,
+                    )
+                    return
+                except (ProcessLookupError, ValueError, OSError):
+                    # Old process is dead, stale lock file
+                    logger.info("Stale PID file found (PID: %s). Removing it.", old_pid)
+                    os.remove(pid_file)
+    except Exception as e:
+        logger.warning("Error checking PID file: %s", e)
+
+    # Write our PID
+    try:
+        with open(pid_file, "w") as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        logger.warning("Could not write PID file: %s", e)
+
+    # ---- Build application ----
+    app = build_application()
+
+    # ---- Handle SIGINT/SIGTERM for clean shutdown ----
+    def signal_handler(sig, frame):
+        logger.info("Received signal %s, shutting down...", sig)
+        try:
+            asyncio.get_event_loop().create_task(app.shutdown())
+        except Exception:
+            pass
+        try:
+            os.remove(pid_file)
+        except Exception:
+            pass
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # ---- Start polling with conflict-safe settings ----
+    logger.info("=" * 50)
+    logger.info("Batman Card Checker Bot Starting...")
+    logger.info("Version: %s", VERSION)
+    logger.info("=" * 50)
+
+    try:
+        app.run_polling(
+            drop_pending_updates=True,
+            close_loop=False,
+            allowed_updates=Update.ALL_TYPES,
+            poll_interval=1.0,
+            timeout=10,
+            bootstrap_retries=-1,   # infinite retries on startup
+            read_timeout=5,
+            write_timeout=5,
+            connect_timeout=5,
+            pool_timeout=3,
+        )
+    finally:
+        # Clean up PID file on exit
+        try:
+            os.remove(pid_file)
+        except Exception:
+            pass
+        logger.info("Bot process exited.")
 
 
 if __name__ == "__main__":
