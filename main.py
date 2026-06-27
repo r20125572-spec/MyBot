@@ -343,36 +343,62 @@ def kb_mass_gates() -> InlineKeyboardMarkup:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PHOTO SENDER  — tries local file first, then URL
+# PHOTO SENDER — caches file_id after first send for max speed
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def send_photo_safe(bot, chat_id: int, caption: str, markup: InlineKeyboardMarkup):
-    """Send batman photo. Tries local batman.jpg first, then URL fallback."""
+_PHOTO_FILE_ID: str = ""   # cached telegram file_id after first upload
+
+
+async def send_photo_safe(bot, chat_id: int, caption: str, markup: InlineKeyboardMarkup) -> bool:
+    global _PHOTO_FILE_ID
     sent = False
+
+    # 1. Use cached file_id (fastest — no upload needed)
+    if _PHOTO_FILE_ID:
+        try:
+            await bot.send_photo(
+                chat_id=chat_id, photo=_PHOTO_FILE_ID,
+                caption=caption, reply_markup=markup, parse_mode="HTML",
+            )
+            return True
+        except Exception:
+            _PHOTO_FILE_ID = ""   # cache invalid, reset
+
+    # 2. Try local file
     if os.path.exists(BOT_PHOTO):
         try:
             with open(BOT_PHOTO, "rb") as f:
-                await bot.send_photo(
+                msg = await bot.send_photo(
                     chat_id=chat_id, photo=f,
                     caption=caption, reply_markup=markup, parse_mode="HTML",
                 )
-            sent = True
+            if msg and msg.photo:
+                _PHOTO_FILE_ID = msg.photo[-1].file_id   # cache for future
+            return True
         except Exception:
             pass
-    if not sent:
-        try:
-            await bot.send_photo(
-                chat_id=chat_id, photo=BOT_PHOTO_URL,
-                caption=caption, reply_markup=markup, parse_mode="HTML",
-            )
-            sent = True
-        except Exception:
-            pass
-    return sent
+
+    # 3. Try URL
+    try:
+        msg = await bot.send_photo(
+            chat_id=chat_id, photo=BOT_PHOTO_URL,
+            caption=caption, reply_markup=markup, parse_mode="HTML",
+        )
+        if msg and msg.photo:
+            _PHOTO_FILE_ID = msg.photo[-1].file_id   # cache for future
+        return True
+    except Exception:
+        pass
+
+    return False
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE JOIN
+# FORCE JOIN  (with membership cache for speed)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_MEMBER_CACHE: dict = {}   # uid -> (result: bool, expires: float)
+_CACHE_TTL    = 300        # 5 minutes
+
+
 async def is_member(bot, user_id: int, chat_username: str) -> bool:
     try:
         member = await bot.get_chat_member("@{}".format(chat_username), user_id)
@@ -384,22 +410,47 @@ async def is_member(bot, user_id: int, chat_username: str) -> bool:
 async def check_force_join(user_id: int, bot) -> bool:
     if user_id == OWNER_ID:
         return True
+    cached = _MEMBER_CACHE.get(user_id)
+    if cached and time.time() < cached[1]:
+        return cached[0]
     results = await asyncio.gather(
         *[is_member(bot, user_id, uname) for uname, _ in FORCE_CHANNELS],
         return_exceptions=True,
     )
-    return all(r is True for r in results)
+    ok = all(r is True for r in results)
+    _MEMBER_CACHE[user_id] = (ok, time.time() + _CACHE_TTL)
+    return ok
+
+
+def _clear_member_cache(user_id: int):
+    _MEMBER_CACHE.pop(user_id, None)
 
 
 async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    _clear_member_cache(update.effective_user.id)
     sent = await send_photo_safe(
         context.bot, chat_id, FORCE_JOIN_TEXT, kb_force_join()
     )
     if not sent:
-        await update.effective_message.reply_text(
-            FORCE_JOIN_TEXT, reply_markup=kb_force_join(), parse_mode="HTML"
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=FORCE_JOIN_TEXT,
+                reply_markup=kb_force_join(),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "\U0001F987 Batman Card Checker\n\n"
+                    "Join our channel and group to use the bot!\n\n"
+                    "Click the buttons below:"
+                ),
+                reply_markup=kb_force_join(),
+            )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1133,6 +1184,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "verify_join":
+        _clear_member_cache(user.id)   # force fresh check
         if await check_force_join(user.id, context.bot):
             try:
                 await query.message.delete()
@@ -1143,20 +1195,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ud.setdefault("name",   user.first_name or "User")
             if user.username:
                 ud["username"] = user.username
-            try:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=ui_profile(user, context),
-                    parse_mode="HTML",
-                    reply_markup=kb_main(),
-                    disable_web_page_preview=True,
-                )
-            except Exception as ex:
-                logger.error("verify_join send: {}".format(ex))
+            is_new = not ud.get("_welcomed", False)
+            ud["_welcomed"] = True
+            if is_new:
+                welcome_caption = (
+                    "\U0001F987 <b>Welcome to Batman Card Checker!</b>\n\n"
+                    "The fastest card checker bot.\n\n"
+                    "\U0001F4E2 Channel: {}\n"
+                    "\U0001F465 Group: {}"
+                ).format(CHANNEL_LINK, GROUP_LINK)
+                await send_photo_safe(context.bot, query.message.chat_id, welcome_caption, kb_main())
+            else:
+                try:
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=ui_profile(user, context),
+                        parse_mode="HTML",
+                        reply_markup=kb_main(),
+                        disable_web_page_preview=True,
+                    )
+                except Exception as ex:
+                    logger.error("verify_join send: {}".format(ex))
         else:
             try:
                 await query.answer(
-                    "\u274c Not joined yet!\nJoin both channel and group, then press VERIFY.",
+                    "\u274c Not joined yet!\nJoin BOTH channel and group, then press VERIFY.",
                     show_alert=True,
                 )
             except Exception:
