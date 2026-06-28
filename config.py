@@ -4,20 +4,29 @@ import json
 import asyncio
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN  = "8976757848:AAFFntwBHHi_-Y7oRmNrbq-zSJIutEO2mhU"
-OWNER_ID   = 8283904645
-VERSION    = "V4.2"
-DEV_LINK   = "https://t.me/Batmancardchk"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BOT CONFIGURATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BOT_TOKEN = "8815716763:AAHUMJqQcCwN9TILIyGT6eTLRt4DMio93tA"
+OWNER_ID  = 8283904645
+VERSION   = "V4.2"
+DEV_LINK  = "https://t.me/Batmancardchk"
 
 CHANNEL_USERNAME = "@Batcardchk"
 GROUP_USERNAME   = "@batcardchkGroup"
 CHANNEL_LINK     = "https://t.me/Batcardchk"
 GROUP_LINK       = "https://t.me/batcardchkGroup"
 SUPPORT_LINK     = "https://t.me/failurefr_07"
+BOT_USERNAME     = "Batmancardchk_bot"
 BOT_LINK         = "https://t.me/Batmancardchk_bot"
 
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
 BOT_PHOTO     = "batman.jpg"
+
+API_TIMEOUT      = 120
+REFERRAL_CREDITS = 150
+LOCK_FILE        = "/tmp/batman_bot.lock"
 
 GATE_URLS = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
@@ -41,12 +50,19 @@ GATE_SITES = {
     "mpp2": "example.com",
 }
 
-API_TIMEOUT = 120
+MASS_GATES = {"mss", "mpp2"}
 
+FORCE_CHANNELS = [
+    ("Batcardchk",     CHANNEL_LINK),
+    ("batcardchkGroup", GROUP_LINK),
+]
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BIN LOOKUP
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def get_bin_info(bin_num: str) -> dict:
     try:
-        url = "https://lookup.binlist.net/{}".format(bin_num)
+        url = f"https://lookup.binlist.net/{bin_num}"
         req = urllib.request.Request(
             url,
             headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
@@ -56,15 +72,18 @@ async def get_bin_info(bin_num: str) -> dict:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
 
-        data          = await asyncio.get_running_loop().run_in_executor(None, fetch)
-        bank_name     = "N/A"
+        data = await asyncio.get_running_loop().run_in_executor(None, fetch)
+
+        bank_name = "N/A"
         if data.get("bank"):
             bank_name = data["bank"].get("name", "N/A")
+
         country_name  = "N/A"
         country_emoji = ""
         if data.get("country"):
-            country_name  = data["country"].get("name", "N/A").upper()
+            country_name  = data["country"].get("name",  "N/A").upper()
             country_emoji = data["country"].get("emoji", "")
+
         return {
             "scheme":        data.get("scheme", "N/A"),
             "type":          data.get("type",   "N/A"),
@@ -77,9 +96,11 @@ async def get_bin_info(bin_num: str) -> dict:
         pass
     return {"error": True}
 
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SHARED KEYBOARD
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_result() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("\U0001f987 CARD X CHK \u2197",             url=CHANNEL_LINK)],
-        [InlineKeyboardButton("\U0001f5e1\ufe0f DEV \u279a Batman \u2197", url=DEV_LINK)],
+        [InlineKeyboardButton("🦇 CARD X CHK ➺", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🗡️ DEV ➺ Batman ➺", url=DEV_LINK)],
     ])
