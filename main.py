@@ -180,7 +180,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         ud["expires"] = 0
         expires = 0
     premium = raw_plan != "TRIAL"
-    credits = "∞ Unlimited" if premium else f"{ud.get('credits', 150)}"
+    credits = "∞ Unlimited" if premium else str(ud.get("credits", 150))
     uname = f"@{user.username}" if user.username else user.first_name or "User"
     total_refs = ud.get("total_refs", 0)
 
@@ -197,7 +197,11 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         rem_h = int(((expires - now) % 86400) / 3600)
         lines.append(f"Exᴘɪʀᴇꜱ ➺ {exp_date}")
         lines.append(f"Lᴇꜰᴛ    ➺ {rem_d}d {rem_h}h")
-    lines.append(f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs} (Earned {total_refs * REFERRAL_CREDITS} credits)")
+        # Show receipt if stored
+        receipt = ud.get("last_receipt")
+        if receipt:
+            lines.append(f"Rᴇᴄᴇɪᴘᴛ  ➺ <code>{receipt}</code>")
+    lines.append(f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits earned)")
     lines.append(f"Jᴏɪɴᴇᴅ  ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
     lines.append(f"Dᴇᴠ     ➺ <a href='{DEV_LINK}'>Batman</a>")
     lines.append("━━━━━━━━━━━━━━━━━")
@@ -557,18 +561,25 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
 
     ud = get_user_data(user_id, context)
     expires_ts = time.time() + days * 86400
-    ud.update({"name": name, "plan": plan, "expires": expires_ts})
+    # Store everything including receipt so profile can show it
+    ud["name"] = name
+    ud["plan"] = plan.upper()
+    ud["expires"] = expires_ts
+    ud["last_receipt"] = receipt
+    ud["last_plan"] = plan.upper()
+    ud["last_days"] = days
     if username:
         ud["username"] = username
 
     exp_date = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
     display_name = f"@{username}" if username else name
+    styled = get_styled_plan(plan)
 
     txt = (
         f"Cᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴꜱ! 🎉 Yᴏᴜʀ ᴀᴄᴄᴇꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ.\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Uꜱᴇʀ        ➺ {display_name}\n"
-        f"Aᴄᴄᴇꜱꜱ     ➺ {get_styled_plan(plan)}\n"
+        f"Aᴄᴄᴇꜱꜱ     ➺ {styled}\n"
         f"Dᴜʀᴀᴛɪᴏɴ   ➺ {days} Dᴀʏꜱ\n"
         f"Cʀᴇᴅɪᴛꜱ    ➺ ∞ Uɴʟɪᴍɪᴛᴇᴅ\n"
         f"Exᴘɪʀᴇꜱ    ➺ {exp_date}\n"
@@ -1151,16 +1162,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GLOBAL ERROR HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_conflict_shutting_down = False
+
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _conflict_shutting_down
     error = context.error
     if isinstance(error, Conflict):
-        logger.critical("⚠️ CONFLICT: Another instance is still running. Stopping this one.")
+        if _conflict_shutting_down:
+            return
+        _conflict_shutting_down = True
+        logger.critical("⚠️ CONFLICT: Another bot instance is using this token.")
+        logger.critical("⚠️ ACTION REQUIRED: Stop ALL other running instances of this bot,")
+        logger.critical("⚠️ then restart this one. Waiting 45s before exit to slow restart loop...")
         if context.application and hasattr(context.application, "updater") and context.application.updater:
             try:
                 await context.application.updater.stop()
             except Exception:
                 pass
-        asyncio.get_running_loop().call_later(2.0, os._exit, 1)
+        # Sleep 45 seconds BEFORE exiting so Replit doesn't instantly restart and spam
+        await asyncio.sleep(45)
+        release_instance_lock()
+        os._exit(1)
         return
     if isinstance(error, NetworkError):
         logger.warning(f"Network error (will auto-retry): {error}")
@@ -1172,12 +1194,22 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def post_init(application: Application) -> None:
     logger.info("🦇 Cleaning up any existing webhook...")
+    # Retry webhook delete up to 3 times to be sure
+    for attempt in range(3):
+        try:
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("✅ Webhook deleted, pending updates dropped.")
+            break
+        except Exception as e:
+            logger.warning(f"Webhook cleanup attempt {attempt+1} warning: {e}")
+            await asyncio.sleep(2)
+    # Aggressively claim the getUpdates slot so any competing instance loses it
     try:
-        await application.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("✅ Webhook deleted, pending updates dropped.")
+        await application.bot.get_updates(offset=-1, timeout=0, limit=1)
+        logger.info("✅ Update slot claimed.")
     except Exception as e:
-        logger.warning(f"Webhook cleanup warning: {e}")
-    await asyncio.sleep(1)
+        logger.warning(f"Update slot claim warning: {e}")
+    await asyncio.sleep(2)
 
 async def post_shutdown(application: Application) -> None:
     logger.info("🦇 Bot shutting down cleanly...")
