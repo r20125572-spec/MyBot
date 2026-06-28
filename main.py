@@ -94,14 +94,36 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
         context.bot_data["user_data"] = {}
     if uid not in context.bot_data["user_data"]:
         context.bot_data["user_data"][uid] = {
-            "name":       "User",
-            "joined":     datetime.now().strftime("%Y-%m-%d"),
-            "credits":    150,
-            "plan":       "TRIAL",
-            "expires":    0,
-            "total_refs": 0,
+            "name":            "User",
+            "first_name":      "User",
+            "last_name":       "",
+            "username":        "",
+            "language_code":   "en",
+            "joined":          datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "last_active":     datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "credits":         150,
+            "plan":            "TRIAL",
+            "expires":         0,
+            "total_refs":      0,
+            "total_checks":    0,
+            "approved_checks": 0,
+            "declined_checks": 0,
+            "last_gate":       "N/A",
+            "last_card":       "N/A",
+            "codes_redeemed":  0,
+            "keys_redeemed":   0,
         }
     return context.bot_data["user_data"][uid]
+
+def _update_user_meta(ud: dict, user) -> None:
+    ud["first_name"]    = user.first_name or "User"
+    ud["last_name"]     = user.last_name or ""
+    ud["name"]          = user.full_name or user.first_name or "User"
+    ud["last_active"]   = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if user.username:
+        ud["username"] = user.username
+    if user.language_code:
+        ud["language_code"] = user.language_code
 
 def gen_code(length: int = 10) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
@@ -271,7 +293,8 @@ async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "To access the Batcomputer, you must join the League of Shadows.\n\n"
         "1️⃣ Click <b>JOIN CHANNEL</b>\n"
         "2️⃣ Click <b>JOIN GROUP</b>\n"
-        "3️⃣ Click <b>✅ VERIFY ACCESS</b>"
+        "3️⃣ Click <b>✅ I JOINED - VERIFY</b>\n\n"
+        "⚠️ <i>You must join ALL required chats to proceed.</i>"
     )
     try:
         await context.bot.send_photo(chat_id=chat_id, photo=BOT_PHOTO_URL,
@@ -345,6 +368,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
+    _update_user_meta(ud, user)
 
     if gate_key in PREMIUM_GATES and not premium:
         gate_label = {
@@ -422,6 +446,16 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         is_approved = any(w in raw_response.lower() for w in
                           ["approved", "captured", "success", "charged", "true"])
         status_ui   = "Cʜᴀʀɢᴇᴅ ✅" if is_approved else "Dᴇᴄʟɪɴᴇᴅ ❌"
+
+        # ── Track check stats ──────────────────────────────
+        ud["total_checks"]    = ud.get("total_checks", 0) + 1
+        ud["last_gate"]       = gate_name
+        ud["last_card"]       = card_raw[:6] + "xxxxxxxxxx"
+        ud["last_active"]     = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if is_approved:
+            ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+        else:
+            ud["declined_checks"] = ud.get("declined_checks", 0) + 1
 
         bin_txt = "N/A"
         if not bin_data.get("error"):
@@ -542,11 +576,10 @@ async def _grant(uid: int, plan: str, days: int,
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud   = get_user_data(user.id, context)
-    ud.setdefault("joined",     datetime.now().strftime("%Y-%m-%d"))
-    ud.setdefault("name",       user.first_name or "User")
+    ud.setdefault("joined",     datetime.now().strftime("%Y-%m-%d %H:%M"))
+    ud.setdefault("name",       user.full_name or user.first_name or "User")
     ud.setdefault("total_refs", 0)
-    if user.username:
-        ud["username"] = user.username
+    _update_user_meta(ud, user)
 
     # Handle referral deep link: /start ref_12345678
     if context.args:
@@ -620,11 +653,13 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if code in codes and not codes[code]["used"]:
         codes[code]["used"] = True
         ud["credits"] = ud.get("credits", 0) + codes[code]["value"]
+        ud["codes_redeemed"] = ud.get("codes_redeemed", 0) + 1
         await update.message.reply_text(
             f"✅ Redeemed! +{codes[code]['value']} credits.\nCʀᴇᴅɪᴛꜱ ➺ {ud['credits']}")
     elif code in keys and not keys[code]["used"]:
         keys[code]["used"] = True
         p, d    = keys[code]["plan"], keys[code]["days"]
+        ud["keys_redeemed"] = ud.get("keys_redeemed", 0) + 1
         receipt = await send_activation_msg(uid, p, d, context)
         await update.message.reply_text(
             f"✅ Activated {get_styled_plan(p)} for {d} days!\n"
@@ -661,10 +696,17 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
+
     target_id, target_name, target_username = None, "N/A", None
+    target_last_name, target_lang = "", "N/A"
+
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         ru = update.message.reply_to_message.from_user
-        target_id, target_name, target_username = ru.id, ru.first_name or "N/A", ru.username
+        target_id       = ru.id
+        target_name     = ru.first_name or "N/A"
+        target_last_name = ru.last_name or ""
+        target_username  = ru.username
+        target_lang      = ru.language_code or "N/A"
     elif context.args:
         raw = context.args[0].strip().lstrip("@")
         if raw.lstrip("-").isdigit():
@@ -672,49 +714,138 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             try:
                 chat = await context.bot.get_chat(f"@{raw}")
-                target_id, target_name, target_username = chat.id, chat.first_name or "N/A", chat.username
-            except Exception: pass
+                target_id        = chat.id
+                target_name      = chat.first_name or "N/A"
+                target_last_name = getattr(chat, "last_name", "") or ""
+                target_username  = chat.username
+            except Exception:
+                pass
+
     if not target_id:
         await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /info <code>@username or ID</code>", parse_mode="HTML"); return
+            "Uꜱᴀɢᴇ:\n"
+            "<code>/info @username</code>\n"
+            "<code>/info 123456789</code>\n"
+            "Or reply to any user's message with /info",
+            parse_mode="HTML"
+        )
+        return
+
+    # Fetch live Telegram info if not already set
     if target_name == "N/A":
         try:
-            chat = await context.bot.get_chat(target_id)
-            target_name, target_username = chat.first_name or "N/A", chat.username
-        except Exception: pass
+            chat             = await context.bot.get_chat(target_id)
+            target_name      = chat.first_name or "N/A"
+            target_last_name = getattr(chat, "last_name", "") or ""
+            target_username  = chat.username
+        except Exception:
+            pass
+
     all_users = context.bot_data.get("user_data", {})
     uid_str   = str(target_id)
     now       = time.time()
     udata     = all_users.get(uid_str, {})
-    raw_plan  = udata.get("plan", "TRIAL").upper()
-    expires   = udata.get("expires", 0)
-    if raw_plan != "TRIAL" and expires <= now: raw_plan, expires = "TRIAL", 0
-    premium   = raw_plan != "TRIAL" and expires > now
+
+    # Plan & expiry
+    raw_plan = udata.get("plan", "TRIAL").upper()
+    expires  = udata.get("expires", 0)
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"
+        expires  = 0
+    premium = raw_plan != "TRIAL" and expires > now
+
+    # Credits
     credits_d = "∞ Unlimited" if premium else str(udata.get("credits", 150))
+
+    # Display values
+    full_name = target_name
+    if target_last_name:
+        full_name = f"{target_name} {target_last_name}"
     uname_d   = f"@{target_username}" if target_username else "None"
-    total_refs = udata.get("total_refs", 0)
+    lang_d    = udata.get("language_code", target_lang) or "N/A"
+
+    # Activity & check stats
+    total_refs       = udata.get("total_refs", 0)
+    total_checks     = udata.get("total_checks", 0)
+    approved_checks  = udata.get("approved_checks", 0)
+    declined_checks  = udata.get("declined_checks", 0)
+    last_gate        = udata.get("last_gate", "N/A")
+    last_card        = udata.get("last_card", "N/A")
+    last_active      = udata.get("last_active", "N/A")
+    joined           = udata.get("joined", "N/A")
+    codes_redeemed   = udata.get("codes_redeemed", 0)
+    keys_redeemed    = udata.get("keys_redeemed", 0)
+    last_receipt     = udata.get("last_receipt", "N/A")
+
+    # Approval rate
+    if total_checks > 0:
+        approval_rate = f"{(approved_checks / total_checks * 100):.1f}%"
+    else:
+        approval_rate = "N/A"
+
+    # Membership check in force channels (live)
+    channel_status = []
+    for uname_ch, label in FORCE_CHANNELS:
+        is_m = await is_member(context.bot, target_id, uname_ch)
+        channel_status.append(f"{'✅' if is_m else '❌'} {label}")
+
     txt = (
-        f"━━━━━━━━━━━━━━━━━\n👤 User Info\n━━━━━━━━━━━━━━━━━\n\n"
-        f"Nᴀᴍᴇ      ➺ {target_name}\n"
-        f"Uꜱᴇʀɴᴀᴍᴇ ➺ {uname_d}\n"
-        f"Uꜱᴇʀ ID   ➺ <code>{target_id}</code>\n"
-        f"Pʟᴀɴ      ➺ {get_styled_plan(raw_plan)}\n"
-        f"Cʀᴇᴅɪᴛꜱ  ➺ {credits_d}\n"
-        f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs}\n"
-        f"Jᴏɪɴᴇᴅ   ➺ {udata.get('joined', 'N/A')}\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"🦇 Aᴅᴠᴀɴᴄᴇᴅ Uꜱᴇʀ Iɴꜰᴏ\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>Iᴅᴇɴᴛɪᴛʏ</b>\n"
+        f"Fɪʀꜱᴛ Nᴀᴍᴇ  ➺ {target_name}\n"
+        f"Lᴀꜱᴛ Nᴀᴍᴇ   ➺ {target_last_name or 'None'}\n"
+        f"Fᴜʟʟ Nᴀᴍᴇ   ➺ {full_name}\n"
+        f"Uꜱᴇʀɴᴀᴍᴇ   ➺ {uname_d}\n"
+        f"Uꜱᴇʀ ID     ➺ <code>{target_id}</code>\n"
+        f"Lᴀɴɢᴜᴀɢᴇ   ➺ {lang_d.upper()}\n\n"
+        f"💎 <b>Aᴄᴄᴇꜱꜱ</b>\n"
+        f"Pʟᴀɴ        ➺ {get_styled_plan(raw_plan)}\n"
+        f"Cʀᴇᴅɪᴛꜱ    ➺ {credits_d}\n"
+        f"Sᴛᴀᴛᴜꜱ     ➺ {'✅ Active Premium' if premium else '❌ Trial / Inactive'}\n"
     )
-    if premium:
+
+    if premium and expires > now:
         rem  = expires - now
         rstr = f"{int(rem // 86400)}d {int((rem % 86400) // 3600)}h"
         txt += (
-            f"Exᴘɪʀᴇꜱ  ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
-            f"Rᴇᴍᴀɪɴɪɴɢ ➺ {rstr}\n"
-            f"Sᴛᴀᴛᴜꜱ   ➺ ✅ Active Premium\n"
+            f"Exᴘɪʀᴇꜱ    ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+            f"Rᴇᴍᴀɪɴɪɴɢ  ➺ {rstr}\n"
         )
-    else:
-        txt += "Sᴛᴀᴛᴜꜱ   ➺ ❌ Trial / Inactive\n"
+
+    if last_receipt and last_receipt != "N/A":
+        txt += f"Rᴇᴄᴇɪᴘᴛ    ➺ <code>{last_receipt}</code>\n"
+
+    txt += (
+        f"\n⚡ <b>Aᴄᴛɪᴠɪᴛʏ</b>\n"
+        f"Jᴏɪɴᴇᴅ       ➺ {joined}\n"
+        f"Lᴀꜱᴛ Aᴄᴛɪᴠᴇ  ➺ {last_active}\n\n"
+        f"📊 <b>Cʜᴇᴄᴋᴇʀ Sᴛᴀᴛꜱ</b>\n"
+        f"Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ   ➺ {total_checks}\n"
+        f"Aᴘᴘʀᴏᴠᴇᴅ       ➺ {approved_checks} ✅\n"
+        f"Dᴇᴄʟɪɴᴇᴅ       ➺ {declined_checks} ❌\n"
+        f"Aᴘᴘʀᴏᴠᴀʟ Rᴀᴛᴇ  ➺ {approval_rate}\n"
+        f"Lᴀꜱᴛ Gᴀᴛᴇ      ➺ {last_gate}\n"
+        f"Lᴀꜱᴛ Cᴀʀᴅ (BIN) ➺ <code>{last_card}</code>\n\n"
+        f"🔗 <b>Rᴇꜰᴇʀʀᴀʟꜱ & Rᴇᴅᴇᴍᴘᴛɪᴏɴꜱ</b>\n"
+        f"Rᴇꜰᴇʀʀᴀʟꜱ       ➺ {total_refs}\n"
+        f"Cʀᴇᴅɪᴛ Cᴏᴅᴇꜱ   ➺ {codes_redeemed} redeemed\n"
+        f"Pʀᴇᴍɪᴜᴍ Kᴇʏꜱ   ➺ {keys_redeemed} redeemed\n\n"
+        f"📡 <b>Cʜᴀɴɴᴇʟ Mᴇᴍʙᴇʀꜱʜɪᴘ</b>\n"
+    )
+
+    for status_line in channel_status:
+        txt += f"{status_line}\n"
+
     txt += "━━━━━━━━━━━━━━━━━"
-    await update.message.reply_text(txt, parse_mode="HTML")
+
+    # Send in chunks if too long
+    if len(txt) > MAX_MSG:
+        for i in range(0, len(txt), MAX_MSG):
+            await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
+    else:
+        await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -725,7 +856,7 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ FREE CHECKER:\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n"
         "/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n"
         "👑 PREMIUM ONLY:\n/au ➺ Stripe Auth\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n"
-        "👑 OWNER:\n/info ➺ User info\n/allcm ➺ This menu\n/gen ➺ Gen credits\n"
+        "👑 OWNER:\n/info ➺ Advanced user info (@username or ID)\n/allcm ➺ This menu\n/gen ➺ Gen credits\n"
         "/key10 /key20 /key30 ➺ Gen keys\n/oneday /threeday ➺ Short keys\n"
         "/sub ➺ Grant premium\n/resub ➺ Remove premium\n/allplans ➺ List premium\n"
         "/seturl ➺ Set gate URL\n/geturl ➺ Get gate URLs\n"
@@ -859,7 +990,6 @@ async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    # Support: /broadcast <text>  OR  reply to a message
     if context.args:
         text = " ".join(context.args)
     elif update.message.reply_to_message and update.message.reply_to_message.text:
@@ -877,12 +1007,8 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     all_users = context.bot_data.get("user_data", {})
-
     status_msg = await update.message.reply_text("📡 Broadcasting...")
-
-    sent = 0
-    failed = 0
-    blocked = 0
+    sent = 0; failed = 0; blocked = 0
 
     broadcast_text = (
         f"📢 <b>𝗕𝗮𝘁𝗺𝗮𝗻 𝗕𝗼𝘁 𝗔𝗻𝗻𝗼𝘂𝗻𝗰𝗲𝗺𝗲𝗻𝘁</b>\n"
@@ -892,41 +1018,29 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🦇 <a href='{BOT_LINK}'>Batman Card Checker</a>"
     )
 
-    # ── 1. Send to Channel ──────────────────────────────
     chan_ok = False
     try:
         await context.bot.send_message(
-            chat_id="@Batcardchk",
-            text=broadcast_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
+            chat_id="@Batcardchk", text=broadcast_text,
+            parse_mode="HTML", disable_web_page_preview=True)
         chan_ok = True
     except Exception as e:
         logger.warning(f"Broadcast to channel failed: {e}")
 
-    # ── 2. Send to Group ────────────────────────────────
     grp_ok = False
     try:
         await context.bot.send_message(
-            chat_id="@batcardchkGroup",
-            text=broadcast_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
+            chat_id="@batcardchkGroup", text=broadcast_text,
+            parse_mode="HTML", disable_web_page_preview=True)
         grp_ok = True
     except Exception as e:
         logger.warning(f"Broadcast to group failed: {e}")
 
-    # ── 3. Send to all bot users ─────────────────────────
     for uid_str in list(all_users.keys()):
         try:
             await context.bot.send_message(
-                chat_id=int(uid_str),
-                text=broadcast_text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
+                chat_id=int(uid_str), text=broadcast_text,
+                parse_mode="HTML", disable_web_page_preview=True)
             sent += 1
         except Exception as e:
             err = str(e).lower()
@@ -987,19 +1101,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data  = query.data
     user  = query.from_user
-    try: await query.answer()
-    except Exception: pass
 
+    # ── VERIFY JOIN (must answer BEFORE check — only one answer allowed per query) ──
     if data == "verify_join":
+        # Answer immediately so the button doesn't appear stuck
+        try:
+            await query.answer("⏳ Verifying membership...", show_alert=False)
+        except Exception:
+            pass
+
+        # Force-clear cache so we get a fresh live check from Telegram
         _clear_member_cache(user.id)
-        if await check_force_join(user.id, context.bot):
-            try: await query.message.delete()
-            except Exception: pass
+
+        # Small delay — Telegram membership updates may take 1-2s to propagate
+        await asyncio.sleep(1)
+
+        joined = await check_force_join(user.id, context.bot)
+
+        if joined:
+            # Delete the force-join message so the bot feels clean
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
             ud = get_user_data(user.id, context)
-            ud.setdefault("joined",     datetime.now().strftime("%Y-%m-%d"))
-            ud.setdefault("name",       user.first_name or "User")
+            ud.setdefault("joined",     datetime.now().strftime("%Y-%m-%d %H:%M"))
+            ud.setdefault("name",       user.full_name or user.first_name or "User")
             ud.setdefault("total_refs", 0)
-            if user.username: ud["username"] = user.username
+            _update_user_meta(ud, user)
+
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=ui_profile(user, context),
@@ -1008,10 +1139,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True,
             )
         else:
-            await query.answer(
-                "❌ Not joined yet! Join BOTH channel and group, then press VERIFY.",
-                show_alert=True)
+            # Send a new message showing error (can't answer twice)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=(
+                    "❌ <b>Verification Failed!</b>\n\n"
+                    "You have NOT joined all required chats yet.\n\n"
+                    "Please join <b>BOTH</b> the channel and group, then press VERIFY again."
+                ),
+                parse_mode="HTML",
+                reply_markup=kb_force_join(),
+            )
         return
+
+    # ── For all other callbacks: answer immediately to stop spinner ──
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     if not await check_force_join(user.id, context.bot):
         await query.answer("❌ Join our channel & group first!", show_alert=True)
@@ -1172,7 +1317,6 @@ async def post_init(application: Application) -> None:
         except Exception as e:
             logger.warning(f"Webhook cleanup attempt {attempt+1}: {e}")
             await asyncio.sleep(2)
-    # Claim the getUpdates slot to knock out any competing instance
     try:
         await application.bot.get_updates(offset=-1, timeout=0, limit=1)
         logger.info("✅ Update slot claimed.")
