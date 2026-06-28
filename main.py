@@ -3,6 +3,8 @@ import time
 import string
 import random
 import asyncio
+import signal
+import os
 from typing import Optional
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,7 +12,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
 )
-from telegram.error import Conflict, BadRequest
+from telegram.error import Conflict, BadRequest, NetworkError
 import aiohttp
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -218,7 +220,6 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     raw_plan = ud.get("plan", "TRIAL").upper()
     is_premium = raw_plan != "TRIAL" and ud.get("expires", 0) > time.time()
 
-    # MASS GATE RESTRICTION
     if gate_key in ["mss", "mpp2"] and not is_premium:
         await update.message.reply_text("🚫 <b>Mass Gates are for Premium Users only.</b>\nPlease buy a plan using /plan to use mass checks."); return
 
@@ -273,7 +274,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             f"━━━━━━━━━━━━━━━━━\n"
             f"🌃 𝐆𝐚𝐭𝐞 ➺ {gate_name}\n"
             f"📜 𝐑𝐚𝐰  ➺ {raw_response}\n"
-            f"⏱️ 𝐓𝐢𝐦𝐞 ➺ {time_taken}s\n"
+            f"⏱️ 𝐓𝐢ᴍᐞ ➺ {time_taken}s\n"
             f"🦇 𝐔ꜱᴇʀ ➺ {uname} ({plan_ui})\n"
             f"━━━━━━━━━━━━━━━━━"
         )
@@ -318,7 +319,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
         f"Dᴜʀᴀᴛɪᴏɴ ➺ {days} Dᴀʏꜱ\n"
         "Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ ➺ ∞\n"
         f"Rᴇᴄᴇɪᴘᴘᴛ ID ➺ {receipt}\n"
-        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴘᴛ ID."
+        "Pʟᴇᴀꜱᴇ ꜱᴀᴠᴇ ᴛʜɪꜱ ʀᴇᴄᴇɪᴘᴛ ID."
     )
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
@@ -422,23 +423,17 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: chat = await context.bot.get_chat(target_id); target_name, target_username = chat.first_name or "N/A", chat.username
         except Exception: pass
 
-    all_users = context.bot_data.get("user_data", {})
-    uid_str = str(target_id); now = time.time()
+    all_users = context.bot_data.get("user_data", {}); uid_str = str(target_id); now = time.time()
     udata = all_users.get(uid_str, {})
     raw_plan = udata.get("plan", "TRIAL").upper(); expires = udata.get("expires", 0)
     if raw_plan != "TRIAL" and expires <= now: raw_plan, expires = "TRIAL", 0
-
     is_premium = raw_plan != "TRIAL" and expires > now
     credits = "∞ Unlimited" if is_premium else f"{udata.get('credits', 150)}/150"
     uname_d = f"@{target_username}" if target_username else "None"
 
     txt = (f"━━━━━━━━━━━━━━━━━\n👤 User Info\n━━━━━━━━━━━━━━━━━\n\n"
-           f"Name     ➺ {target_name}\n"
-           f"Username ➺ {uname_d}\n"
-           f"User ID  ➺ <code>{target_id}</code>\n"
-           f"Plan     ➺ {get_styled_plan(raw_plan)}\n"
-           f"Credits  ➺ {credits}\n"
-           f"Joined   ➺ {udata.get('joined', 'N/A')}\n")
+           f"Name     ➺ {target_name}\nUsername ➺ {uname_d}\nUser ID  ➺ <code>{target_id}</code>\n"
+           f"Plan     ➺ {get_styled_plan(raw_plan)}\nCredits  ➺ {credits}\nJoined   ➺ {udata.get('joined', 'N/A')}\n")
     if is_premium:
         rem = expires - now; rstr = f"{int(rem // 86400)}d {int((rem % 86400) // 3600)}h"
         txt += f"Expires  ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\nRemaining ➺ {rstr}\nStatus  ➺ ✅ Active\n"
@@ -617,23 +612,84 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ("pay10", "pay15", "pay30"): await edit("━━━━━━━━━━━━━━━━━\n💳 Payment Address\n━━━━━━━━━━━━━━━━━\n\nPayment address will be added shortly.\n\nFor payment contact through support.\n\n━━━━━━━━━━━━━━━━━", kb_payment())
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ★★★ GLOBAL ERROR HANDLER (FIXES "NO ERROR HANDLERS") ★★★
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = context.error
+    if isinstance(error, Conflict):
+        logger.critical("⚠️ CONFLICT DETECTED: Another bot instance is running!")
+        logger.critical("⚠️ Killing this instance to prevent conflict loop...")
+        # Stop polling immediately to free the getUpdates slot
+        if context.application and hasattr(context.application, 'updater') and context.application.updater:
+            try:
+                await context.application.updater.stop()
+            except Exception:
+                pass
+        # Force exit after a short delay to let cleanup finish
+        try:
+            asyncio.get_running_loop().call_later(2.0, os._exit, 1)
+        except Exception:
+            os._exit(1)
+        return
+
+    if isinstance(error, NetworkError):
+        logger.warning(f"Network error (will retry automatically): {error}")
+        return
+
+    # Log all other errors normally
+    logger.error(f"Unhandled exception: {type(error).__name__}: {error}", exc_info=context.error)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ★★★ POST-INIT: CLEAN WEBHOOK BEFORE POLLING ★★★
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def post_init(application: Application) -> None:
+    """Called ONCE before the application starts polling."""
+    logger.info("🦇 Cleaning up any existing webhook...")
+    try:
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook deleted, pending updates dropped.")
+    except Exception as e:
+        logger.warning(f"Webhook cleanup warning: {e}")
+
+    # Small delay to ensure Telegram servers process the webhook deletion
+    await asyncio.sleep(1)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ★★★ POST-SHUTDOWN: CLEAN EXIT ★★★
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def post_shutdown(application: Application) -> None:
+    """Called when the application stops."""
+    logger.info("🦇 Bot shutting down cleanly...")
+    try:
+        await application.bot.delete_webhook(drop_pending_updates=False)
+    except Exception:
+        pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN EXECUTION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
-    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+    # ★ BUILD WITH post_init/post_shutdown via builder (proper way) ★
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .concurrent_updates(True)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
-    async def on_startup(application: Application) -> None:
-        try: await application.bot.delete_webhook(drop_pending_updates=True)
-        except Exception: pass
+    # ★ REGISTER GLOBAL ERROR HANDLER (CRITICAL FIX) ★
+    app.add_error_handler(global_error_handler)
 
-    app.post_init = on_startup
-
+    # --- USER COMMANDS ---
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("rm", cmd_rm))
     app.add_handler(CommandHandler("bin", cmd_bin))
 
+    # --- CHECKER GATES ---
     app.add_handler(CommandHandler("chk", cmd_chk))
     app.add_handler(CommandHandler("pp", cmd_pp))
     app.add_handler(CommandHandler("sh", cmd_sh))
@@ -643,6 +699,7 @@ def main():
     app.add_handler(CommandHandler("mss", cmd_mss))
     app.add_handler(CommandHandler("mpp2", cmd_mpp2))
 
+    # --- OWNER COMMANDS ---
     app.add_handler(CommandHandler("info", cmd_info))
     app.add_handler(CommandHandler("allcm", cmd_allcm))
     app.add_handler(CommandHandler("gen", cmd_gen))
@@ -659,13 +716,32 @@ def main():
     app.add_handler(CommandHandler("killbot", cmd_killbot))
     app.add_handler(CommandHandler("onbot", cmd_onbot))
 
-    for cmd, func in [("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp), ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu), ("onb3", cmd_onb3), ("offb3", cmd_offb3), ("onau", cmd_onau), ("offau", cmd_offau), ("onmss", cmd_onmss), ("offmss", cmd_offmss), ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2)]:
+    # --- GATE TOGGLE COMMANDS ---
+    for cmd, func in [
+        ("onchk", cmd_onchk), ("offchk", cmd_offchk),
+        ("onpp", cmd_onpp), ("offpp", cmd_offpp),
+        ("onsh", cmd_onsh), ("offsh", cmd_offsh),
+        ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu),
+        ("onb3", cmd_onb3), ("offb3", cmd_offb3),
+        ("onau", cmd_onau), ("offau", cmd_offau),
+        ("onmss", cmd_onmss), ("offmss", cmd_offmss),
+        ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2),
+    ]:
         app.add_handler(CommandHandler(cmd, func))
 
+    # --- CALLBACK HANDLER (must be last) ---
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    print("🦇 Batman Bot is starting...")
-    app.run_polling(drop_pending_updates=True)
+    # ★ START POLLING ★
+    logger.info("🦇 Batman Bot is starting...")
+    logger.info("🦇 If you see CONFLICT errors, KILL all other running instances first!")
+
+    # ★ Use run_polling with error handling and clean shutdown ★
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False,     # Let the loop close naturally
+        stop_signals=(signal.SIGINT, signal.SIGTERM),  # Clean shutdown on signals
+    )
 
 if __name__ == "__main__":
     main()
