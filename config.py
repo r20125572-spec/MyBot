@@ -1,104 +1,50 @@
+
 import os
-import aiohttp
 import urllib.request
 import urllib.error
 import json
 import asyncio
+import aiohttp
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-BOT_TOKEN    = os.environ["BOT_TOKEN"]
-OWNER_ID     = int(os.environ["OWNER_ID"])
-CHANNEL_ID   = os.environ["CHANNEL_ID"]   # e.g. "@Batcardchk" or "-100xxxxxxxxx"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BOT CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-VERSION      = "2.0.0"
-DEV_LINK     = "https://t.me/BatmanDev"
-CHANNEL_LINK = "https://t.me/Batcardchk"
-GROUP_LINK   = "https://t.me/batcardchkGroup"
-SUPPORT_LINK = "https://t.me/BatmanSupport"
-BOT_LINK     = "https://t.me/BatcardBot"
-BOT_USERNAME = "BatcardBot"
-BOT_PHOTO_URL = ""
+BOT_TOKEN  = os.environ.get("BOT_TOKEN", "")
+OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
+_ch_env    = os.environ.get("CHANNEL_ID", "").strip()
+CHANNEL_ID = int(_ch_env) if _ch_env.lstrip("-").isdigit() else (_ch_env or "@Batcardchk")
+VERSION    = "V4.2"
+DEV_LINK   = "https://t.me/Batmancardchk"
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "0"))
-VERSION   = "V4.2"
-DEV_LINK  = "https://t.me/Batmancardchk"
-API_TIMEOUT      = 25
-REFERRAL_CREDITS = 10
+# CHANNEL_ID: set as numeric "-100xxxxxxxxx" or "@Batcardchk" in env
+_ch_raw  = os.environ.get("CHANNEL_ID", "@Batcardchk").strip()
+CHANNEL_ID: int | str = int(_ch_raw) if _ch_raw.lstrip("-").isdigit() else _ch_raw
+VERSION          = "V4.2"
+DEV_LINK         = "https://t.me/Batmancardchk"
 CHANNEL_USERNAME = "@Batcardchk"
 GROUP_USERNAME   = "@batcardchkGroup"
 CHANNEL_LINK     = "https://t.me/Batcardchk"
-GROUP_LINK       = "https://t.me/batcardchkGroup"
+-3
++2
 SUPPORT_LINK     = "https://t.me/cardchkSupport"
 BOT_USERNAME     = "Batmancardchk_bot"
 BOT_LINK         = "https://t.me/Batmancardchk_bot"
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
 BOT_PHOTO     = "batman.jpg"
+BOT_PHOTO_URL    = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
+BOT_PHOTO        = "batman.jpg"
 API_TIMEOUT      = 120
 REFERRAL_CREDITS = 150
-LOCK_FILE        = "/tmp/batman_bot.lock"
-GATE_URLS = {
-    "chk":  "",
-    "pp":   "",
-    "sh":   "",
-    "pyu":  "",
-    "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
-    "pp":   "https://pp-auth-test-production.up.railway.app/pp",
-    "sh":   "https://shopify-auth-test-production.up.railway.app/sh",
-    "pyu":  "https://payu-auth-test-production.up.railway.app/pyu",
-    "b3":   "",
-    "au":   "",
-    "mss":  "",
-    "mpp2": "",
-    "au":   "https://stripe-auth-test-production.up.railway.app/st0",
-    "mss":  "https://stripe-auth-test-production.up.railway.app/st0",
-    "mpp2": "https://pp-auth-test-production.up.railway.app/pp",
-}
-GATE_SITES = {
-    "chk":  "example.com",
-    "chk":  "fashionspicex.com",
-    "pp":   "example.com",
-    "sh":   "example.com",
-    "pyu":  "example.com",
-    "b3":   "example.com",
-    "au":   "example.com",
-    "mss":  "example.com",
-    "au":   "fashionspicex.com",
-    "mss":  "fashionspicex.com",
-    "mpp2": "example.com",
-}
-PREMIUM_GATES = {"au", "mss", "mpp2"}
-FORCE_CHANNELS = [
-    ("Batcardchk",      CHANNEL_LINK),
-    ("batcardchkGroup", GROUP_LINK),
+-33
++27
 ]
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BIN LOOKUP
+# BIN LOOKUP  (async via aiohttp)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def get_bin_info(bin_num: str) -> dict:
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as s:
-            async with s.get(f"https://lookup.binlist.net/{bin_num}",
-                             headers={"Accept-Version": "3"}) as r:
-                if r.status != 200:
-                    return {"error": True}
-                data = await r.json(content_type=None)
-                country = (data.get("country") or {})
-                bank    = (data.get("bank") or {})
-                scheme  = data.get("scheme", "N/A")
-                ctype   = data.get("type", "N/A")
-                alpha2  = (country.get("alpha2") or "").upper()
-                emoji   = (
-                    "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in alpha2)
-                    if len(alpha2) == 2 else ""
-                )
-                return {
-                    "scheme":        scheme,
-                    "type":          ctype,
-                    "bank":          bank.get("name", "N/A"),
-                    "country":       country.get("name", "N/A"),
-                    "country_emoji": emoji,
-                }
         url = f"https://lookup.binlist.net/{bin_num}"
         req = urllib.request.Request(
             url,
@@ -124,19 +70,34 @@ async def get_bin_info(bin_num: str) -> dict:
             "country_emoji": country_emoji,
             "error":         False,
         }
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=8)
+        ) as s:
+            async with s.get(
+                f"https://lookup.binlist.net/{bin_num}",
+                headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
+            ) as r:
+                if r.status != 200:
+                    return {"error": True}
+                data    = await r.json(content_type=None)
+                country = data.get("country") or {}
+                bank    = data.get("bank")    or {}
+                alpha2  = (country.get("alpha2") or "").upper()
+                emoji   = (
+                    "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in alpha2)
+                    if len(alpha2) == 2 else ""
+                )
+                return {
+                    "scheme":        data.get("scheme", "N/A"),
+                    "type":          data.get("type",   "N/A"),
+                    "bank":          bank.get("name",   "N/A"),
+                    "country":       country.get("name","N/A"),
+                    "country_emoji": emoji,
+                    "error":         False,
+                }
     except Exception:
-        return {"error": True}
         pass
     return {"error": True}
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-def kb_result():
+        return {"error": True}
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SHARED KEYBOARD
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def kb_result() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Channel", url=CHANNEL_LINK),
-         InlineKeyboardButton("💬 Support", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🦇 CARD X CHK ➺", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman ➺", url=DEV_LINK)],
-    ])
