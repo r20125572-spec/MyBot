@@ -13,7 +13,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     ContextTypes,
 )
-from telegram.error import Conflict, BadRequest, NetworkError
+from telegram.error import Conflict, BadRequest, NetworkError, Forbidden
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
@@ -259,26 +259,66 @@ def kb_upgrade():
 # FORCE JOIN SYSTEM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _MEMBER_CACHE: dict = {}
-_CACHE_TTL = 300
+_CACHE_TTL = 300  # 5 minutes
 
 async def is_member(bot, user_id: int, chat_username: str) -> bool:
+    """
+    Returns True if the user is a member/admin/creator of the chat.
+    Returns True also if the bot cannot check membership (no admin rights,
+    chat not found, etc.) — this prevents false-blocking legitimate users.
+    Returns False only when Telegram explicitly confirms user is NOT a member
+    (left, kicked, or restricted).
+    """
     try:
         member = await bot.get_chat_member(chat_username, user_id)
         return member.status in ("member", "administrator", "creator")
-    except Exception:
-        return False
+    except Forbidden:
+        # Bot is not an admin in this chat — cannot check membership.
+        # Log it and pass through so users are not permanently blocked.
+        logger.warning(
+            f"Cannot check membership in {chat_username}: bot lacks admin rights. "
+            "Make the bot an admin to enable force-join enforcement."
+        )
+        return True
+    except BadRequest as e:
+        err = str(e).lower()
+        if "user not found" in err or "chat not found" in err or "participant_id_invalid" in err:
+            # User genuinely not in chat or chat doesn't exist.
+            return False
+        # Any other bad request — give benefit of the doubt.
+        logger.warning(f"BadRequest checking membership in {chat_username}: {e}")
+        return True
+    except Exception as e:
+        # Network hiccups, timeouts, etc. — don't punish the user.
+        logger.warning(f"Error checking membership in {chat_username}: {e}")
+        return True
 
 async def check_force_join(user_id: int, bot) -> bool:
+    """Returns True if the user has joined all required channels/groups."""
+    # Owner always passes
     if user_id == OWNER_ID:
         return True
+
+    # If no channels configured, skip force-join entirely
+    if not FORCE_CHANNELS:
+        return True
+
+    # Serve from cache if still fresh
     cached = _MEMBER_CACHE.get(user_id)
     if cached and time.time() < cached[1]:
         return cached[0]
+
     results = await asyncio.gather(
         *[is_member(bot, user_id, uname) for uname, _ in FORCE_CHANNELS],
         return_exceptions=True,
     )
-    ok = all(r is True for r in results)
+    # If any result is an unhandled exception, treat that channel as passed
+    # (is_member already handles exceptions internally; this is a safety net)
+    ok = all(
+        (r is True) if not isinstance(r, Exception) else True
+        for r in results
+    )
+
     _MEMBER_CACHE[user_id] = (ok, time.time() + _CACHE_TTL)
     return ok
 
@@ -286,8 +326,14 @@ def _clear_member_cache(user_id: int):
     _MEMBER_CACHE.pop(user_id, None)
 
 async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Sends (or re-sends) the force-join page.
+    Always clears the membership cache first so the next verify is a live check.
+    """
     chat_id = update.effective_chat.id
-    _clear_member_cache(update.effective_user.id)
+    user_id = update.effective_user.id
+    _clear_member_cache(user_id)
+
     cap = (
         "🦇 <b>Welcome to Gotham!</b>\n\n"
         "To access the Batcomputer, you must join the League of Shadows.\n\n"
@@ -297,12 +343,20 @@ async def send_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ <i>You must join ALL required chats to proceed.</i>"
     )
     try:
-        await context.bot.send_photo(chat_id=chat_id, photo=BOT_PHOTO_URL,
-                                     caption=cap, parse_mode="HTML",
-                                     reply_markup=kb_force_join())
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=BOT_PHOTO_URL,
+            caption=cap,
+            parse_mode="HTML",
+            reply_markup=kb_force_join(),
+        )
     except Exception:
-        await context.bot.send_message(chat_id=chat_id, text=cap,
-                                       parse_mode="HTML", reply_markup=kb_force_join())
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=cap,
+            parse_mode="HTML",
+            reply_markup=kb_force_join(),
+        )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # REFERRAL SYSTEM (SECURE & ANTI-SCAM)
@@ -447,7 +501,6 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
                           ["approved", "captured", "success", "charged", "true"])
         status_ui   = "Cʜᴀʀɢᴇᴅ ✅" if is_approved else "Dᴇᴄʟɪɴᴇᴅ ❌"
 
-        # ── Track check stats ──────────────────────────────
         ud["total_checks"]    = ud.get("total_checks", 0) + 1
         ud["last_gate"]       = gate_name
         ud["last_card"]       = card_raw[:6] + "xxxxxxxxxx"
@@ -591,8 +644,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except (ValueError, Exception):
                 pass
 
+    # Clear cache on every /start so membership is always freshly checked
+    _clear_member_cache(user.id)
+
     if not await check_force_join(user.id, context.bot):
-        await send_force_join(update, context); return
+        await send_force_join(update, context)
+        return
 
     await update.message.reply_text(
         ui_profile(user, context),
@@ -731,7 +788,6 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Fetch live Telegram info if not already set
     if target_name == "N/A":
         try:
             chat             = await context.bot.get_chat(target_id)
@@ -746,7 +802,6 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now       = time.time()
     udata     = all_users.get(uid_str, {})
 
-    # Plan & expiry
     raw_plan = udata.get("plan", "TRIAL").upper()
     expires  = udata.get("expires", 0)
     if raw_plan != "TRIAL" and expires <= now:
@@ -754,17 +809,14 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expires  = 0
     premium = raw_plan != "TRIAL" and expires > now
 
-    # Credits
     credits_d = "∞ Unlimited" if premium else str(udata.get("credits", 150))
 
-    # Display values
     full_name = target_name
     if target_last_name:
         full_name = f"{target_name} {target_last_name}"
     uname_d   = f"@{target_username}" if target_username else "None"
     lang_d    = udata.get("language_code", target_lang) or "N/A"
 
-    # Activity & check stats
     total_refs       = udata.get("total_refs", 0)
     total_checks     = udata.get("total_checks", 0)
     approved_checks  = udata.get("approved_checks", 0)
@@ -777,13 +829,11 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keys_redeemed    = udata.get("keys_redeemed", 0)
     last_receipt     = udata.get("last_receipt", "N/A")
 
-    # Approval rate
     if total_checks > 0:
         approval_rate = f"{(approved_checks / total_checks * 100):.1f}%"
     else:
         approval_rate = "N/A"
 
-    # Membership check in force channels (live)
     channel_status = []
     for uname_ch, label in FORCE_CHANNELS:
         is_m = await is_member(context.bot, target_id, uname_ch)
@@ -840,7 +890,6 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     txt += "━━━━━━━━━━━━━━━━━"
 
-    # Send in chunks if too long
     if len(txt) > MAX_MSG:
         for i in range(0, len(txt), MAX_MSG):
             await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
@@ -976,28 +1025,23 @@ async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if gate not in GATE_URLS:
         await update.message.reply_text("Invalid gate."); return
     context.bot_data[f"gate_url_{gate}"] = url
-    await update.message.reply_text(
-        f"✅ Gate [{gate}] URL set:\n<code>{url}</code>", parse_mode="HTML")
+    await update.message.reply_text(f"✅ URL set for gate [{gate}].")
 
 async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    txt = "━━━━━━━━━━━━━━━━━\nGATE URLs\n━━━━━━━━━━━━━━━━━\n\n"
+    lines = ["━━━━━━━━━━━━━━━━━\n🦇 Gate URLs\n━━━━━━━━━━━━━━━━━"]
     for gate in GATE_URLS:
-        url    = context.bot_data.get(f"gate_url_{gate}") or GATE_URLS.get(gate, "NOT SET")
-        status = "ON ✅" if context.bot_data.get(f"{gate}_on", True) else "OFF ❌"
-        txt   += f"[{gate}] {status}\n<code>{url}</code>\n\n"
-    await update.message.reply_text(txt + "━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+        url = context.bot_data.get(f"gate_url_{gate}") or GATE_URLS.get(gate) or "NOT SET"
+        lines.append(f"{gate.upper()} ➺ <code>{url}</code>")
+    lines.append("━━━━━━━━━━━━━━━━━")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if context.args:
-        text = " ".join(context.args)
-    elif update.message.reply_to_message and update.message.reply_to_message.text:
-        text = update.message.reply_to_message.text
-    else:
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
         await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /broadcast &lt;message&gt;\n"
-            "Or reply to a message with /broadcast\n\n"
+            "Uꜱᴀɢᴇ: /broadcast &lt;message&gt;\n\n"
             "Mᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ꜱᴇɴᴛ ᴛᴏ:\n"
             "• All bot users\n"
             "• Channel (@Batcardchk)\n"
@@ -1102,24 +1146,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data  = query.data
     user  = query.from_user
 
-    # ── VERIFY JOIN (must answer BEFORE check — only one answer allowed per query) ──
+    # ── VERIFY JOIN ─────────────────────────────────────────────────────────
     if data == "verify_join":
-        # Answer immediately so the button doesn't appear stuck
+        # Answer the callback immediately so the button stops spinning
         try:
             await query.answer("⏳ Verifying membership...", show_alert=False)
         except Exception:
             pass
 
-        # Force-clear cache so we get a fresh live check from Telegram
+        # Force-clear cache so we get a real live check from Telegram
         _clear_member_cache(user.id)
 
-        # Small delay — Telegram membership updates may take 1-2s to propagate
-        await asyncio.sleep(1)
+        # Wait 2 seconds — Telegram membership updates take time to propagate
+        await asyncio.sleep(2)
 
         joined = await check_force_join(user.id, context.bot)
 
         if joined:
-            # Delete the force-join message so the bot feels clean
+            # SUCCESS: delete the force-join message and show the main menu
             try:
                 await query.message.delete()
             except Exception:
@@ -1139,27 +1183,55 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True,
             )
         else:
-            # Send a new message showing error (can't answer twice)
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=(
-                    "❌ <b>Verification Failed!</b>\n\n"
-                    "You have NOT joined all required chats yet.\n\n"
-                    "Please join <b>BOTH</b> the channel and group, then press VERIFY again."
-                ),
-                parse_mode="HTML",
-                reply_markup=kb_force_join(),
+            # FAILED: edit the existing message in-place (no duplicate messages)
+            fail_text = (
+                "🦇 <b>Welcome to Gotham!</b>\n\n"
+                "❌ <b>Verification Failed!</b>\n\n"
+                "You have <b>NOT</b> joined all required chats yet.\n"
+                "Please join <b>BOTH</b> the channel and group, then press VERIFY again.\n\n"
+                "1️⃣ Click <b>JOIN CHANNEL</b>\n"
+                "2️⃣ Click <b>JOIN GROUP</b>\n"
+                "3️⃣ Click <b>✅ I JOINED - VERIFY</b>\n\n"
+                "⚠️ <i>You must join ALL required chats to proceed.</i>"
             )
+            try:
+                # Try to edit the caption if it's a photo message
+                await query.message.edit_caption(
+                    caption=fail_text,
+                    parse_mode="HTML",
+                    reply_markup=kb_force_join(),
+                )
+            except Exception:
+                try:
+                    # Try to edit as a text message
+                    await query.message.edit_text(
+                        text=fail_text,
+                        parse_mode="HTML",
+                        reply_markup=kb_force_join(),
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    # Last resort: send a new message
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=fail_text,
+                        parse_mode="HTML",
+                        reply_markup=kb_force_join(),
+                    )
         return
 
-    # ── For all other callbacks: answer immediately to stop spinner ──
+    # ── ALL OTHER CALLBACKS: answer immediately to stop spinner ──────────────
     try:
         await query.answer()
     except Exception:
         pass
 
+    # Force-join check for all other callbacks
     if not await check_force_join(user.id, context.bot):
-        await query.answer("❌ Join our channel & group first!", show_alert=True)
+        try:
+            await query.answer("❌ Join our channel & group first!", show_alert=True)
+        except Exception:
+            pass
         return
 
     async def edit(text: str, markup: InlineKeyboardMarkup):
@@ -1168,7 +1240,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=text, parse_mode="HTML",
                 reply_markup=markup, disable_web_page_preview=True)
         except BadRequest as e:
-            if "message is not modified" in str(e).lower(): return
+            if "message is not modified" in str(e).lower():
+                return
             try:
                 await query.message.edit_caption(
                     caption=text, parse_mode="HTML", reply_markup=markup)
@@ -1205,6 +1278,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━\n🆓 Auth Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
             "Bʀᴀɪɴᴛʀᴇᴇ Aᴜᴛʜ ➺ /b3\n━━━━━━━━━━━━━━━━━",
             kb_auth_gates())
+
     elif data == "mcharge":
         await edit(
             "━━━━━━━━━━━━━━━━━\n🆓 Charge Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
@@ -1216,8 +1290,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "mmass":
         if not premium:
-            await query.answer(
-                "🚫 Premium Gates require a premium plan!", show_alert=True)
+            try:
+                await query.answer(
+                    "🚫 Premium Gates require a premium plan!", show_alert=True)
+            except Exception:
+                pass
             await edit(
                 "👑 Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ\n"
                 "━━━━━━━━━━━━━━━━━\n\n"
@@ -1254,8 +1331,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "iau":
         if not premium:
-            await query.answer("🚫 Stripe Auth is Premium only!", show_alert=True); return
+            try:
+                await query.answer("🚫 Stripe Auth is Premium only!", show_alert=True)
+            except Exception:
+                pass
+            return
         await edit(gate_info_text("STRIPE AUTH 👑", "au", 1), kb_back("mmass"))
+
     elif data == "ib3":   await edit(gate_info_text("BRAINTREE AUTH", "b3",   1), kb_back("mauth"))
     elif data == "ichk":  await edit(gate_info_text("STRIPE CHARGE",  "chk",  1), kb_back("mcharge"))
     elif data == "ipp":   await edit(gate_info_text("PAYPAL CHARGE",  "pp",   1), kb_back("mcharge"))
@@ -1264,12 +1346,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "imss":
         if not premium:
-            await query.answer("🚫 Stripe Mass is Premium only!", show_alert=True); return
+            try:
+                await query.answer("🚫 Stripe Mass is Premium only!", show_alert=True)
+            except Exception:
+                pass
+            return
         await edit(gate_info_text("STRIPE MASS 👑", "mss", 2), kb_back("mmass"))
 
     elif data == "impp2":
         if not premium:
-            await query.answer("🚫 PayPal Mass is Premium only!", show_alert=True); return
+            try:
+                await query.answer("🚫 PayPal Mass is Premium only!", show_alert=True)
+            except Exception:
+                pass
+            return
         await edit(gate_info_text("PAYPAL MASS 👑", "mpp2", 2), kb_back("mmass"))
 
     elif data in ("pay10", "pay15", "pay30"):
