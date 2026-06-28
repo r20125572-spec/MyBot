@@ -582,10 +582,38 @@ async def _grant(uid: int, plan: str, days: int,
     ud = get_user_data(uid, context)
     ud["plan"]    = plan
     ud["expires"] = time.time() + days * 86400
-    receipt = await send_activation_msg(uid, plan, days, context)
+
+    # Fetch live user info from Telegram so the owner reply shows real name/username
+    display_name = ud.get("name", "Unknown")
+    display_uname = ud.get("username", "")
+    try:
+        chat = await context.bot.get_chat(uid)
+        display_name  = chat.first_name or "Unknown"
+        if chat.last_name:
+            display_name = f"{display_name} {chat.last_name}"
+        display_uname = chat.username or ""
+        ud["name"]    = display_name
+        if display_uname:
+            ud["username"] = display_uname
+    except Exception:
+        pass
+
+    receipt     = await send_activation_msg(uid, plan, days, context)
+    uname_line  = f"@{display_uname}" if display_uname else display_name
+    exp_ts      = ud["expires"]
+    exp_date    = datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d %H:%M")
+
     await update.message.reply_text(
-        f"Granted {get_styled_plan(plan)} ({days} days) to <code>{uid}</code>\n"
-        f"Rᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>",
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"✅ Pʀᴇᴍɪᴜᴍ Gʀᴀɴᴛᴇᴅ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ     ➺ {uname_line}\n"
+        f"ID       ➺ <code>{uid}</code>\n"
+        f"Pʟᴀɴ     ➺ {get_styled_plan(plan)} 👑\n"
+        f"Dᴀʏꜱ     ➺ {days}\n"
+        f"Exᴘɪʀᴇꜱ  ➺ {exp_date}\n"
+        f"Rᴇᴄᴇɪᴘᴛ  ➺ <code>{receipt}</code>\n"
+        f"━━━━━━━━━━━━━━━━━",
         parse_mode="HTML",
     )
 
@@ -836,17 +864,39 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     txt = (
-        "[ 𖥷 вт ] All Commands\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "🦇 ALL COMMANDS\n"
         "━━━━━━━━━━━━━━━━━\n\n"
-        "USER:\n/start /plan /bin /rm /ping /refer\n\n"
-        "FREE CHECKER:\n/chk /pp /sh /pyu /b3\n\n"
-        "PREMIUM ONLY:\n/au /mss /mpp2\n\n"
-        "OWNER:\n/info /allcm /gen\n"
-        "/key10 /key20 /key30\n"
-        "/oneday /threeday\n"
-        "/sub /resub /allplans\n"
-        "/seturl /geturl\n"
-        "/broadcast /killbot /onbot\n"
+        "🟢 USER:\n"
+        "/start ➺ Start bot\n"
+        "/plan ➺ View plans\n"
+        "/bin ➺ BIN lookup\n"
+        "/rm ➺ Redeem code\n"
+        "/ping ➺ Speed check\n"
+        "/refer ➺ Referral link\n\n"
+        "⚡ FREE CHECKER:\n"
+        "/chk ➺ Stripe Charge\n"
+        "/pp ➺ PayPal Charge\n"
+        "/sh ➺ Shopify Charge\n"
+        "/pyu ➺ PayU Charge\n"
+        "/b3 ➺ Braintree Auth\n\n"
+        "👑 PREMIUM ONLY:\n"
+        "/au ➺ Stripe Auth\n"
+        "/mss ➺ Stripe Mass\n"
+        "/mpp2 ➺ PayPal Mass\n\n"
+        "👑 OWNER:\n"
+        "/info ➺ Advanced user info (@username or ID)\n"
+        "/allcm ➺ This menu\n"
+        "/gen ➺ Gen credits\n"
+        "/key10 /key20 /key30 ➺ Gen keys\n"
+        "/oneday /threeday ➺ Short keys\n"
+        "/sub ➺ Grant premium\n"
+        "/resub ➺ Remove premium\n"
+        "/allplans ➺ List premium\n"
+        "/seturl ➺ Set gate URL\n"
+        "/geturl ➺ Get gate URLs\n"
+        "/broadcast ➺ Message all users\n"
+        "/killbot /onbot ➺ Maintenance\n"
         "━━━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(txt)
