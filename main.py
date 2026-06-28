@@ -11,7 +11,7 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    ContextTypes,
+    MessageHandler, filters, ContextTypes,
 )
 from telegram.error import Conflict, BadRequest, NetworkError
 
@@ -567,14 +567,33 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     return receipt
 
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
+    """Resolve @username or numeric ID to a Telegram user ID.
+    Tries three methods in order:
+      1. Direct numeric ID
+      2. Telegram get_chat (works for public usernames)
+      3. Search bot's own stored user_data by saved username
+    """
     target = target.strip().lstrip("@")
+
+    # Method 1: numeric ID — always reliable
     if target.lstrip("-").isdigit():
         return int(target)
+
+    # Method 2: Telegram API lookup (public usernames only)
     for attempt in (f"@{target}", target):
         try:
             return (await context.bot.get_chat(attempt)).id
         except Exception:
             continue
+
+    # Method 3: search our local bot database by stored username
+    all_users    = context.bot_data.get("user_data", {})
+    target_lower = target.lower()
+    for uid_str, ud in all_users.items():
+        stored = ud.get("username", "").lower().lstrip("@")
+        if stored and stored == target_lower:
+            return int(uid_str)
+
     return None
 
 async def _grant(uid: int, plan: str, days: int,
@@ -742,18 +761,25 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id, target_name, target_username = None, "N/A", None
     target_last_name, target_lang = "", "N/A"
 
+    # MODE 1: reply to a message
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        ru = update.message.reply_to_message.from_user
+        ru               = update.message.reply_to_message.from_user
         target_id        = ru.id
         target_name      = ru.first_name or "N/A"
         target_last_name = ru.last_name or ""
         target_username  = ru.username
         target_lang      = ru.language_code or "N/A"
+
+    # MODE 2: /info @username or /info 123456789
     elif context.args:
         raw = context.args[0].strip().lstrip("@")
+
+        # Numeric ID — always works
         if raw.lstrip("-").isdigit():
             target_id = int(raw)
+
         else:
+            # Try Telegram public username lookup first
             try:
                 chat             = await context.bot.get_chat(f"@{raw}")
                 target_id        = chat.id
@@ -763,16 +789,32 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+            # Fallback: search our own database by stored username
+            if not target_id:
+                raw_lower = raw.lower()
+                for uid_str, ud in context.bot_data.get("user_data", {}).items():
+                    stored = ud.get("username", "").lower().lstrip("@")
+                    if stored and stored == raw_lower:
+                        target_id        = int(uid_str)
+                        target_name      = ud.get("name", "N/A")
+                        target_username  = ud.get("username")
+                        target_lang      = ud.get("language_code", "N/A")
+                        break
+
     if not target_id:
         await update.message.reply_text(
-            "Uꜱᴀɢᴇ:\n"
-            "<code>/info @username</code>\n"
-            "<code>/info 123456789</code>\n"
-            "Or reply to a user message with /info",
+            "━━━━━━━━━━━━━━━━━\n"
+            "Uꜱᴀɢᴇ /info\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "/info @username\n"
+            "/info 123456789\n"
+            "Or reply to any user message → /info\n"
+            "━━━━━━━━━━━━━━━━━",
             parse_mode="HTML"
         )
         return
 
+    # If name still unknown, try fetching from Telegram by ID
     if target_name == "N/A":
         try:
             chat             = await context.bot.get_chat(target_id)
@@ -873,7 +915,8 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/bin ➺ BIN lookup\n"
         "/rm ➺ Redeem code\n"
         "/ping ➺ Speed check\n"
-        "/refer ➺ Referral link\n\n"
+        "/refer ➺ Referral link\n"
+        "/fb ➺ Submit feedback (photo/video)\n\n"
         "⚡ FREE CHECKER:\n"
         "/chk ➺ Stripe Charge\n"
         "/pp ➺ PayPal Charge\n"
@@ -885,21 +928,114 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/mss ➺ Stripe Mass\n"
         "/mpp2 ➺ PayPal Mass\n\n"
         "👑 OWNER:\n"
-        "/info ➺ Advanced user info (@username or ID)\n"
+        "/info ➺ Full user info (ID / @username / reply)\n"
+        "/find ➺ Search user by name, @username, or ID\n"
         "/allcm ➺ This menu\n"
         "/gen ➺ Gen credits\n"
         "/key10 /key20 /key30 ➺ Gen keys\n"
         "/oneday /threeday ➺ Short keys\n"
-        "/sub ➺ Grant premium\n"
+        "/sub ➺ Grant premium (ID / @user / reply)\n"
         "/resub ➺ Remove premium\n"
-        "/allplans ➺ List premium\n"
-        "/seturl ➺ Set gate URL\n"
-        "/geturl ➺ Get gate URLs\n"
+        "/addcredits ➺ Add credits to user\n"
+        "/allplans ➺ List all premium users\n"
+        "/seturl ➺ Set gate API URL\n"
+        "/geturl ➺ View gate URLs\n"
         "/broadcast ➺ Message all users\n"
-        "/killbot /onbot ➺ Maintenance\n"
+        "/killbot /onbot ➺ Maintenance mode\n"
         "━━━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(txt)
+
+async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+
+    if not context.args:
+        await update.message.reply_text(
+            "━━━━━━━━━━━━━━━━━\n"
+            "Uꜱᴀɢᴇ /find\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "/find 123456789   ➺ by ID\n"
+            "/find @batman     ➺ by username\n"
+            "/find John        ➺ by name\n"
+            "━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML"
+        )
+        return
+
+    query     = " ".join(context.args).strip().lstrip("@")
+    all_users = context.bot_data.get("user_data", {})
+    now       = time.time()
+    matches   = []
+
+    query_lower = query.lower()
+    is_id       = query.lstrip("-").isdigit()
+
+    for uid_str, ud in all_users.items():
+        if is_id:
+            if uid_str == query:
+                matches.append((uid_str, ud))
+                break
+        else:
+            uname = ud.get("username", "").lower().lstrip("@")
+            name  = ud.get("name",     "").lower()
+            if query_lower in uname or query_lower in name:
+                matches.append((uid_str, ud))
+
+    if not matches:
+        await update.message.reply_text(
+            f"❌ No users found matching: <code>{query}</code>\n\n"
+            "Try the numeric ID for exact lookup.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Show up to 10 results
+    MAX_RESULTS = 10
+    header = (
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"🔍 Fᴏᴜɴᴅ {len(matches)} Uꜱᴇʀ{'s' if len(matches) != 1 else ''}\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    blocks = []
+    for uid_str, ud in matches[:MAX_RESULTS]:
+        raw_plan = ud.get("plan", "TRIAL").upper()
+        expires  = ud.get("expires", 0)
+        if raw_plan != "TRIAL" and expires <= now:
+            raw_plan = "TRIAL"
+        premium  = raw_plan != "TRIAL" and expires > now
+
+        uname_d  = f"@{ud['username']}" if ud.get("username") else "—"
+        name_d   = ud.get("name", "Unknown")
+        plan_d   = get_styled_plan(raw_plan)
+        status_d = "✅ Active" if premium else "⬜ Trial"
+
+        if premium and expires > now:
+            rem  = expires - now
+            time_left = f"{int(rem // 86400)}d {int((rem % 86400) // 3600)}h"
+        else:
+            time_left = "—"
+
+        blocks.append(
+            f"Nᴀᴍᴇ   ➺ {name_d}\n"
+            f"Uꜱᴇʀ   ➺ {uname_d}\n"
+            f"ID     ➺ <code>{uid_str}</code>\n"
+            f"Pʟᴀɴ   ➺ {plan_d} {status_d}\n"
+            f"Lᴇꜰᴛ   ➺ {time_left}\n"
+            f"Cʜᴇᴄᴋꜱ ➺ {ud.get('total_checks', 0)}\n"
+        )
+
+    footer = "━━━━━━━━━━━━━━━━━"
+    if len(matches) > MAX_RESULTS:
+        footer = f"(showing {MAX_RESULTS} of {len(matches)})\n" + footer
+
+    txt = header + ("\n━━━━━━━━━━━━━━━━━\n").join(blocks) + "\n" + footer
+
+    if len(txt) > MAX_MSG:
+        for i in range(0, len(txt), MAX_MSG):
+            await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
+    else:
+        await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -941,20 +1077,172 @@ async def cmd_threeday(update, context):
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /sub &lt;@username or ID&gt; &lt;days&gt;", parse_mode="HTML")
-        return
-    uid = await resolve_user(context.args[0], context)
-    if not uid:
-        await update.message.reply_text("User not found.")
-        return
+
+    uid  = None
+    days = None
+
+    # MODE A: reply to a user's message → /sub 30
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        ru = update.message.reply_to_message.from_user
+        uid = ru.id
+        if not context.args:
+            await update.message.reply_text(
+                "Uꜱᴀɢᴇ (reply mode): /sub &lt;days&gt;\nExample: /sub 30",
+                parse_mode="HTML")
+            return
+        try:
+            days = int(context.args[0])
+            if days <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid days. Use a positive number like 30.")
+            return
+
+    # MODE B: /sub @username 30  or  /sub 123456789 30
+    else:
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "━━━━━━━━━━━━━━━━━\n"
+                "Uꜱᴀɢᴇ /sub\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "By ID:       /sub 123456789 30\n"
+                "By username: /sub @batman 30\n"
+                "By reply:    reply to user msg → /sub 30\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "Dᴀʏꜱ → 7=Cᴏʀᴇ · 15=Eʟɪᴛᴇ · 30=Rᴏᴏᴛ",
+                parse_mode="HTML")
+            return
+
+        uid = await resolve_user(context.args[0], context)
+        if not uid:
+            await update.message.reply_text(
+                "❌ Uꜱᴇʀ Nᴏᴛ Fᴏᴜɴᴅ\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "Username lookup only works if:\n"
+                "• They have a public @username, OR\n"
+                "• They already used the bot\n\n"
+                "✅ Most reliable: use their numeric ID\n"
+                "Example: /sub 123456789 30\n\n"
+                "Or: reply to their message → /sub 30",
+                parse_mode="HTML")
+            return
+
+        try:
+            days = int(context.args[1])
+            if days <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid days. Use a positive number like 7, 15, or 30.")
+            return
+
+    plan = "ROOT" if days >= 30 else "ELITE" if days >= 15 else "CORE"
+    await _grant(uid, plan, days, update, context)
+
+async def cmd_addcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+
+    uid  = None
+    amt  = None
+
+    # MODE A: reply to message → /addcredits 100
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        ru = update.message.reply_to_message.from_user
+        uid = ru.id
+        if not context.args:
+            await update.message.reply_text(
+                "Uꜱᴀɢᴇ (reply mode): /addcredits &lt;amount&gt;\nExample: /addcredits 100",
+                parse_mode="HTML")
+            return
+        try:
+            amt = int(context.args[0])
+            if amt <= 0: raise ValueError
+        except ValueError:
+            await update.message.reply_text("❌ Invalid amount. Use a positive number like 100.")
+            return
+
+    # MODE B: /addcredits @username|ID amount
+    else:
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "━━━━━━━━━━━━━━━━━\n"
+                "Uꜱᴀɢᴇ /addcredits\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "By ID:       /addcredits 123456789 100\n"
+                "By username: /addcredits @batman 100\n"
+                "By reply:    reply to user msg → /addcredits 100\n"
+                "━━━━━━━━━━━━━━━━━",
+                parse_mode="HTML")
+            return
+
+        uid = await resolve_user(context.args[0], context)
+        if not uid:
+            await update.message.reply_text(
+                "❌ User not found.\n"
+                "Use numeric ID for reliability: /addcredits 123456789 100\n"
+                "Or reply to their message → /addcredits 100",
+                parse_mode="HTML")
+            return
+
+        try:
+            amt = int(context.args[1])
+            if amt <= 0: raise ValueError
+        except ValueError:
+            await update.message.reply_text("❌ Invalid amount. Use a positive number like 100.")
+            return
+
+    ud = get_user_data(uid, context)
+
+    # Fetch live name/username for display
+    display_name  = ud.get("name", "Unknown")
+    display_uname = ud.get("username", "")
     try:
-        days = int(context.args[1])
-        plan = "ROOT" if days >= 30 else "ELITE" if days >= 15 else "CORE"
-        await _grant(uid, plan, days, update, context)
-    except ValueError:
-        await update.message.reply_text("Invalid days number.")
+        chat = await context.bot.get_chat(uid)
+        display_name  = chat.first_name or display_name
+        if chat.last_name:
+            display_name = f"{display_name} {chat.last_name}"
+        display_uname = chat.username or display_uname
+        ud["name"] = display_name
+        if display_uname:
+            ud["username"] = display_uname
+    except Exception:
+        pass
+
+    old_credits = ud.get("credits", 0)
+    ud["credits"] = old_credits + amt
+    new_credits   = ud["credits"]
+    uname_line    = f"@{display_uname}" if display_uname else display_name
+
+    # Notify the user
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                f"[ 𖥷 вт ] ➺ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"Aᴅᴅᴇᴅ    ➺ +{amt}\n"
+                f"Bᴀʟᴀɴᴄᴇ  ➺ {new_credits}\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"Pʀᴏ ➺ Batman"
+            ),
+        )
+    except Exception:
+        pass
+
+    # Confirm to owner
+    await update.message.reply_text(
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ      ➺ {uname_line}\n"
+        f"ID        ➺ <code>{uid}</code>\n"
+        f"Aᴅᴅᴇᴅ    ➺ +{amt}\n"
+        f"Pʀᴇᴠɪᴏᴜꜱ ➺ {old_credits}\n"
+        f"Nᴇᴡ Bᴀʟ  ➺ {new_credits}\n"
+        f"━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
+    )
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1130,6 +1418,223 @@ async def cmd_onmpp2(u, c):  await _gate_toggle(u, c, "mpp2", True)
 async def cmd_offmpp2(u, c): await _gate_toggle(u, c, "mpp2", False)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FEEDBACK SYSTEM
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FEEDBACK_CHANNEL = "@Batcardchk"   # channel where approved feedback gets posted
+
+def _fb_key(user_id: int) -> str:
+    return f"{user_id}_{int(time.time())}"
+
+async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /fb command sent WITHOUT attached media — tells user how to use it."""
+    msg = update.message
+    # If sent as caption on a photo/video it is handled by handle_fb_media instead
+    if msg.photo or msg.video:
+        await handle_fb_media(update, context)
+        return
+    await msg.reply_text(
+        "━━━━━━━━━━━━━━━━━\n"
+        "📸 Fᴇᴇᴅʙᴀᴄᴋ\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "Send a photo or video WITH the caption /fb\n\n"
+        "Example:\n"
+        "Attach your screenshot → set caption → /fb\n"
+        "━━━━━━━━━━━━━━━━━"
+    )
+
+async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles photos/videos sent with /fb as caption (or via cmd_fb redirect)."""
+    msg  = update.message
+    user = update.effective_user
+
+    # Determine media type and file_id
+    if msg.photo:
+        file_id   = msg.photo[-1].file_id   # highest resolution
+        file_type = "photo"
+    elif msg.video:
+        file_id   = msg.video.file_id
+        file_type = "video"
+    else:
+        return
+
+    # Optional text the user wrote alongside /fb
+    raw_caption = (msg.caption or "").strip()
+    # Remove the /fb command from caption text
+    user_note = raw_caption
+    for prefix in ("/fb", "/fb@" + (context.bot.username or "")):
+        if user_note.lower().startswith(prefix.lower()):
+            user_note = user_note[len(prefix):].strip()
+            break
+
+    key       = _fb_key(user.id)
+    uname     = f"@{user.username}" if user.username else user.first_name or "User"
+    submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # Store pending feedback
+    context.bot_data.setdefault("fb_pending", {})[key] = {
+        "file_id":   file_id,
+        "file_type": file_type,
+        "user_id":   user.id,
+        "username":  uname,
+        "name":      user.full_name or user.first_name or "User",
+        "note":      user_note,
+        "date":      submitted,
+    }
+
+    # Confirm to user
+    await msg.reply_text(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    # Build owner notification caption
+    owner_caption = (
+        f"[ 𖥷 вт ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ ➺ {uname}\n"
+        f"ID   ➺ {user.id}\n"
+        f"Dᴀᴛᴇ ➺ {submitted}\n"
+        f"Tʏᴘᴇ ➺ {file_type.capitalize()}\n"
+    )
+    if user_note:
+        owner_caption += f"Nᴏᴛᴇ ➺ {user_note[:200]}\n"
+    owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
+
+    approve_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
+            InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
+        ]
+    ])
+
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(
+                chat_id=OWNER_ID,
+                photo=file_id,
+                caption=owner_caption,
+                reply_markup=approve_kb,
+            )
+        else:
+            await context.bot.send_video(
+                chat_id=OWNER_ID,
+                video=file_id,
+                caption=owner_caption,
+                reply_markup=approve_kb,
+            )
+    except Exception as e:
+        logger.error(f"Feedback notify owner failed: {e}")
+
+async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
+    fb = context.bot_data.get("fb_pending", {}).get(key)
+    if not fb:
+        await query.answer("Feedback not found or already handled.", show_alert=True)
+        return
+
+    uname     = fb["username"]
+    uid       = fb["user_id"]
+    submitted = fb["date"]
+    file_id   = fb["file_id"]
+    file_type = fb["file_type"]
+    user_note = fb.get("note", "")
+
+    # Caption that appears on the channel post
+    channel_caption = (
+        f"━━━━━━━━━━━━━━━━━\n"
+    )
+    if user_note:
+        channel_caption += f"{user_note}\n━━━━━━━━━━━━━━━━━\n"
+    channel_caption += (
+        f"Uꜱᴇʀ ➺ {uname}\n"
+        f"ID   ➺ {uid}\n"
+        f"Dᴀᴛᴇ ➺ {submitted}\n"
+        f"━━━━━━━━━━━━━━━━━"
+    )
+
+    posted = False
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(
+                chat_id=FEEDBACK_CHANNEL,
+                photo=file_id,
+                caption=channel_caption,
+            )
+        else:
+            await context.bot.send_video(
+                chat_id=FEEDBACK_CHANNEL,
+                video=file_id,
+                caption=channel_caption,
+            )
+        posted = True
+    except Exception as e:
+        logger.error(f"Feedback channel post failed: {e}")
+
+    # Remove from pending
+    context.bot_data["fb_pending"].pop(key, None)
+
+    # Edit owner message
+    status = "✅ Posted to channel!" if posted else "⚠️ Approved but channel post failed."
+    try:
+        await query.message.edit_caption(
+            caption=(
+                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"Uꜱᴇʀ   ➺ {uname}\n"
+                f"ID     ➺ {uid}\n"
+                f"Sᴛᴀᴛᴜꜱ ➺ {status}\n"
+                f"━━━━━━━━━━━━━━━━━"
+            ),
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+    # Notify user their feedback was accepted
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                "[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ ✅\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "Your feedback has been posted to the channel.\n"
+                "━━━━━━━━━━━━━━━━━"
+            ),
+        )
+    except Exception:
+        pass
+
+async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
+    fb = context.bot_data.get("fb_pending", {}).get(key)
+    if not fb:
+        await query.answer("Feedback not found or already handled.", show_alert=True)
+        return
+
+    uname = fb["username"]
+    uid   = fb["user_id"]
+
+    # Remove from pending
+    context.bot_data["fb_pending"].pop(key, None)
+
+    # Edit owner message
+    try:
+        await query.message.edit_caption(
+            caption=(
+                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"Uꜱᴇʀ   ➺ {uname}\n"
+                f"ID     ➺ {uid}\n"
+                f"Sᴛᴀᴛᴜꜱ ➺ ❌ Declined — not posted\n"
+                f"━━━━━━━━━━━━━━━━━"
+            ),
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+    # Optionally notify user (silent decline — no notification to avoid confusion)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CALLBACK HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1287,6 +1792,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━",
             kb_payment())
 
+    # ── Feedback approve / decline (owner only) ──────────
+    elif data.startswith("fb_ok_") or data.startswith("fb_no_"):
+        if query.from_user.id != OWNER_ID:
+            try: await query.answer("Owner only.", show_alert=True)
+            except Exception: pass
+            return
+        key = data[len("fb_ok_"):] if data.startswith("fb_ok_") else data[len("fb_no_"):]
+        try: await query.answer()
+        except Exception: pass
+        if data.startswith("fb_ok_"):
+            await _fb_approve(query, context, key)
+        else:
+            await _fb_decline(query, context, key)
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GLOBAL ERROR HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1380,6 +1899,7 @@ def main():
 
     # Owner commands
     app.add_handler(CommandHandler("info",      cmd_info))
+    app.add_handler(CommandHandler("find",      cmd_find))
     app.add_handler(CommandHandler("allcm",     cmd_allcm))
     app.add_handler(CommandHandler("gen",       cmd_gen))
     app.add_handler(CommandHandler("key10",     cmd_key10))
@@ -1387,8 +1907,9 @@ def main():
     app.add_handler(CommandHandler("key30",     cmd_key30))
     app.add_handler(CommandHandler("oneday",    cmd_oneday))
     app.add_handler(CommandHandler("threeday",  cmd_threeday))
-    app.add_handler(CommandHandler("sub",       cmd_sub))
-    app.add_handler(CommandHandler("resub",     cmd_resub))
+    app.add_handler(CommandHandler("sub",        cmd_sub))
+    app.add_handler(CommandHandler("resub",      cmd_resub))
+    app.add_handler(CommandHandler("addcredits", cmd_addcredits))
     app.add_handler(CommandHandler("allplans",  cmd_allplans))
     app.add_handler(CommandHandler("seturl",    cmd_seturl))
     app.add_handler(CommandHandler("geturl",    cmd_geturl))
@@ -1410,6 +1931,13 @@ def main():
         app.add_handler(CommandHandler(cmd, func))
 
     app.add_handler(CallbackQueryHandler(callback_handler))
+
+    # Feedback: /fb command (no media) + photo/video with /fb caption
+    app.add_handler(CommandHandler("fb", cmd_fb))
+    app.add_handler(MessageHandler(
+        (filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"(?i)^/fb"),
+        handle_fb_media,
+    ))
 
     logger.info(f"Batman Bot {VERSION} starting...")
     app.run_polling(
