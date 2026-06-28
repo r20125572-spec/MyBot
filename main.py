@@ -19,7 +19,7 @@ from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
     CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK, BOT_LINK, BOT_USERNAME,
     BOT_PHOTO_URL, API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
-    GATE_URLS, GATE_SITES, MASS_GATES, FORCE_CHANNELS,
+    GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
 
@@ -198,16 +198,15 @@ def kb_payment():
 
 def kb_gate_main():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("AUTH"),   callback_data="mauth"),
-         InlineKeyboardButton(B("CHARGE"), callback_data="mcharge"),
-         InlineKeyboardButton(B("MASS"),   callback_data="mmass")],
+        [InlineKeyboardButton(B("AUTH"),    callback_data="mauth"),
+         InlineKeyboardButton(B("CHARGE"),  callback_data="mcharge"),
+         InlineKeyboardButton("👑 " + B("PREMIUM"), callback_data="mmass")],
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
     ])
 
 def kb_auth_gates():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE"),    callback_data="iau"),
-         InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3")],
+        [InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3")],
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
@@ -220,10 +219,11 @@ def kb_charge_gates():
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
-def kb_mass_gates():
+def kb_premium_gates():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE MASS") + " 👑", callback_data="imss")],
-        [InlineKeyboardButton(B("PAYPAL MASS") + " 👑", callback_data="impp2")],
+        [InlineKeyboardButton(B("STRIPE AUTH")  + " 👑", callback_data="iau")],
+        [InlineKeyboardButton(B("STRIPE MASS")  + " 👑", callback_data="imss")],
+        [InlineKeyboardButton(B("PAYPAL MASS")  + " 👑", callback_data="impp2")],
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
@@ -346,12 +346,25 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
-    if gate_key in MASS_GATES and not premium:
+    if gate_key in PREMIUM_GATES and not premium:
+        gate_label = {
+            "au":   "Stripe Auth (/au)",
+            "mss":  "Stripe Mass (/mss)",
+            "mpp2": "PayPal Mass (/mpp2)",
+        }.get(gate_key, gate_key.upper())
         await update.message.reply_text(
-            "🚫 <b>Mᴀꜱꜱ Gᴀᴛᴇꜱ ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ 👑</b>\n\n"
-            "Mass gate commands are restricted to premium users.\n"
-            "Free users can only use single-card gates.\n\n"
-            "💎 Upgrade to unlock Mass Gates ➺ /plan",
+            f"🚫 <b>{gate_label} ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ 👑</b>\n\n"
+            "Tʀɪᴀʟ Uꜱᴇʀꜱ Cᴀɴ Uꜱᴇ:\n"
+            "/chk  ➺ Stripe Charge\n"
+            "/pp   ➺ PayPal Charge\n"
+            "/sh   ➺ Shopify Charge\n"
+            "/pyu  ➺ PayU Charge\n"
+            "/b3   ➺ Braintree Auth\n\n"
+            "Pʀᴇᴍɪᴜᴍ Uꜱᴇʀꜱ Aʟꜱᴏ Gᴇᴛ:\n"
+            "/au   ➺ Stripe Auth\n"
+            "/mss  ➺ Stripe Mass\n"
+            "/mpp2 ➺ PayPal Mass\n\n"
+            "💎 Upgrade ➺ /plan",
             parse_mode="HTML", reply_markup=kb_upgrade(),
         ); return
 
@@ -709,9 +722,9 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━\n🦇 ALL COMMANDS\n━━━━━━━━━━━━━━━━━\n\n"
         "🟢 USER:\n/start ➺ Start bot\n/plan ➺ View plans\n/bin ➺ BIN lookup\n"
         "/rm ➺ Redeem code\n/ping ➺ Speed check\n/refer ➺ Referral link\n\n"
-        "⚡ CHECKER:\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n"
-        "/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n/au ➺ Stripe Auth\n"
-        "/mss ➺ Stripe Mass (Premium)\n/mpp2 ➺ PayPal Mass (Premium)\n\n"
+        "⚡ FREE CHECKER:\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n"
+        "/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n"
+        "👑 PREMIUM ONLY:\n/au ➺ Stripe Auth\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n"
         "👑 OWNER:\n/info ➺ User info\n/allcm ➺ This menu\n/gen ➺ Gen credits\n"
         "/key10 /key20 /key30 ➺ Gen keys\n/oneday /threeday ➺ Short keys\n"
         "/sub ➺ Grant premium\n/resub ➺ Remove premium\n/allplans ➺ List premium\n"
@@ -853,32 +866,59 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.reply_to_message.text
     else:
         await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /broadcast &lt;message&gt;\nOr reply to a message with /broadcast",
+            "Uꜱᴀɢᴇ: /broadcast &lt;message&gt;\n"
+            "Or reply to a message with /broadcast\n\n"
+            "Mᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ꜱᴇɴᴛ ᴛᴏ:\n"
+            "• All bot users\n"
+            "• Channel (@Batcardchk)\n"
+            "• Group (@batcardchkGroup)",
             parse_mode="HTML"
         )
         return
 
     all_users = context.bot_data.get("user_data", {})
-    if not all_users:
-        await update.message.reply_text("No users found in database.")
-        return
 
-    status_msg = await update.message.reply_text(
-        f"📡 Broadcasting to {len(all_users)} users..."
-    )
+    status_msg = await update.message.reply_text("📡 Broadcasting...")
 
     sent = 0
     failed = 0
     blocked = 0
 
     broadcast_text = (
-        f"📢 <b>Message from Batman Bot</b>\n"
+        f"📢 <b>𝗕𝗮𝘁𝗺𝗮𝗻 𝗕𝗼𝘁 𝗔𝗻𝗻𝗼𝘂𝗻𝗰𝗲𝗺𝗲𝗻𝘁</b>\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"{text}\n"
         f"━━━━━━━━━━━━━━━━━\n"
-        f"🦇 <a href='{DEV_LINK}'>Batman</a>"
+        f"🦇 <a href='{BOT_LINK}'>Batman Card Checker</a>"
     )
 
+    # ── 1. Send to Channel ──────────────────────────────
+    chan_ok = False
+    try:
+        await context.bot.send_message(
+            chat_id="@Batcardchk",
+            text=broadcast_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        chan_ok = True
+    except Exception as e:
+        logger.warning(f"Broadcast to channel failed: {e}")
+
+    # ── 2. Send to Group ────────────────────────────────
+    grp_ok = False
+    try:
+        await context.bot.send_message(
+            chat_id="@batcardchkGroup",
+            text=broadcast_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        grp_ok = True
+    except Exception as e:
+        logger.warning(f"Broadcast to group failed: {e}")
+
+    # ── 3. Send to all bot users ─────────────────────────
     for uid_str in list(all_users.keys()):
         try:
             await context.bot.send_message(
@@ -894,15 +934,17 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 blocked += 1
             else:
                 failed += 1
-        # Small delay to avoid hitting Telegram rate limits
         await asyncio.sleep(0.05)
 
     await status_msg.edit_text(
         f"📡 Bʀᴏᴀᴅᴄᴀꜱᴛ Cᴏᴍᴘʟᴇᴛᴇ\n"
         f"━━━━━━━━━━━━━━━━━\n"
-        f"✅ Sᴇɴᴛ    ➺ {sent}\n"
-        f"🚫 Bʟᴏᴄᴋᴇᴅ ➺ {blocked}\n"
-        f"❌ Fᴀɪʟᴇᴅ  ➺ {failed}\n"
+        f"📢 Cʜᴀɴɴᴇʟ  ➺ {'✅ Sent' if chan_ok else '❌ Failed'}\n"
+        f"👥 Gʀᴏᴜᴘ    ➺ {'✅ Sent' if grp_ok else '❌ Failed'}\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"✅ Uꜱᴇʀꜱ Sᴇɴᴛ    ➺ {sent}\n"
+        f"🚫 Bʟᴏᴄᴋᴇᴅ       ➺ {blocked}\n"
+        f"❌ Fᴀɪʟᴇᴅ         ➺ {failed}\n"
         f"━━━━━━━━━━━━━━━━━"
     )
 
@@ -999,9 +1041,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit(
             "🦇 𝗦𝗘𝗟𝗘𝗖𝗧 𝗔 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗬\n"
             "━━━━━━━━━━━━━━━━━\n"
-            "⚡ Aᴜᴛʜ Gᴀᴛᴇꜱ   ➺ 2\n"
-            "💰 Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4\n"
-            "🚀 Mᴀꜱꜱ Gᴀᴛᴇꜱ  ➺ 2 (Premium Only 👑)\n"
+            "🆓 Aᴜᴛʜ Gᴀᴛᴇꜱ   ➺ 1  (Free)\n"
+            "🆓 Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4  (Free)\n"
+            "👑 Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ ➺ 3  (Premium Only)\n"
             "━━━━━━━━━━━━━━━━━",
             kb_gate_main())
 
@@ -1013,22 +1055,42 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Aᴄᴄᴇꜱꜱ  ➺ Rᴏᴏᴛ 👑\nSᴜʙ      ➺ 30 Days\nCʀᴇᴅɪᴛꜱ ➺ ∞ Unlimited\nPʀɪᴄᴇ   ➺ 30$\n━━━━━━━━━━━━━━━━━",
             kb_price())
 
-    elif data == "mauth":   await edit("━━━━━━━━━━━━━━━━━\n⚡ Auth Gates\n━━━━━━━━━━━━━━━━━",   kb_auth_gates())
-    elif data == "mcharge": await edit("━━━━━━━━━━━━━━━━━\n💰 Charge Gates\n━━━━━━━━━━━━━━━━━", kb_charge_gates())
+    elif data == "mauth":
+        await edit(
+            "━━━━━━━━━━━━━━━━━\n🆓 Auth Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
+            "Bʀᴀɪɴᴛʀᴇᴇ Aᴜᴛʜ ➺ /b3\n━━━━━━━━━━━━━━━━━",
+            kb_auth_gates())
+    elif data == "mcharge":
+        await edit(
+            "━━━━━━━━━━━━━━━━━\n🆓 Charge Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
+            "Sᴛʀɪᴘᴇ  ➺ /chk\n"
+            "PᴀʏPᴀʟ  ➺ /pp\n"
+            "Sʜᴏᴘɪꜰʏ ➺ /sh\n"
+            "PᴀʏU    ➺ /pyu\n━━━━━━━━━━━━━━━━━",
+            kb_charge_gates())
 
     elif data == "mmass":
         if not premium:
             await query.answer(
-                "🚫 Mass Gates are Premium only! Buy a plan to unlock.", show_alert=True)
+                "🚫 Premium Gates require a premium plan!", show_alert=True)
             await edit(
-                "🚫 Mᴀꜱꜱ Gᴀᴛᴇꜱ ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ 👑\n"
+                "👑 Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ\n"
                 "━━━━━━━━━━━━━━━━━\n\n"
-                "Mass gates allow bulk checking.\n"
-                "Free users can only use single-card gates.\n\n"
+                "Tʀɪᴀʟ ᴜꜱᴇʀꜱ ᴄᴀɴ ᴜꜱᴇ:\n"
+                "/chk /pp /sh /pyu /b3\n\n"
+                "Pʀᴇᴍɪᴜᴍ ᴀʟꜱᴏ ᴜɴʟᴏᴄᴋꜱ:\n"
+                "/au  ➺ Stripe Auth\n"
+                "/mss ➺ Stripe Mass\n"
+                "/mpp2 ➺ PayPal Mass\n\n"
                 "💎 Upgrade to unlock:",
                 kb_upgrade())
             return
-        await edit("━━━━━━━━━━━━━━━━━\n🚀 Mass Gates (Premium 👑)\n━━━━━━━━━━━━━━━━━", kb_mass_gates())
+        await edit(
+            "━━━━━━━━━━━━━━━━━\n👑 Premium Gates\n━━━━━━━━━━━━━━━━━\n\n"
+            "Sᴛʀɪᴘᴇ Aᴜᴛʜ ➺ /au\n"
+            "Sᴛʀɪᴘᴇ Mᴀꜱꜱ ➺ /mss\n"
+            "PᴀʏPᴀʟ Mᴀꜱꜱ ➺ /mpp2\n━━━━━━━━━━━━━━━━━",
+            kb_premium_gates())
 
     elif data == "mrefer":
         link       = get_referral_link(user.id)
@@ -1045,7 +1107,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📢 Share your link — earn <b>+{REFERRAL_CREDITS} free credits</b> per new user!",
             kb_back("bmain"))
 
-    elif data == "iau":   await edit(gate_info_text("STRIPE AUTH",    "au",   1), kb_back("mauth"))
+    elif data == "iau":
+        if not premium:
+            await query.answer("🚫 Stripe Auth is Premium only!", show_alert=True); return
+        await edit(gate_info_text("STRIPE AUTH 👑", "au", 1), kb_back("mmass"))
     elif data == "ib3":   await edit(gate_info_text("BRAINTREE AUTH", "b3",   1), kb_back("mauth"))
     elif data == "ichk":  await edit(gate_info_text("STRIPE CHARGE",  "chk",  1), kb_back("mcharge"))
     elif data == "ipp":   await edit(gate_info_text("PAYPAL CHARGE",  "pp",   1), kb_back("mcharge"))
@@ -1054,13 +1119,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "imss":
         if not premium:
-            await query.answer("🚫 Premium required for Mass Gates!", show_alert=True); return
-        await edit(gate_info_text("STRIPE MASS", "mss", 2), kb_back("mmass"))
+            await query.answer("🚫 Stripe Mass is Premium only!", show_alert=True); return
+        await edit(gate_info_text("STRIPE MASS 👑", "mss", 2), kb_back("mmass"))
 
     elif data == "impp2":
         if not premium:
-            await query.answer("🚫 Premium required for Mass Gates!", show_alert=True); return
-        await edit(gate_info_text("PAYPAL MASS", "mpp2", 2), kb_back("mmass"))
+            await query.answer("🚫 PayPal Mass is Premium only!", show_alert=True); return
+        await edit(gate_info_text("PAYPAL MASS 👑", "mpp2", 2), kb_back("mmass"))
 
     elif data in ("pay10", "pay15", "pay30"):
         await edit(
