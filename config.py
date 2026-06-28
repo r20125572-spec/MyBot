@@ -17,7 +17,7 @@ CHANNEL_USERNAME = "@Batcardchk"
 GROUP_USERNAME   = "@batcardchkGroup"
 CHANNEL_LINK     = "https://t.me/Batcardchk"
 GROUP_LINK       = "https://t.me/batcardchkGroup"
-SUPPORT_LINK     = "https://t.me/failurefr_07"
+SUPPORT_LINK     = "https://t.me/cardchkSupport"
 BOT_USERNAME     = "Batmancardchk_bot"
 BOT_LINK         = "https://t.me/Batmancardchk_bot"
 
