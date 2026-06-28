@@ -50,7 +50,7 @@ GATE_SITES = {
     "mpp2": "example.com",
 }
 
-MASS_GATES = {"mss", "mpp2"}
+PREMIUM_GATES = {"au", "mss", "mpp2"}
 
 FORCE_CHANNELS = [
     ("Batcardchk",     CHANNEL_LINK),
