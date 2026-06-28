@@ -15,11 +15,14 @@ from telegram.ext import (
 )
 from telegram.error import Conflict, BadRequest, NetworkError
 
+import aiohttp as _aiohttp
+
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
-    CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK, BOT_LINK, BOT_USERNAME,
-    BOT_PHOTO_URL, API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
-    GATE_URLS, GATE_SITES, PREMIUM_GATES,
+    CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
+    BOT_LINK, BOT_USERNAME, BOT_PHOTO_URL, BOT_PHOTO,
+    API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
+    GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
 
@@ -188,6 +191,26 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FORCE SUBSCRIBE CHECK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
+    """Returns list of (name, link) for channels the user hasn't joined."""
+    not_joined = []
+    for name, link in FORCE_CHANNELS:
+        try:
+            member = await context.bot.get_chat_member(f"@{name}", user_id)
+            if member.status in ("left", "kicked"):
+                not_joined.append((name, link))
+        except Exception:
+            not_joined.append((name, link))
+    return not_joined
+
+def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(f"➺ Join @{name}", url=link)] for name, link in not_joined]
+    rows.append([InlineKeyboardButton("✅ I Joined — Check Again", callback_data="check_sub")])
+    return InlineKeyboardMarkup(rows)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD CHECK RESULT UI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def build_check_result(
@@ -238,7 +261,7 @@ def build_check_result(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # KEYBOARDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def kb_main(user_id: int):
+def kb_main(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("CHECKER"),  callback_data="mgates"),
          InlineKeyboardButton(B("BUY NOW"), callback_data="mprice")],
@@ -248,10 +271,10 @@ def kb_main(user_id: int):
         [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
     ])
 
-def kb_back(cb):
+def kb_back(cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 " + B("BACK"), callback_data=cb)]])
 
-def kb_price():
+def kb_price() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("10$ - CORE"),  callback_data="pay10"),
          InlineKeyboardButton(B("15$ - ELITE"), callback_data="pay15"),
@@ -260,13 +283,13 @@ def kb_price():
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
     ])
 
-def kb_payment():
+def kb_payment() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mprice")],
     ])
 
-def kb_gate_main():
+def kb_gate_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("AUTH"),    callback_data="mauth"),
          InlineKeyboardButton(B("CHARGE"),  callback_data="mcharge"),
@@ -274,13 +297,13 @@ def kb_gate_main():
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
     ])
 
-def kb_auth_gates():
+def kb_auth_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3")],
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
-def kb_charge_gates():
+def kb_charge_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("STRIPE"),  callback_data="ichk"),
          InlineKeyboardButton(B("PAYPAL"),  callback_data="ipp")],
@@ -289,7 +312,7 @@ def kb_charge_gates():
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
-def kb_premium_gates():
+def kb_premium_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(B("STRIPE AUTH")  + " 👑", callback_data="iau")],
         [InlineKeyboardButton(B("STRIPE MASS")  + " 👑", callback_data="imss")],
@@ -297,11 +320,17 @@ def kb_premium_gates():
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
-def kb_upgrade():
+def kb_upgrade() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💎 " + B("BUY PREMIUM"), callback_data="mprice")],
         [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
     ])
+
+def kb_fb_owner(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
+    ]])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # REFERRAL SYSTEM
@@ -338,8 +367,6 @@ async def process_referral(new_user_id: int, referrer_id: int,
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GATE PROCESSING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-import aiohttp as _aiohttp
-
 async def _api_request(session, url: str, card: str, site: str) -> dict:
     if "{card}" in url:
         url = url.replace("{card}", card)
@@ -367,6 +394,18 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
     _update_user_meta(ud, user)
+
+    # Force subscribe check
+    not_joined = await check_force_sub(user.id, context)
+    if not_joined:
+        await update.message.reply_text(
+            "[ 𖥷 вт ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "Join our channels to use the bot:\n"
+            "━━━━━━━━━━━━━━━━━",
+            reply_markup=kb_force_sub(not_joined),
+        )
+        return
 
     if gate_key in PREMIUM_GATES and not premium:
         gate_label = {
@@ -465,14 +504,9 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         time_taken = f"{time.time() - start_time:.2f}"
         text = build_check_result(
-            card_raw=card_raw,
-            gate_name=gate_name,
-            raw_response=raw_response,
-            bin_data=bin_data,
-            username=uname,
-            plan=plan,
-            time_taken=time_taken,
-            is_approved=is_approved,
+            card_raw=card_raw, gate_name=gate_name, raw_response=raw_response,
+            bin_data=bin_data, username=uname, plan=plan,
+            time_taken=time_taken, is_approved=is_approved,
         )
         await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result(), disable_web_page_preview=True)
@@ -481,15 +515,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
         time_taken = f"{time.time() - start_time:.2f}"
         text = build_check_result(
-            card_raw=card_raw,
-            gate_name=gate_name,
-            raw_response="Rᴇǫᴜᴇꜱᴛ Tɪᴍᴇᴏᴜᴛ",
-            bin_data={},
-            username=uname,
-            plan=plan,
-            time_taken=time_taken,
-            is_approved=False,
-            is_timeout=True,
+            card_raw=card_raw, gate_name=gate_name,
+            raw_response="Rᴇǫᴜᴇꜱᴛ Tɪᴍᴇᴏᴜᴛ", bin_data={},
+            username=uname, plan=plan, time_taken=time_taken,
+            is_approved=False, is_timeout=True,
         )
         await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result(), disable_web_page_preview=True)
@@ -498,15 +527,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         logger.error(f"Gate [{gate_key}] error: {e}")
         time_taken = f"{time.time() - start_time:.2f}"
         text = build_check_result(
-            card_raw=card_raw,
-            gate_name=gate_name,
-            raw_response=str(e)[:120],
-            bin_data={},
-            username=uname,
-            plan=plan,
-            time_taken=time_taken,
-            is_approved=False,
-            is_error=True,
+            card_raw=card_raw, gate_name=gate_name,
+            raw_response=str(e)[:120], bin_data={},
+            username=uname, plan=plan, time_taken=time_taken,
+            is_approved=False, is_error=True,
         )
         await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result(), disable_web_page_preview=True)
@@ -567,33 +591,20 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     return receipt
 
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
-    """Resolve @username or numeric ID to a Telegram user ID.
-    Tries three methods in order:
-      1. Direct numeric ID
-      2. Telegram get_chat (works for public usernames)
-      3. Search bot's own stored user_data by saved username
-    """
     target = target.strip().lstrip("@")
-
-    # Method 1: numeric ID — always reliable
     if target.lstrip("-").isdigit():
         return int(target)
-
-    # Method 2: Telegram API lookup (public usernames only)
     for attempt in (f"@{target}", target):
         try:
             return (await context.bot.get_chat(attempt)).id
         except Exception:
             continue
-
-    # Method 3: search our local bot database by stored username
     all_users    = context.bot_data.get("user_data", {})
     target_lower = target.lower()
     for uid_str, ud in all_users.items():
         stored = ud.get("username", "").lower().lstrip("@")
         if stored and stored == target_lower:
             return int(uid_str)
-
     return None
 
 async def _grant(uid: int, plan: str, days: int,
@@ -602,8 +613,7 @@ async def _grant(uid: int, plan: str, days: int,
     ud["plan"]    = plan
     ud["expires"] = time.time() + days * 86400
 
-    # Fetch live user info from Telegram so the owner reply shows real name/username
-    display_name = ud.get("name", "Unknown")
+    display_name  = ud.get("name", "Unknown")
     display_uname = ud.get("username", "")
     try:
         chat = await context.bot.get_chat(uid)
@@ -611,16 +621,16 @@ async def _grant(uid: int, plan: str, days: int,
         if chat.last_name:
             display_name = f"{display_name} {chat.last_name}"
         display_uname = chat.username or ""
-        ud["name"]    = display_name
+        ud["name"] = display_name
         if display_uname:
             ud["username"] = display_uname
     except Exception:
         pass
 
-    receipt     = await send_activation_msg(uid, plan, days, context)
-    uname_line  = f"@{display_uname}" if display_uname else display_name
-    exp_ts      = ud["expires"]
-    exp_date    = datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d %H:%M")
+    receipt    = await send_activation_msg(uid, plan, days, context)
+    uname_line = f"@{display_uname}" if display_uname else display_name
+    exp_ts     = ud["expires"]
+    exp_date   = datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d %H:%M")
 
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━━━\n"
@@ -655,6 +665,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await process_referral(user.id, referrer_id, context)
             except (ValueError, Exception):
                 pass
+
+    not_joined = await check_force_sub(user.id, context)
+    if not_joined:
+        await update.message.reply_text(
+            "[ 𖥷 вт ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "Join our channels to use the bot:\n"
+            "━━━━━━━━━━━━━━━━━",
+            reply_markup=kb_force_sub(not_joined),
+        )
+        return
 
     await update.message.reply_text(
         ui_profile(user, context),
@@ -753,15 +774,213 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"Error: <code>{str(e)[:100]}</code>", parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FEEDBACK SYSTEM  (/fb)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _fb_key(user_id: int) -> str:
+    return f"{user_id}_{int(time.time())}_{random.randint(1000, 9999)}"
+
+async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows usage when /fb is sent without media."""
+    msg = update.message
+    if msg.photo or msg.video:
+        await handle_fb_media(update, context)
+        return
+    await msg.reply_text(
+        "━━━━━━━━━━━━━━━━━\n"
+        "📸 Fᴇᴇᴅʙᴀᴄᴋ\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Sᴇɴᴅ a photo or video WITH the caption /fb\n\n"
+        "Exᴀᴍᴘʟᴇ:\n"
+        "Attach screenshot → set caption → /fb → Send\n\n"
+        "You can add a note after /fb:\n"
+        "<code>/fb Great service!</code>\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
+    )
+
+async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles photo/video sent with /fb caption."""
+    msg  = update.message
+    user = update.effective_user
+
+    if msg.photo:
+        file_id   = msg.photo[-1].file_id
+        file_type = "photo"
+    elif msg.video:
+        file_id   = msg.video.file_id
+        file_type = "video"
+    else:
+        return
+
+    raw_caption = (msg.caption or "").strip()
+    user_note   = raw_caption
+    bot_uname   = context.bot.username or ""
+    for prefix in (f"/fb@{bot_uname}", "/fb"):
+        if user_note.lower().startswith(prefix.lower()):
+            user_note = user_note[len(prefix):].strip()
+            break
+
+    key       = _fb_key(user.id)
+    uname     = f"@{user.username}" if user.username else user.first_name or "User"
+    submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    context.bot_data.setdefault("fb_pending", {})[key] = {
+        "file_id":   file_id,
+        "file_type": file_type,
+        "user_id":   user.id,
+        "username":  uname,
+        "name":      user.full_name or user.first_name or "User",
+        "note":      user_note,
+        "date":      submitted,
+    }
+
+    await msg.reply_text(
+        "━━━━━━━━━━━━━━━━━\n"
+        "Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "Under review — you'll be notified once approved.\n"
+        "━━━━━━━━━━━━━━━━━"
+    )
+
+    owner_caption = (
+        f"[ 𖥷 вт ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ ➺ {uname}\n"
+        f"ID   ➺ {user.id}\n"
+        f"Dᴀᴛᴇ ➺ {submitted}\n"
+        f"Tʏᴘᴇ ➺ {file_type.capitalize()}\n"
+    )
+    if user_note:
+        owner_caption += f"Nᴏᴛᴇ ➺ {user_note[:200]}\n"
+    owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
+
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(
+                chat_id=OWNER_ID, photo=file_id,
+                caption=owner_caption, reply_markup=kb_fb_owner(key),
+            )
+        else:
+            await context.bot.send_video(
+                chat_id=OWNER_ID, video=file_id,
+                caption=owner_caption, reply_markup=kb_fb_owner(key),
+            )
+    except Exception as e:
+        logger.error(f"Feedback notify owner failed: {e}")
+
+async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
+    fb = context.bot_data.get("fb_pending", {}).get(key)
+    if not fb:
+        await query.answer("Already handled or not found.", show_alert=True)
+        return
+
+    uname     = fb["username"]
+    uid       = fb["user_id"]
+    submitted = fb["date"]
+    file_id   = fb["file_id"]
+    file_type = fb["file_type"]
+    user_note = fb.get("note", "")
+
+    channel_caption = "━━━━━━━━━━━━━━━━━\n"
+    if user_note:
+        channel_caption += f"{user_note}\n━━━━━━━━━━━━━━━━━\n"
+    channel_caption += (
+        f"Uꜱᴇʀ ➺ {uname}\n"
+        f"ID   ➺ {uid}\n"
+        f"Dᴀᴛᴇ ➺ {submitted}\n"
+        f"━━━━━━━━━━━━━━━━━"
+    )
+
+    posted = False
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(
+                chat_id=CHANNEL_USERNAME, photo=file_id, caption=channel_caption)
+        else:
+            await context.bot.send_video(
+                chat_id=CHANNEL_USERNAME, video=file_id, caption=channel_caption)
+        posted = True
+    except Exception as e:
+        logger.error(f"Feedback channel post failed: {e}")
+
+    context.bot_data["fb_pending"].pop(key, None)
+
+    status_line = "✅ Posted to channel!" if posted else "⚠️ Approved but post failed."
+    try:
+        await query.message.edit_caption(
+            caption=(
+                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"Uꜱᴇʀ   ➺ {uname}\n"
+                f"ID     ➺ {uid}\n"
+                f"Sᴛᴀᴛᴜꜱ ➺ {status_line}\n"
+                f"━━━━━━━━━━━━━━━━━"
+            ),
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                "[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ ✅\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "Your feedback has been posted to the channel!\n"
+                f"📢 {CHANNEL_LINK}\n"
+                "━━━━━━━━━━━━━━━━━"
+            ),
+        )
+    except Exception:
+        pass
+
+async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
+    fb = context.bot_data.get("fb_pending", {}).get(key)
+    if not fb:
+        await query.answer("Already handled or not found.", show_alert=True)
+        return
+
+    uname = fb["username"]
+    uid   = fb["user_id"]
+    context.bot_data["fb_pending"].pop(key, None)
+
+    try:
+        await query.message.edit_caption(
+            caption=(
+                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"Uꜱᴇʀ   ➺ {uname}\n"
+                f"ID     ➺ {uid}\n"
+                f"Sᴛᴀᴛᴜꜱ ➺ ❌ Declined — not posted\n"
+                f"━━━━━━━━━━━━━━━━━"
+            ),
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                "[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "Your feedback was not approved this time.\n"
+                "━━━━━━━━━━━━━━━━━"
+            ),
+        )
+    except Exception:
+        pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OWNER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-
     target_id, target_name, target_username = None, "N/A", None
     target_last_name, target_lang = "", "N/A"
 
-    # MODE 1: reply to a message
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         ru               = update.message.reply_to_message.from_user
         target_id        = ru.id
@@ -769,17 +988,11 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_last_name = ru.last_name or ""
         target_username  = ru.username
         target_lang      = ru.language_code or "N/A"
-
-    # MODE 2: /info @username or /info 123456789
     elif context.args:
         raw = context.args[0].strip().lstrip("@")
-
-        # Numeric ID — always works
         if raw.lstrip("-").isdigit():
             target_id = int(raw)
-
         else:
-            # Try Telegram public username lookup first
             try:
                 chat             = await context.bot.get_chat(f"@{raw}")
                 target_id        = chat.id
@@ -788,33 +1001,20 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 target_username  = chat.username
             except Exception:
                 pass
-
-            # Fallback: search our own database by stored username
             if not target_id:
                 raw_lower = raw.lower()
                 for uid_str, ud in context.bot_data.get("user_data", {}).items():
                     stored = ud.get("username", "").lower().lstrip("@")
                     if stored and stored == raw_lower:
-                        target_id        = int(uid_str)
-                        target_name      = ud.get("name", "N/A")
-                        target_username  = ud.get("username")
-                        target_lang      = ud.get("language_code", "N/A")
+                        target_id = int(uid_str); target_name = ud.get("name", "N/A")
+                        target_username = ud.get("username"); target_lang = ud.get("language_code", "N/A")
                         break
 
     if not target_id:
         await update.message.reply_text(
-            "━━━━━━━━━━━━━━━━━\n"
-            "Uꜱᴀɢᴇ /info\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "/info @username\n"
-            "/info 123456789\n"
-            "Or reply to any user message → /info\n"
-            "━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
+            "Uꜱᴀɢᴇ: /info @username | /info 123456789 | reply to user → /info")
         return
 
-    # If name still unknown, try fetching from Telegram by ID
     if target_name == "N/A":
         try:
             chat             = await context.bot.get_chat(target_id)
@@ -824,37 +1024,25 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    all_users = context.bot_data.get("user_data", {})
     uid_str   = str(target_id)
     now       = time.time()
-    udata     = all_users.get(uid_str, {})
-
-    raw_plan = udata.get("plan", "TRIAL").upper()
-    expires  = udata.get("expires", 0)
+    udata     = context.bot_data.get("user_data", {}).get(uid_str, {})
+    raw_plan  = udata.get("plan", "TRIAL").upper()
+    expires   = udata.get("expires", 0)
     if raw_plan != "TRIAL" and expires <= now:
         raw_plan = "TRIAL"; expires = 0
     premium   = raw_plan != "TRIAL" and expires > now
     credits_d = "Unlimited" if premium else str(udata.get("credits", 150))
 
-    full_name = target_name
-    if target_last_name:
-        full_name = f"{target_name} {target_last_name}"
-    uname_d = f"@{target_username}" if target_username else "None"
-    lang_d  = udata.get("language_code", target_lang) or "N/A"
+    full_name = f"{target_name} {target_last_name}".strip()
+    uname_d   = f"@{target_username}" if target_username else "None"
+    lang_d    = udata.get("language_code", target_lang) or "N/A"
 
     total_refs      = udata.get("total_refs", 0)
     total_checks    = udata.get("total_checks", 0)
     approved_checks = udata.get("approved_checks", 0)
     declined_checks = udata.get("declined_checks", 0)
-    last_gate       = udata.get("last_gate", "N/A")
-    last_card       = udata.get("last_card", "N/A")
-    last_active     = udata.get("last_active", "N/A")
-    joined          = udata.get("joined", "N/A")
-    codes_redeemed  = udata.get("codes_redeemed", 0)
-    keys_redeemed   = udata.get("keys_redeemed", 0)
-    last_receipt    = udata.get("last_receipt", "N/A")
-
-    approval_rate = f"{(approved_checks / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
+    approval_rate   = f"{(approved_checks / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
 
     txt = (
         f"[ 𖥷 вт ] Uꜱᴇʀ Iɴꜰᴏ\n"
@@ -868,7 +1056,6 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Cʀᴇᴅɪᴛꜱ   ➺ {credits_d}\n"
         f"Sᴛᴀᴛᴜꜱ    ➺ {'Active' if premium else 'Trial'}\n"
     )
-
     if premium and expires > now:
         rem  = expires - now
         rstr = f"{int(rem // 86400)}d {int((rem % 86400) // 3600)}h"
@@ -876,27 +1063,26 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Exᴘɪʀᴇꜱ   ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
             f"Rᴇᴍᴀɪɴɪɴɢ ➺ {rstr}\n"
         )
-    if last_receipt and last_receipt != "N/A":
+    last_receipt = udata.get("last_receipt")
+    if last_receipt:
         txt += f"Rᴇᴄᴇɪᴘᴛ   ➺ <code>{last_receipt}</code>\n"
-
     txt += (
         f"━━━━━━━━━━━━━━━━━\n"
-        f"Jᴏɪɴᴇᴅ      ➺ {joined}\n"
-        f"Lᴀꜱᴛ Aᴄᴛɪᴠᴇ ➺ {last_active}\n"
+        f"Jᴏɪɴᴇᴅ      ➺ {udata.get('joined', 'N/A')}\n"
+        f"Lᴀꜱᴛ Aᴄᴛɪᴠᴇ ➺ {udata.get('last_active', 'N/A')}\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ ➺ {total_checks}\n"
         f"Aᴘᴘʀᴏᴠᴇᴅ     ➺ {approved_checks}\n"
         f"Dᴇᴄʟɪɴᴇᴅ     ➺ {declined_checks}\n"
         f"Rᴀᴛᴇ         ➺ {approval_rate}\n"
-        f"Lᴀꜱᴛ Gᴀᴛᴇ   ➺ {last_gate}\n"
-        f"Lᴀꜱᴛ BIN    ➺ <code>{last_card}</code>\n"
+        f"Lᴀꜱᴛ Gᴀᴛᴇ   ➺ {udata.get('last_gate', 'N/A')}\n"
+        f"Lᴀꜱᴛ BIN    ➺ <code>{udata.get('last_card', 'N/A')}</code>\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Rᴇꜰᴇʀʀᴀʟꜱ   ➺ {total_refs}\n"
-        f"Cᴏᴅᴇꜱ        ➺ {codes_redeemed} redeemed\n"
-        f"Kᴇʏꜱ         ➺ {keys_redeemed} redeemed\n"
+        f"Cᴏᴅᴇꜱ        ➺ {udata.get('codes_redeemed', 0)} redeemed\n"
+        f"Kᴇʏꜱ         ➺ {udata.get('keys_redeemed', 0)} redeemed\n"
         f"━━━━━━━━━━━━━━━━━"
     )
-
     if len(txt) > MAX_MSG:
         for i in range(0, len(txt), MAX_MSG):
             await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
@@ -906,148 +1092,82 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     txt = (
-        "━━━━━━━━━━━━━━━━━\n"
-        "🦇 ALL COMMANDS\n"
-        "━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━\n🦇 ALL COMMANDS\n━━━━━━━━━━━━━━━━━\n\n"
         "🟢 USER:\n"
-        "/start ➺ Start bot\n"
-        "/plan ➺ View plans\n"
-        "/bin ➺ BIN lookup\n"
-        "/rm ➺ Redeem code\n"
-        "/ping ➺ Speed check\n"
-        "/refer ➺ Referral link\n"
+        "/start ➺ Start bot\n/plan ➺ View plans\n/bin ➺ BIN lookup\n"
+        "/rm ➺ Redeem code\n/ping ➺ Speed check\n/refer ➺ Referral link\n"
         "/fb ➺ Submit feedback (photo/video)\n\n"
         "⚡ FREE CHECKER:\n"
-        "/chk ➺ Stripe Charge\n"
-        "/pp ➺ PayPal Charge\n"
-        "/sh ➺ Shopify Charge\n"
-        "/pyu ➺ PayU Charge\n"
-        "/b3 ➺ Braintree Auth\n\n"
+        "/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n"
+        "/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n"
         "👑 PREMIUM ONLY:\n"
-        "/au ➺ Stripe Auth\n"
-        "/mss ➺ Stripe Mass\n"
-        "/mpp2 ➺ PayPal Mass\n\n"
+        "/au ➺ Stripe Auth\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n"
         "👑 OWNER:\n"
-        "/info ➺ Full user info (ID / @username / reply)\n"
-        "/find ➺ Search user by name, @username, or ID\n"
-        "/allcm ➺ This menu\n"
-        "/gen ➺ Gen credits\n"
-        "/key10 /key20 /key30 ➺ Gen keys\n"
+        "/info ➺ Full user info\n/find ➺ Search user\n/allcm ➺ This menu\n"
+        "/gen ➺ Gen credits\n/key10 /key20 /key30 ➺ Gen keys\n"
         "/oneday /threeday ➺ Short keys\n"
-        "/sub ➺ Grant premium (ID / @user / reply)\n"
-        "/resub ➺ Remove premium\n"
-        "/addcredits ➺ Add credits to user\n"
-        "/allplans ➺ List all premium users\n"
-        "/seturl ➺ Set gate API URL\n"
-        "/geturl ➺ View gate URLs\n"
-        "/broadcast ➺ Message all users\n"
-        "/killbot /onbot ➺ Maintenance mode\n"
+        "/sub ➺ Grant premium\n/resub ➺ Remove premium\n"
+        "/addcredits ➺ Add credits\n/allplans ➺ List premium users\n"
+        "/seturl ➺ Set gate API URL\n/geturl ➺ View gate URLs\n"
+        "/broadcast ➺ Message all users\n/killbot /onbot ➺ Maintenance mode\n"
         "━━━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(txt)
 
 async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-
     if not context.args:
         await update.message.reply_text(
-            "━━━━━━━━━━━━━━━━━\n"
-            "Uꜱᴀɢᴇ /find\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "/find 123456789   ➺ by ID\n"
-            "/find @batman     ➺ by username\n"
-            "/find John        ➺ by name\n"
-            "━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
+            "Uꜱᴀɢᴇ: /find @username | /find 123456789 | /find Name")
         return
-
     query     = " ".join(context.args).strip().lstrip("@")
     all_users = context.bot_data.get("user_data", {})
     now       = time.time()
     matches   = []
-
-    query_lower = query.lower()
-    is_id       = query.lstrip("-").isdigit()
-
+    ql        = query.lower()
+    is_id     = query.lstrip("-").isdigit()
     for uid_str, ud in all_users.items():
         if is_id:
-            if uid_str == query:
-                matches.append((uid_str, ud))
-                break
+            if uid_str == query: matches.append((uid_str, ud)); break
         else:
-            uname = ud.get("username", "").lower().lstrip("@")
-            name  = ud.get("name",     "").lower()
-            if query_lower in uname or query_lower in name:
+            if ql in ud.get("username", "").lower().lstrip("@") or ql in ud.get("name", "").lower():
                 matches.append((uid_str, ud))
-
     if not matches:
-        await update.message.reply_text(
-            f"❌ No users found matching: <code>{query}</code>\n\n"
-            "Try the numeric ID for exact lookup.",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(f"❌ No users found: <code>{query}</code>", parse_mode="HTML")
         return
-
-    # Show up to 10 results
-    MAX_RESULTS = 10
-    header = (
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"🔍 Fᴏᴜɴᴅ {len(matches)} Uꜱᴇʀ{'s' if len(matches) != 1 else ''}\n"
-        f"━━━━━━━━━━━━━━━━━\n\n"
-    )
-
+    MAX_R  = 10
+    header = f"━━━━━━━━━━━━━━━━━\n🔍 Found {len(matches)} user(s)\n━━━━━━━━━━━━━━━━━\n\n"
     blocks = []
-    for uid_str, ud in matches[:MAX_RESULTS]:
-        raw_plan = ud.get("plan", "TRIAL").upper()
-        expires  = ud.get("expires", 0)
-        if raw_plan != "TRIAL" and expires <= now:
-            raw_plan = "TRIAL"
-        premium  = raw_plan != "TRIAL" and expires > now
-
-        uname_d  = f"@{ud['username']}" if ud.get("username") else "—"
-        name_d   = ud.get("name", "Unknown")
-        plan_d   = get_styled_plan(raw_plan)
-        status_d = "✅ Active" if premium else "⬜ Trial"
-
-        if premium and expires > now:
-            rem  = expires - now
-            time_left = f"{int(rem // 86400)}d {int((rem % 86400) // 3600)}h"
-        else:
-            time_left = "—"
-
+    for uid_str, ud in matches[:MAX_R]:
+        rp = ud.get("plan", "TRIAL").upper()
+        ex = ud.get("expires", 0)
+        if rp != "TRIAL" and ex <= now: rp = "TRIAL"
+        prem = rp != "TRIAL" and ex > now
+        tl   = f"{int((ex-now)//86400)}d {int(((ex-now)%86400)//3600)}h" if prem and ex > now else "—"
         blocks.append(
-            f"Nᴀᴍᴇ   ➺ {name_d}\n"
-            f"Uꜱᴇʀ   ➺ {uname_d}\n"
+            f"Nᴀᴍᴇ   ➺ {ud.get('name','Unknown')}\n"
+            f"Uꜱᴇʀ   ➺ @{ud['username']}" if ud.get("username") else f"Uꜱᴇʀ   ➺ —\n"
             f"ID     ➺ <code>{uid_str}</code>\n"
-            f"Pʟᴀɴ   ➺ {plan_d} {status_d}\n"
-            f"Lᴇꜰᴛ   ➺ {time_left}\n"
-            f"Cʜᴇᴄᴋꜱ ➺ {ud.get('total_checks', 0)}\n"
+            f"Pʟᴀɴ   ➺ {get_styled_plan(rp)} {'✅' if prem else '⬜'}\n"
+            f"Lᴇꜰᴛ   ➺ {tl}\n"
+            f"Cʜᴇᴄᴋꜱ ➺ {ud.get('total_checks',0)}\n"
         )
-
-    footer = "━━━━━━━━━━━━━━━━━"
-    if len(matches) > MAX_RESULTS:
-        footer = f"(showing {MAX_RESULTS} of {len(matches)})\n" + footer
-
-    txt = header + ("\n━━━━━━━━━━━━━━━━━\n").join(blocks) + "\n" + footer
-
+    footer = ("" if len(matches) <= MAX_R else f"(showing {MAX_R} of {len(matches)})\n") + "━━━━━━━━━━━━━━━━━"
+    txt    = header + ("\n━━━━━━━━━━━━━━━━━\n").join(blocks) + "\n" + footer
     if len(txt) > MAX_MSG:
-        for i in range(0, len(txt), MAX_MSG):
-            await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
+        for i in range(0, len(txt), MAX_MSG): await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
     else:
         await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /gen &lt;credits&gt;", parse_mode="HTML")
-        return
+        await update.message.reply_text("Uꜱᴀɢᴇ: /gen &lt;credits&gt;", parse_mode="HTML"); return
     try:
         amt  = int(context.args[0])
         code = gen_code()
         context.bot_data.setdefault("codes", {})[code] = {"type": "credit", "value": amt, "used": False}
-        await update.message.reply_text(
-            f"Cᴏᴅᴇ: <code>{code}</code>\nCʀᴇᴅɪᴛꜱ: {amt}", parse_mode="HTML")
+        await update.message.reply_text(f"Cᴏᴅᴇ: <code>{code}</code>\nCʀᴇᴅɪᴛꜱ: {amt}", parse_mode="HTML")
     except ValueError:
         await update.message.reply_text("Invalid amount.")
 
@@ -1056,8 +1176,7 @@ async def _gen_key(update, context, plan: str, days: int):
     code = "KEY-" + gen_code(12)
     context.bot_data.setdefault("keys", {})[code] = {"plan": plan, "days": days, "used": False}
     await update.message.reply_text(
-        f"Kᴇʏ: <code>{code}</code>\nPʟᴀɴ: {get_styled_plan(plan)} | Dᴀʏꜱ: {days}",
-        parse_mode="HTML")
+        f"Kᴇʏ: <code>{code}</code>\nPʟᴀɴ: {get_styled_plan(plan)} | Dᴀʏꜱ: {days}", parse_mode="HTML")
 
 async def cmd_key10(u, c): await _gen_key(u, c, "CORE",  7)
 async def cmd_key20(u, c): await _gen_key(u, c, "ELITE", 15)
@@ -1077,238 +1196,136 @@ async def cmd_threeday(update, context):
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-
-    uid  = None
-    days = None
-
-    # MODE A: reply to a user's message → /sub 30
+    uid = None; days = None
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        ru = update.message.reply_to_message.from_user
-        uid = ru.id
+        uid = update.message.reply_to_message.from_user.id
         if not context.args:
-            await update.message.reply_text(
-                "Uꜱᴀɢᴇ (reply mode): /sub &lt;days&gt;\nExample: /sub 30",
-                parse_mode="HTML")
-            return
+            await update.message.reply_text("Uꜱᴀɢᴇ (reply): /sub &lt;days&gt;", parse_mode="HTML"); return
         try:
             days = int(context.args[0])
-            if days <= 0:
-                raise ValueError
+            if days <= 0: raise ValueError
         except ValueError:
-            await update.message.reply_text(
-                "❌ Invalid days. Use a positive number like 30.")
-            return
-
-    # MODE B: /sub @username 30  or  /sub 123456789 30
+            await update.message.reply_text("❌ Invalid days."); return
     else:
         if len(context.args) < 2:
             await update.message.reply_text(
-                "━━━━━━━━━━━━━━━━━\n"
-                "Uꜱᴀɢᴇ /sub\n"
-                "━━━━━━━━━━━━━━━━━\n"
-                "By ID:       /sub 123456789 30\n"
-                "By username: /sub @batman 30\n"
-                "By reply:    reply to user msg → /sub 30\n"
-                "━━━━━━━━━━━━━━━━━\n"
-                "Dᴀʏꜱ → 7=Cᴏʀᴇ · 15=Eʟɪᴛᴇ · 30=Rᴏᴏᴛ",
-                parse_mode="HTML")
-            return
-
+                "Uꜱᴀɢᴇ: /sub @user|ID days\nOr reply to user → /sub days"); return
         uid = await resolve_user(context.args[0], context)
         if not uid:
-            await update.message.reply_text(
-                "❌ Uꜱᴇʀ Nᴏᴛ Fᴏᴜɴᴅ\n"
-                "━━━━━━━━━━━━━━━━━\n"
-                "Username lookup only works if:\n"
-                "• They have a public @username, OR\n"
-                "• They already used the bot\n\n"
-                "✅ Most reliable: use their numeric ID\n"
-                "Example: /sub 123456789 30\n\n"
-                "Or: reply to their message → /sub 30",
-                parse_mode="HTML")
-            return
-
+            await update.message.reply_text("❌ User not found."); return
         try:
             days = int(context.args[1])
-            if days <= 0:
-                raise ValueError
+            if days <= 0: raise ValueError
         except ValueError:
-            await update.message.reply_text(
-                "❌ Invalid days. Use a positive number like 7, 15, or 30.")
-            return
-
+            await update.message.reply_text("❌ Invalid days."); return
     plan = "ROOT" if days >= 30 else "ELITE" if days >= 15 else "CORE"
     await _grant(uid, plan, days, update, context)
 
 async def cmd_addcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-
-    uid  = None
-    amt  = None
-
-    # MODE A: reply to message → /addcredits 100
+    uid = None; amt = None
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        ru = update.message.reply_to_message.from_user
-        uid = ru.id
+        uid = update.message.reply_to_message.from_user.id
         if not context.args:
-            await update.message.reply_text(
-                "Uꜱᴀɢᴇ (reply mode): /addcredits &lt;amount&gt;\nExample: /addcredits 100",
-                parse_mode="HTML")
-            return
+            await update.message.reply_text("Uꜱᴀɢᴇ (reply): /addcredits &lt;amount&gt;", parse_mode="HTML"); return
         try:
             amt = int(context.args[0])
             if amt <= 0: raise ValueError
         except ValueError:
-            await update.message.reply_text("❌ Invalid amount. Use a positive number like 100.")
-            return
-
-    # MODE B: /addcredits @username|ID amount
+            await update.message.reply_text("❌ Invalid amount."); return
     else:
         if len(context.args) < 2:
-            await update.message.reply_text(
-                "━━━━━━━━━━━━━━━━━\n"
-                "Uꜱᴀɢᴇ /addcredits\n"
-                "━━━━━━━━━━━━━━━━━\n"
-                "By ID:       /addcredits 123456789 100\n"
-                "By username: /addcredits @batman 100\n"
-                "By reply:    reply to user msg → /addcredits 100\n"
-                "━━━━━━━━━━━━━━━━━",
-                parse_mode="HTML")
-            return
-
+            await update.message.reply_text("Uꜱᴀɢᴇ: /addcredits @user|ID amount"); return
         uid = await resolve_user(context.args[0], context)
         if not uid:
-            await update.message.reply_text(
-                "❌ User not found.\n"
-                "Use numeric ID for reliability: /addcredits 123456789 100\n"
-                "Or reply to their message → /addcredits 100",
-                parse_mode="HTML")
-            return
-
+            await update.message.reply_text("❌ User not found."); return
         try:
             amt = int(context.args[1])
             if amt <= 0: raise ValueError
         except ValueError:
-            await update.message.reply_text("❌ Invalid amount. Use a positive number like 100.")
-            return
+            await update.message.reply_text("❌ Invalid amount."); return
 
     ud = get_user_data(uid, context)
-
-    # Fetch live name/username for display
     display_name  = ud.get("name", "Unknown")
     display_uname = ud.get("username", "")
     try:
         chat = await context.bot.get_chat(uid)
         display_name  = chat.first_name or display_name
-        if chat.last_name:
-            display_name = f"{display_name} {chat.last_name}"
+        if chat.last_name: display_name = f"{display_name} {chat.last_name}"
         display_uname = chat.username or display_uname
         ud["name"] = display_name
-        if display_uname:
-            ud["username"] = display_uname
+        if display_uname: ud["username"] = display_uname
     except Exception:
         pass
 
-    old_credits = ud.get("credits", 0)
-    ud["credits"] = old_credits + amt
-    new_credits   = ud["credits"]
-    uname_line    = f"@{display_uname}" if display_uname else display_name
+    old = ud.get("credits", 0)
+    ud["credits"] = old + amt
+    uname_line = f"@{display_uname}" if display_uname else display_name
 
-    # Notify the user
     try:
-        await context.bot.send_message(
-            chat_id=uid,
-            text=(
-                f"[ 𖥷 вт ] ➺ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n"
-                f"━━━━━━━━━━━━━━━━━\n"
-                f"Aᴅᴅᴇᴅ    ➺ +{amt}\n"
-                f"Bᴀʟᴀɴᴄᴇ  ➺ {new_credits}\n"
-                f"━━━━━━━━━━━━━━━━━\n"
-                f"Pʀᴏ ➺ Batman"
-            ),
-        )
+        await context.bot.send_message(chat_id=uid, text=(
+            f"[ 𖥷 вт ] ➺ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n━━━━━━━━━━━━━━━━━\n"
+            f"Aᴅᴅᴇᴅ   ➺ +{amt}\nBᴀʟᴀɴᴄᴇ ➺ {ud['credits']}\n━━━━━━━━━━━━━━━━━"
+        ))
     except Exception:
         pass
-
-    # Confirm to owner
     await update.message.reply_text(
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Uꜱᴇʀ      ➺ {uname_line}\n"
-        f"ID        ➺ <code>{uid}</code>\n"
-        f"Aᴅᴅᴇᴅ    ➺ +{amt}\n"
-        f"Pʀᴇᴠɪᴏᴜꜱ ➺ {old_credits}\n"
-        f"Nᴇᴡ Bᴀʟ  ➺ {new_credits}\n"
-        f"━━━━━━━━━━━━━━━━━",
+        f"━━━━━━━━━━━━━━━━━\n✅ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ ➺ {uname_line}\nID ➺ <code>{uid}</code>\n"
+        f"Aᴅᴅᴇᴅ ➺ +{amt}\nPʀᴇᴠ ➺ {old}\nNᴇᴡ ➺ {ud['credits']}\n━━━━━━━━━━━━━━━━━",
         parse_mode="HTML",
     )
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args:
-        await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /resub &lt;@username or ID&gt;", parse_mode="HTML")
-        return
+        await update.message.reply_text("Uꜱᴀɢᴇ: /resub &lt;@user or ID&gt;", parse_mode="HTML"); return
     uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message.reply_text("User not found.")
-        return
+        await update.message.reply_text("User not found."); return
     uid_str  = str(uid)
     all_data = context.bot_data.get("user_data", {})
     if uid_str not in all_data:
-        await update.message.reply_text("User has no data.")
-        return
+        await update.message.reply_text("User has no data."); return
     ud = all_data[uid_str]
     ud["plan"] = "TRIAL"; ud["expires"] = 0; ud["credits"] = 0
     try:
-        await context.bot.send_message(
-            chat_id=uid,
-            text="Your premium has been removed. Account reset to Trial.")
+        await context.bot.send_message(chat_id=uid, text="Your premium has been removed. Account reset to Trial.")
     except Exception:
         pass
-    await update.message.reply_text(
-        f"Premium removed for <code>{uid}</code>.", parse_mode="HTML")
+    await update.message.reply_text(f"Premium removed for <code>{uid}</code>.", parse_mode="HTML")
 
 async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     all_users     = context.bot_data.get("user_data", {})
     now           = time.time()
-    premium_users = [
-        (uid, ud) for uid, ud in all_users.items()
-        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > now
-    ]
+    premium_users = [(u, d) for u, d in all_users.items()
+                     if d.get("plan", "TRIAL").upper() != "TRIAL" and d.get("expires", 0) > now]
     if not premium_users:
-        await update.message.reply_text("No active premium users.")
-        return
+        await update.message.reply_text("No active premium users."); return
     txt = f"[ 𖥷 вт ] Live Premium ➺ {len(premium_users)} Users\n━━━━━━━━━━━━━━━━━\n\n"
     for uid_str, ud in premium_users:
-        rem  = ud["expires"] - now
-        rstr = f"{int(rem // 86400)}d {int((rem % 86400) // 3600)}h"
+        rem = ud["expires"] - now
         txt += (
-            f"Nᴀᴍᴇ ➺ {ud.get('name', 'Unknown')}\n"
+            f"Nᴀᴍᴇ ➺ {ud.get('name','Unknown')}\n"
             f"ID   ➺ <code>{uid_str}</code>\n"
             f"Pʟᴀɴ ➺ {get_styled_plan(ud['plan'])}\n"
-            f"Lᴇꜰᴛ ➺ {rstr}\n"
+            f"Lᴇꜰᴛ ➺ {int(rem//86400)}d {int((rem%86400)//3600)}h\n"
             f"━━━━━━━━━━━━━━━━━\n"
         )
     if len(txt) > MAX_MSG:
-        for i in range(0, len(txt), MAX_MSG):
-            await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
+        for i in range(0, len(txt), MAX_MSG): await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
     else:
         await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 2:
-        await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /seturl &lt;gate&gt; &lt;url&gt;", parse_mode="HTML")
-        return
-    gate = context.args[0].lower().strip()
-    url  = context.args[1].strip()
+        await update.message.reply_text("Uꜱᴀɢᴇ: /seturl &lt;gate&gt; &lt;url&gt;", parse_mode="HTML"); return
+    gate = context.args[0].lower()
+    url  = context.args[1]
     if gate not in GATE_URLS:
-        await update.message.reply_text("Invalid gate.")
-        return
+        await update.message.reply_text("Invalid gate."); return
     context.bot_data[f"gate_url_{gate}"] = url
     await update.message.reply_text(f"URL set for gate [{gate}].")
 
@@ -1325,39 +1342,26 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     text = " ".join(context.args).strip() if context.args else ""
     if not text:
-        await update.message.reply_text(
-            "Uꜱᴀɢᴇ: /broadcast &lt;message&gt;", parse_mode="HTML")
-        return
+        await update.message.reply_text("Uꜱᴀɢᴇ: /broadcast &lt;message&gt;", parse_mode="HTML"); return
 
     all_users  = context.bot_data.get("user_data", {})
     status_msg = await update.message.reply_text("Broadcasting...")
     sent = 0; failed = 0; blocked = 0
 
     broadcast_text = (
-        f"[ 𖥷 вт ] Batman Announcement\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"{text}\n"
-        f"━━━━━━━━━━━━━━━━━\n"
+        f"[ 𖥷 вт ] Batman Announcement\n━━━━━━━━━━━━━━━━━\n"
+        f"{text}\n━━━━━━━━━━━━━━━━━\n"
         f"Pʀᴏ ➺ <a href='{BOT_LINK}'>Batman Card Checker</a>"
     )
 
     chan_ok = False
     try:
         await context.bot.send_message(
-            chat_id="@Batcardchk", text=broadcast_text,
+            chat_id=CHANNEL_USERNAME, text=broadcast_text,
             parse_mode="HTML", disable_web_page_preview=True)
         chan_ok = True
     except Exception as e:
-        logger.warning(f"Broadcast to channel failed: {e}")
-
-    grp_ok = False
-    try:
-        await context.bot.send_message(
-            chat_id="@batcardchkGroup", text=broadcast_text,
-            parse_mode="HTML", disable_web_page_preview=True)
-        grp_ok = True
-    except Exception as e:
-        logger.warning(f"Broadcast to group failed: {e}")
+        logger.warning(f"Broadcast channel failed: {e}")
 
     for uid_str in list(all_users.keys()):
         try:
@@ -1367,22 +1371,14 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except Exception as e:
             err = str(e).lower()
-            if "blocked" in err or "deactivated" in err or "not found" in err:
-                blocked += 1
-            else:
-                failed += 1
+            if "blocked" in err or "deactivated" in err or "not found" in err: blocked += 1
+            else: failed += 1
         await asyncio.sleep(0.05)
 
     await status_msg.edit_text(
-        f"[ 𖥷 вт ] Bʀᴏᴀᴅᴄᴀꜱᴛ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Cʜᴀɴɴᴇʟ ➺ {'Sent' if chan_ok else 'Failed'}\n"
-        f"Gʀᴏᴜᴘ   ➺ {'Sent' if grp_ok else 'Failed'}\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Sᴇɴᴛ    ➺ {sent}\n"
-        f"Bʟᴏᴄᴋᴇᴅ ➺ {blocked}\n"
-        f"Fᴀɪʟᴇᴅ  ➺ {failed}\n"
-        f"━━━━━━━━━━━━━━━━━"
+        f"[ 𖥷 вт ] Bʀᴏᴀᴅᴄᴀꜱᴛ\n━━━━━━━━━━━━━━━━━\n"
+        f"Cʜᴀɴɴᴇʟ ➺ {'✅' if chan_ok else '❌'}\n━━━━━━━━━━━━━━━━━\n"
+        f"Sᴇɴᴛ    ➺ {sent}\nBʟᴏᴄᴋᴇᴅ ➺ {blocked}\nFᴀɪʟᴇᴅ  ➺ {failed}\n━━━━━━━━━━━━━━━━━"
     )
 
 async def cmd_killbot(update, context):
@@ -1418,223 +1414,6 @@ async def cmd_onmpp2(u, c):  await _gate_toggle(u, c, "mpp2", True)
 async def cmd_offmpp2(u, c): await _gate_toggle(u, c, "mpp2", False)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FEEDBACK SYSTEM
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FEEDBACK_CHANNEL = "@Batcardchk"   # channel where approved feedback gets posted
-
-def _fb_key(user_id: int) -> str:
-    return f"{user_id}_{int(time.time())}"
-
-async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /fb command sent WITHOUT attached media — tells user how to use it."""
-    msg = update.message
-    # If sent as caption on a photo/video it is handled by handle_fb_media instead
-    if msg.photo or msg.video:
-        await handle_fb_media(update, context)
-        return
-    await msg.reply_text(
-        "━━━━━━━━━━━━━━━━━\n"
-        "📸 Fᴇᴇᴅʙᴀᴄᴋ\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        "Send a photo or video WITH the caption /fb\n\n"
-        "Example:\n"
-        "Attach your screenshot → set caption → /fb\n"
-        "━━━━━━━━━━━━━━━━━"
-    )
-
-async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles photos/videos sent with /fb as caption (or via cmd_fb redirect)."""
-    msg  = update.message
-    user = update.effective_user
-
-    # Determine media type and file_id
-    if msg.photo:
-        file_id   = msg.photo[-1].file_id   # highest resolution
-        file_type = "photo"
-    elif msg.video:
-        file_id   = msg.video.file_id
-        file_type = "video"
-    else:
-        return
-
-    # Optional text the user wrote alongside /fb
-    raw_caption = (msg.caption or "").strip()
-    # Remove the /fb command from caption text
-    user_note = raw_caption
-    for prefix in ("/fb", "/fb@" + (context.bot.username or "")):
-        if user_note.lower().startswith(prefix.lower()):
-            user_note = user_note[len(prefix):].strip()
-            break
-
-    key       = _fb_key(user.id)
-    uname     = f"@{user.username}" if user.username else user.first_name or "User"
-    submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    # Store pending feedback
-    context.bot_data.setdefault("fb_pending", {})[key] = {
-        "file_id":   file_id,
-        "file_type": file_type,
-        "user_id":   user.id,
-        "username":  uname,
-        "name":      user.full_name or user.first_name or "User",
-        "note":      user_note,
-        "date":      submitted,
-    }
-
-    # Confirm to user
-    await msg.reply_text(
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
-
-    # Build owner notification caption
-    owner_caption = (
-        f"[ 𖥷 вт ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Uꜱᴇʀ ➺ {uname}\n"
-        f"ID   ➺ {user.id}\n"
-        f"Dᴀᴛᴇ ➺ {submitted}\n"
-        f"Tʏᴘᴇ ➺ {file_type.capitalize()}\n"
-    )
-    if user_note:
-        owner_caption += f"Nᴏᴛᴇ ➺ {user_note[:200]}\n"
-    owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
-
-    approve_kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
-            InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
-        ]
-    ])
-
-    try:
-        if file_type == "photo":
-            await context.bot.send_photo(
-                chat_id=OWNER_ID,
-                photo=file_id,
-                caption=owner_caption,
-                reply_markup=approve_kb,
-            )
-        else:
-            await context.bot.send_video(
-                chat_id=OWNER_ID,
-                video=file_id,
-                caption=owner_caption,
-                reply_markup=approve_kb,
-            )
-    except Exception as e:
-        logger.error(f"Feedback notify owner failed: {e}")
-
-async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
-    fb = context.bot_data.get("fb_pending", {}).get(key)
-    if not fb:
-        await query.answer("Feedback not found or already handled.", show_alert=True)
-        return
-
-    uname     = fb["username"]
-    uid       = fb["user_id"]
-    submitted = fb["date"]
-    file_id   = fb["file_id"]
-    file_type = fb["file_type"]
-    user_note = fb.get("note", "")
-
-    # Caption that appears on the channel post
-    channel_caption = (
-        f"━━━━━━━━━━━━━━━━━\n"
-    )
-    if user_note:
-        channel_caption += f"{user_note}\n━━━━━━━━━━━━━━━━━\n"
-    channel_caption += (
-        f"Uꜱᴇʀ ➺ {uname}\n"
-        f"ID   ➺ {uid}\n"
-        f"Dᴀᴛᴇ ➺ {submitted}\n"
-        f"━━━━━━━━━━━━━━━━━"
-    )
-
-    posted = False
-    try:
-        if file_type == "photo":
-            await context.bot.send_photo(
-                chat_id=FEEDBACK_CHANNEL,
-                photo=file_id,
-                caption=channel_caption,
-            )
-        else:
-            await context.bot.send_video(
-                chat_id=FEEDBACK_CHANNEL,
-                video=file_id,
-                caption=channel_caption,
-            )
-        posted = True
-    except Exception as e:
-        logger.error(f"Feedback channel post failed: {e}")
-
-    # Remove from pending
-    context.bot_data["fb_pending"].pop(key, None)
-
-    # Edit owner message
-    status = "✅ Posted to channel!" if posted else "⚠️ Approved but channel post failed."
-    try:
-        await query.message.edit_caption(
-            caption=(
-                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ\n"
-                f"━━━━━━━━━━━━━━━━━\n"
-                f"Uꜱᴇʀ   ➺ {uname}\n"
-                f"ID     ➺ {uid}\n"
-                f"Sᴛᴀᴛᴜꜱ ➺ {status}\n"
-                f"━━━━━━━━━━━━━━━━━"
-            ),
-            reply_markup=None,
-        )
-    except Exception:
-        pass
-
-    # Notify user their feedback was accepted
-    try:
-        await context.bot.send_message(
-            chat_id=uid,
-            text=(
-                "[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ ✅\n"
-                "━━━━━━━━━━━━━━━━━\n"
-                "Your feedback has been posted to the channel.\n"
-                "━━━━━━━━━━━━━━━━━"
-            ),
-        )
-    except Exception:
-        pass
-
-async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
-    fb = context.bot_data.get("fb_pending", {}).get(key)
-    if not fb:
-        await query.answer("Feedback not found or already handled.", show_alert=True)
-        return
-
-    uname = fb["username"]
-    uid   = fb["user_id"]
-
-    # Remove from pending
-    context.bot_data["fb_pending"].pop(key, None)
-
-    # Edit owner message
-    try:
-        await query.message.edit_caption(
-            caption=(
-                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ\n"
-                f"━━━━━━━━━━━━━━━━━\n"
-                f"Uꜱᴇʀ   ➺ {uname}\n"
-                f"ID     ➺ {uid}\n"
-                f"Sᴛᴀᴛᴜꜱ ➺ ❌ Declined — not posted\n"
-                f"━━━━━━━━━━━━━━━━━"
-            ),
-            reply_markup=None,
-        )
-    except Exception:
-        pass
-
-    # Optionally notify user (silent decline — no notification to avoid confusion)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CALLBACK HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1656,8 +1435,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if "message is not modified" in str(e).lower():
                 return
             try:
-                await query.message.edit_caption(
-                    caption=text, parse_mode="HTML", reply_markup=markup)
+                await query.message.edit_caption(caption=text, parse_mode="HTML", reply_markup=markup)
             except Exception:
                 await context.bot.send_message(
                     chat_id=query.message.chat_id, text=text,
@@ -1666,97 +1444,77 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
-    if data == "bmain":
+    if data == "check_sub":
+        not_joined = await check_force_sub(user.id, context)
+        if not_joined:
+            try:
+                await query.answer("You still haven't joined all channels!", show_alert=True)
+            except Exception:
+                pass
+            try:
+                await query.message.edit_reply_markup(reply_markup=kb_force_sub(not_joined))
+            except Exception:
+                pass
+        else:
+            await edit(ui_profile(user, context), kb_main(user.id))
+
+    elif data == "bmain":
         await edit(ui_profile(user, context), kb_main(user.id))
 
     elif data == "mgates":
         await edit(
-            "[ 𖥷 вт ] Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ\n"
-            "━━━━━━━━━━━━━━━━━\n"
+            "[ 𖥷 вт ] Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ\n━━━━━━━━━━━━━━━━━\n"
             "Aᴜᴛʜ Gᴀᴛᴇꜱ   ➺ 1  (Free)\n"
             "Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4  (Free)\n"
-            "Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ ➺ 3  (Premium)\n"
-            "━━━━━━━━━━━━━━━━━",
+            "Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ ➺ 3  (Premium)\n━━━━━━━━━━━━━━━━━",
             kb_gate_main())
 
     elif data == "mprice":
         await edit(
-            "[ 𖥷 вт ] Batman Premium Plans\n"
-            "━━━━━━━━━━━━━━━━━\n\n"
-            "Aᴄᴄᴇꜱꜱ  ➺ Cᴏʀᴇ\nDᴀʏꜱ     ➺ 7\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 10$\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "Aᴄᴄᴇꜱꜱ  ➺ Eʟɪᴛᴇ\nDᴀʏꜱ     ➺ 15\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 15$\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "Aᴄᴄᴇꜱꜱ  ➺ Rᴏᴏᴛ\nDᴀʏꜱ     ➺ 30\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 30$\n"
-            "━━━━━━━━━━━━━━━━━",
+            "[ 𖥷 вт ] Batman Premium Plans\n━━━━━━━━━━━━━━━━━\n\n"
+            "Aᴄᴄᴇꜱꜱ  ➺ Cᴏʀᴇ\nDᴀʏꜱ     ➺ 7\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
+            "Aᴄᴄᴇꜱꜱ  ➺ Eʟɪᴛᴇ\nDᴀʏꜱ     ➺ 15\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
+            "Aᴄᴄᴇꜱꜱ  ➺ Rᴏᴏᴛ\nDᴀʏꜱ     ➺ 30\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 30$\n━━━━━━━━━━━━━━━━━",
             kb_price())
 
     elif data == "mauth":
         await edit(
-            "[ 𖥷 вт ] Auth Gates (Free)\n"
-            "━━━━━━━━━━━━━━━━━\n\n"
-            "Bʀᴀɪɴᴛʀᴇᴇ Aᴜᴛʜ ➺ /b3\n"
-            "━━━━━━━━━━━━━━━━━",
+            "[ 𖥷 вт ] Auth Gates (Free)\n━━━━━━━━━━━━━━━━━\n\nBʀᴀɪɴᴛʀᴇᴇ Aᴜᴛʜ ➺ /b3\n━━━━━━━━━━━━━━━━━",
             kb_auth_gates())
 
     elif data == "mcharge":
         await edit(
-            "[ 𖥷 вт ] Charge Gates (Free)\n"
-            "━━━━━━━━━━━━━━━━━\n\n"
-            "Sᴛʀɪᴘᴇ  ➺ /chk\n"
-            "PᴀʏPᴀʟ  ➺ /pp\n"
-            "Sʜᴏᴘɪꜰʏ ➺ /sh\n"
-            "PᴀʏU    ➺ /pyu\n"
-            "━━━━━━━━━━━━━━━━━",
+            "[ 𖥷 вт ] Charge Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
+            "Sᴛʀɪᴘᴇ  ➺ /chk\nPᴀʏPᴀʟ  ➺ /pp\nSʜᴏᴘɪꜰʏ ➺ /sh\nPᴀʏU    ➺ /pyu\n━━━━━━━━━━━━━━━━━",
             kb_charge_gates())
 
     elif data == "mmass":
         if not premium:
-            try:
-                await query.answer("Premium Gates require a premium plan!", show_alert=True)
-            except Exception:
-                pass
+            try: await query.answer("Premium Gates require a premium plan!", show_alert=True)
+            except Exception: pass
             await edit(
-                "[ 𖥷 вт ] Premium Gates\n"
-                "━━━━━━━━━━━━━━━━━\n\n"
-                "Free gates: /chk /pp /sh /pyu /b3\n\n"
-                "Premium unlocks:\n"
-                "/au   ➺ Stripe Auth\n"
-                "/mss  ➺ Stripe Mass\n"
-                "/mpp2 ➺ PayPal Mass\n\n"
-                "Upgrade: /plan",
-                kb_upgrade())
+                "[ 𖥷 вт ] Premium Gates\n━━━━━━━━━━━━━━━━━\n\n"
+                "Upgrade: /plan", kb_upgrade())
             return
         await edit(
-            "[ 𖥷 вт ] Premium Gates 👑\n"
-            "━━━━━━━━━━━━━━━━━\n\n"
-            "Sᴛʀɪᴘᴇ Aᴜᴛʜ ➺ /au\n"
-            "Sᴛʀɪᴘᴇ Mᴀꜱꜱ ➺ /mss\n"
-            "PᴀʏPᴀʟ Mᴀꜱꜱ ➺ /mpp2\n"
-            "━━━━━━━━━━━━━━━━━",
+            "[ 𖥷 вт ] Premium Gates 👑\n━━━━━━━━━━━━━━━━━\n\n"
+            "Sᴛʀɪᴘᴇ Aᴜᴛʜ ➺ /au\nSᴛʀɪᴘᴇ Mᴀꜱꜱ ➺ /mss\nPᴀʏPᴀʟ Mᴀꜱꜱ ➺ /mpp2\n━━━━━━━━━━━━━━━━━",
             kb_premium_gates())
 
     elif data == "mrefer":
         link       = get_referral_link(user.id)
         total_refs = ud.get("total_refs", 0)
         await edit(
-            f"[ 𖥷 вт ] Rᴇꜰᴇʀʀᴀʟ\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"Lɪɴᴋ    ➺ <code>{link}</code>\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs}\n"
-            f"Eᴀʀɴᴇᴅ   ➺ {total_refs * REFERRAL_CREDITS} credits\n"
-            f"Pᴇʀ Rᴇꜰ  ➺ +{REFERRAL_CREDITS} credits\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"Share your link to earn free credits!",
+            f"[ 𖥷 вт ] Rᴇꜰᴇʀʀᴀʟ\n━━━━━━━━━━━━━━━━━\n"
+            f"Lɪɴᴋ    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n"
+            f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs}\nEᴀʀɴᴇᴅ ➺ {total_refs * REFERRAL_CREDITS} credits\n"
+            f"Pᴇʀ Rᴇꜰ ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━\nShare your link!",
             kb_back("bmain"))
 
     elif data == "iau":
         if not premium:
-            try:
-                await query.answer("Stripe Auth is Premium only!", show_alert=True)
-            except Exception:
-                pass
+            try: await query.answer("Stripe Auth is Premium only!", show_alert=True)
+            except Exception: pass
             return
         await edit(gate_info_text("STRIPE AUTH 👑", "au", 1), kb_back("mmass"))
 
@@ -1768,39 +1526,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "imss":
         if not premium:
-            try:
-                await query.answer("Stripe Mass is Premium only!", show_alert=True)
-            except Exception:
-                pass
+            try: await query.answer("Stripe Mass is Premium only!", show_alert=True)
+            except Exception: pass
             return
         await edit(gate_info_text("STRIPE MASS 👑", "mss", 2), kb_back("mmass"))
 
     elif data == "impp2":
         if not premium:
-            try:
-                await query.answer("PayPal Mass is Premium only!", show_alert=True)
-            except Exception:
-                pass
+            try: await query.answer("PayPal Mass is Premium only!", show_alert=True)
+            except Exception: pass
             return
         await edit(gate_info_text("PAYPAL MASS 👑", "mpp2", 2), kb_back("mmass"))
 
     elif data in ("pay10", "pay15", "pay30"):
         await edit(
-            "[ 𖥷 вт ] Payment\n"
-            "━━━━━━━━━━━━━━━━━\n\n"
-            "To purchase a premium plan, contact support.\n\n"
-            "━━━━━━━━━━━━━━━━━",
+            "[ 𖥷 вт ] Payment\n━━━━━━━━━━━━━━━━━\n\n"
+            "To purchase a premium plan, contact support.\n\n━━━━━━━━━━━━━━━━━",
             kb_payment())
 
-    # ── Feedback approve / decline (owner only) ──────────
     elif data.startswith("fb_ok_") or data.startswith("fb_no_"):
         if query.from_user.id != OWNER_ID:
             try: await query.answer("Owner only.", show_alert=True)
             except Exception: pass
             return
         key = data[len("fb_ok_"):] if data.startswith("fb_ok_") else data[len("fb_no_"):]
-        try: await query.answer()
-        except Exception: pass
         if data.startswith("fb_ok_"):
             await _fb_approve(query, context, key)
         else:
@@ -1817,9 +1566,7 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
     if isinstance(error, Conflict):
         if _conflict_shutting_down: return
         _conflict_shutting_down = True
-        logger.critical("CONFLICT: Another bot instance is using this token.")
-        logger.critical("Stop ALL other running instances, then restart this one.")
-        logger.critical("Waiting 45s before exit to slow down auto-restart loop...")
+        logger.critical("CONFLICT: Another bot instance is running. Waiting before exit...")
         if context.application and hasattr(context.application, "updater") and context.application.updater:
             try: await context.application.updater.stop()
             except Exception: pass
@@ -1840,7 +1587,7 @@ async def post_init(application: Application) -> None:
     for attempt in range(3):
         try:
             await application.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Webhook deleted, pending updates dropped.")
+            logger.info("Webhook deleted.")
             break
         except Exception as e:
             logger.warning(f"Webhook cleanup attempt {attempt+1}: {e}")
@@ -1879,15 +1626,13 @@ def main():
 
     app.add_error_handler(global_error_handler)
 
-    # User commands
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("ping",  cmd_ping))
-    app.add_handler(CommandHandler("plan",  cmd_plan))
-    app.add_handler(CommandHandler("rm",    cmd_rm))
-    app.add_handler(CommandHandler("bin",   cmd_bin))
-    app.add_handler(CommandHandler("refer", cmd_refer))
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("ping",   cmd_ping))
+    app.add_handler(CommandHandler("plan",   cmd_plan))
+    app.add_handler(CommandHandler("rm",     cmd_rm))
+    app.add_handler(CommandHandler("bin",    cmd_bin))
+    app.add_handler(CommandHandler("refer",  cmd_refer))
 
-    # Checker gates
     app.add_handler(CommandHandler("chk",  cmd_chk))
     app.add_handler(CommandHandler("pp",   cmd_pp))
     app.add_handler(CommandHandler("sh",   cmd_sh))
@@ -1897,27 +1642,25 @@ def main():
     app.add_handler(CommandHandler("mss",  cmd_mss))
     app.add_handler(CommandHandler("mpp2", cmd_mpp2))
 
-    # Owner commands
-    app.add_handler(CommandHandler("info",      cmd_info))
-    app.add_handler(CommandHandler("find",      cmd_find))
-    app.add_handler(CommandHandler("allcm",     cmd_allcm))
-    app.add_handler(CommandHandler("gen",       cmd_gen))
-    app.add_handler(CommandHandler("key10",     cmd_key10))
-    app.add_handler(CommandHandler("key20",     cmd_key20))
-    app.add_handler(CommandHandler("key30",     cmd_key30))
-    app.add_handler(CommandHandler("oneday",    cmd_oneday))
-    app.add_handler(CommandHandler("threeday",  cmd_threeday))
+    app.add_handler(CommandHandler("info",       cmd_info))
+    app.add_handler(CommandHandler("find",       cmd_find))
+    app.add_handler(CommandHandler("allcm",      cmd_allcm))
+    app.add_handler(CommandHandler("gen",        cmd_gen))
+    app.add_handler(CommandHandler("key10",      cmd_key10))
+    app.add_handler(CommandHandler("key20",      cmd_key20))
+    app.add_handler(CommandHandler("key30",      cmd_key30))
+    app.add_handler(CommandHandler("oneday",     cmd_oneday))
+    app.add_handler(CommandHandler("threeday",   cmd_threeday))
     app.add_handler(CommandHandler("sub",        cmd_sub))
     app.add_handler(CommandHandler("resub",      cmd_resub))
     app.add_handler(CommandHandler("addcredits", cmd_addcredits))
-    app.add_handler(CommandHandler("allplans",  cmd_allplans))
-    app.add_handler(CommandHandler("seturl",    cmd_seturl))
-    app.add_handler(CommandHandler("geturl",    cmd_geturl))
-    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
-    app.add_handler(CommandHandler("killbot",   cmd_killbot))
-    app.add_handler(CommandHandler("onbot",     cmd_onbot))
+    app.add_handler(CommandHandler("allplans",   cmd_allplans))
+    app.add_handler(CommandHandler("seturl",     cmd_seturl))
+    app.add_handler(CommandHandler("geturl",     cmd_geturl))
+    app.add_handler(CommandHandler("broadcast",  cmd_broadcast))
+    app.add_handler(CommandHandler("killbot",    cmd_killbot))
+    app.add_handler(CommandHandler("onbot",      cmd_onbot))
 
-    # Gate toggles
     for cmd, func in [
         ("onchk",  cmd_onchk),  ("offchk",  cmd_offchk),
         ("onpp",   cmd_onpp),   ("offpp",   cmd_offpp),
@@ -1932,7 +1675,6 @@ def main():
 
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    # Feedback: /fb command (no media) + photo/video with /fb caption
     app.add_handler(CommandHandler("fb", cmd_fb))
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"(?i)^/fb"),
