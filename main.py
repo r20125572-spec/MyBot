@@ -35,7 +35,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger(__name__)
+logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -130,7 +130,7 @@ def _update_user_meta(ud: dict, user) -> None:
     ud["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     if user.username:
         ud["username"] = user.username
-    if user.language_code:
+    if getattr(user, "language_code", None):
         ud["language_code"] = user.language_code
 
 def gen_code(length: int = 10) -> str:
@@ -191,10 +191,14 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE SUBSCRIBE CHECK
+# FORCE SUBSCRIBE — SECURE SYSTEM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
-    """Returns list of (name, link) for channels the user hasn't joined."""
+    """Returns list of (display_name, link) for channels/groups the user hasn't joined.
+    Owner is always exempt.
+    """
+    if user_id == OWNER_ID:
+        return []
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
@@ -202,13 +206,42 @@ async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> l
             if member.status in ("left", "kicked"):
                 not_joined.append((name, link))
         except Exception:
+            # If we can't verify (e.g. bot not admin), treat as not joined to stay safe
             not_joined.append((name, link))
     return not_joined
 
 def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(f"➺ Join @{name}", url=link)] for name, link in not_joined]
-    rows.append([InlineKeyboardButton("✅ I Joined — Check Again", callback_data="check_sub")])
+    rows = []
+    for name, link in not_joined:
+        label = "📢 Join Channel" if "group" not in name.lower() else "💬 Join Group"
+        rows.append([InlineKeyboardButton(f"{label} ➺ @{name}", url=link)])
+    rows.append([InlineKeyboardButton(
+        "✅ I Joined — Verify Now", callback_data="check_sub"
+    )])
     return InlineKeyboardMarkup(rows)
+
+FORCE_SUB_TEXT = (
+    "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+    "━━━━━━━━━━━━━━━━━\n"
+    "You must join our channel & group to use this bot.\n"
+    "After joining press the ✅ Verify button below.\n"
+    "━━━━━━━━━━━━━━━━━"
+)
+
+async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Returns True if the user passes force-join, False (and sends the join message) otherwise.
+    Use this at the top of every user-facing command.
+    """
+    user_id    = update.effective_user.id
+    not_joined = await check_force_sub(user_id, context)
+    if not_joined:
+        await update.message.reply_text(
+            FORCE_SUB_TEXT,
+            reply_markup=kb_force_sub(not_joined),
+        )
+        return False
+    return True
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD CHECK RESULT UI
@@ -391,20 +424,13 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(f"Gate [{gate_name}] is currently OFF.")
         return
 
+    # ── Force-join check ──────────────────────────────
+    if not await require_membership(update, context):
+        return
+
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
     _update_user_meta(ud, user)
-
-    not_joined = await check_force_sub(user.id, context)
-    if not_joined:
-        await update.message.reply_text(
-            "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "Join our channels to use the bot:\n"
-            "━━━━━━━━━━━━━━━━━",
-            reply_markup=kb_force_sub(not_joined),
-        )
-        return
 
     if gate_key in PREMIUM_GATES and not premium:
         gate_label = {
@@ -646,7 +672,7 @@ async def _grant(uid: int, plan: str, days: int,
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# USER COMMANDS
+# USER COMMANDS  (all protected by require_membership)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -656,22 +682,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud.setdefault("total_refs", 0)
     _update_user_meta(ud, user)
 
+    # Handle referral arg before gate check
     if context.args:
         arg = context.args[0]
         if arg.startswith("ref_"):
             try:
                 referrer_id = int(arg[4:])
                 await process_referral(user.id, referrer_id, context)
-            except (ValueError, Exception):
+            except Exception:
                 pass
 
+    # ── Force-join gate ──────────────────────────────
     not_joined = await check_force_sub(user.id, context)
     if not_joined:
         await update.message.reply_text(
-            "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "Join our channels to use the bot:\n"
-            "━━━━━━━━━━━━━━━━━",
+            FORCE_SUB_TEXT,
             reply_markup=kb_force_sub(not_joined),
         )
         return
@@ -684,11 +709,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update, context):
+        return
     t   = time.time()
     msg = await update.message.reply_text("[ 𖥷iТ ] ➺ Pɪɴɢɪɴɢ...")
     await msg.edit_text(f"[ 𖥷iТ ] ➺ Pᴏɴɢ | {int((time.time() - t) * 1000)}ms")
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update, context):
+        return
     txt = (
         "[ 𖥷iТ ] Batman Premium Plans\n"
         "━━━━━━━━━━━━━━━━━\n\n"
@@ -702,6 +731,8 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(txt, reply_markup=kb_price())
 
 async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update, context):
+        return
     user       = update.effective_user
     ud         = get_user_data(user.id, context)
     link       = get_referral_link(user.id)
@@ -722,6 +753,8 @@ async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     disable_web_page_preview=True)
 
 async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update, context):
+        return
     if not context.args:
         await update.message.reply_text("Uꜱᴀɢᴇ: /rm <code>CODE</code>", parse_mode="HTML")
         return
@@ -732,7 +765,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keys  = context.bot_data.get("keys",  {})
     if code in codes and not codes[code]["used"]:
         codes[code]["used"] = True
-        ud["credits"] = ud.get("credits", 0) + codes[code]["value"]
+        ud["credits"]        = ud.get("credits", 0) + codes[code]["value"]
         ud["codes_redeemed"] = ud.get("codes_redeemed", 0) + 1
         await update.message.reply_text(
             f"Redeemed +{codes[code]['value']} credits\nCʀᴇᴅɪᴛꜱ ➺ {ud['credits']}")
@@ -748,6 +781,8 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid or already used code.")
 
 async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_membership(update, context):
+        return
     bin_num = context.args[0].strip()[:6] if context.args else None
     if not bin_num or not bin_num.isdigit() or len(bin_num) < 6:
         await update.message.reply_text("Uꜱᴀɢᴇ: <code>/bin 411111</code>", parse_mode="HTML")
@@ -779,7 +814,8 @@ def _fb_key(user_id: int) -> str:
     return f"{user_id}_{int(time.time())}_{random.randint(1000, 9999)}"
 
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows usage when /fb is sent without media."""
+    if not await require_membership(update, context):
+        return
     msg = update.message
     if msg.photo or msg.video:
         await handle_fb_media(update, context)
@@ -798,9 +834,12 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles photo/video sent with /fb caption."""
     msg  = update.message
     user = update.effective_user
+
+    # Force-join check for caption-triggered media handler
+    if not await require_membership(update, context):
+        return
 
     if msg.photo:
         file_id   = msg.photo[-1].file_id
@@ -973,7 +1012,7 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
         pass
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# OWNER COMMANDS
+# OWNER COMMANDS  (no force-join required)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1450,11 +1489,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
+    # ── "Verify / I Joined" button ─────────────────────
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
             try:
-                await query.answer("You still haven't joined all channels!", show_alert=True)
+                await query.answer(
+                    "❌ You haven't joined all channels/groups yet!\n"
+                    "Join them and press Verify again.", show_alert=True)
             except Exception:
                 pass
             try:
@@ -1462,7 +1504,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         else:
+            # All joined — show profile
+            try:
+                await query.answer("✅ Verified! Welcome.", show_alert=False)
+            except Exception:
+                pass
             await edit(ui_profile(user, context), kb_main(user.id))
+        return
 
     elif data == "bmain":
         await edit(ui_profile(user, context), kb_main(user.id))
@@ -1632,13 +1680,16 @@ def main():
 
     app.add_error_handler(global_error_handler)
 
+    # User commands
     app.add_handler(CommandHandler("start",  cmd_start))
     app.add_handler(CommandHandler("ping",   cmd_ping))
     app.add_handler(CommandHandler("plan",   cmd_plan))
     app.add_handler(CommandHandler("rm",     cmd_rm))
     app.add_handler(CommandHandler("bin",    cmd_bin))
     app.add_handler(CommandHandler("refer",  cmd_refer))
+    app.add_handler(CommandHandler("fb",     cmd_fb))
 
+    # Gate commands
     app.add_handler(CommandHandler("chk",  cmd_chk))
     app.add_handler(CommandHandler("pp",   cmd_pp))
     app.add_handler(CommandHandler("sh",   cmd_sh))
@@ -1648,6 +1699,7 @@ def main():
     app.add_handler(CommandHandler("mss",  cmd_mss))
     app.add_handler(CommandHandler("mpp2", cmd_mpp2))
 
+    # Owner commands
     app.add_handler(CommandHandler("info",       cmd_info))
     app.add_handler(CommandHandler("find",       cmd_find))
     app.add_handler(CommandHandler("allcm",      cmd_allcm))
@@ -1681,13 +1733,12 @@ def main():
 
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    app.add_handler(CommandHandler("fb", cmd_fb))
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.VIDEO) & filters.CaptionRegex(r"(?i)^/fb"),
         handle_fb_media,
     ))
 
-    logger.info(f"Batman Bot {VERSION} starting...")
+    logger.info(f"Batman Bot {VERSION} starting — @{BOT_USERNAME}")
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False,
