@@ -146,7 +146,7 @@ def get_referral_link(user_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
 
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
-    ud = get_user_data(user.id, context)
+    ud       = get_user_data(user.id, context)
     raw_plan = ud.get("plan", "TRIAL").upper()
     expires  = ud.get("expires", 0)
     now      = time.time()
@@ -159,7 +159,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     plan_icon  = get_plan_icon(raw_plan)
 
     lines = [
-        f"[ 𖥷 вт ] Batman Card Checker",
+        f"[ 𖥷iТ ] Batman Card Checker",
         f"━━━━━━━━━━━━━━━━━",
         f"Uꜱᴇʀ    ➺ {uname} {plan_icon}".rstrip(),
         f"ID      ➺ <code>{user.id}</code>",
@@ -248,7 +248,7 @@ def build_check_result(
     uname_display = f"{username} {plan_icon} ({plan_label})".strip()
 
     lines = [
-        f"[ 𖥷 вт ] ➺ {status}",
+        f"[ 𖥷iТ ] ➺ {status}",
         f"🔍 ➺ <code>{card_raw}</code>",
         f"Gᴀᴛᴇ ➺ {gate_name} 💳",
         f"Rᴀᴡ  ➺ {raw_response}",
@@ -395,11 +395,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     premium = is_user_premium(ud)
     _update_user_meta(ud, user)
 
-    # Force subscribe check
     not_joined = await check_force_sub(user.id, context)
     if not_joined:
         await update.message.reply_text(
-            "[ 𖥷 вт ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+            "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
             "━━━━━━━━━━━━━━━━━\n"
             "Join our channels to use the bot:\n"
             "━━━━━━━━━━━━━━━━━",
@@ -414,7 +413,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             "mpp2": "PayPal Mass (/mpp2)",
         }.get(gate_key, gate_key.upper())
         await update.message.reply_text(
-            f"[ 𖥷 вт ] ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ\n"
+            f"[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"Gᴀᴛᴇ ➺ {gate_label}\n\n"
             f"Fʀᴇᴇ Gᴀᴛᴇꜱ:\n"
@@ -447,7 +446,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         credits = ud.get("credits", 0)
         if credits <= 0:
             await update.message.reply_text(
-                "[ 𖥷 вт ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ\n"
+                "[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ\n"
                 "━━━━━━━━━━━━━━━━━\n"
                 "Buy a plan: /plan\n"
                 "Refer friends for free credits: /refer",
@@ -465,7 +464,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             f"Gate API not set. Owner: /seturl {gate_key} &lt;url&gt;", parse_mode="HTML")
         return
 
-    msg        = await update.message.reply_text("[ 𖥷 вт ] ➺ Sᴄᴀɴɴɪɴɢ...")
+    msg        = await update.message.reply_text("[ 𖥷iТ ] ➺ Sᴄᴀɴɴɪɴɢ...")
     start_time = time.time()
 
     uname = f"@{user.username}" if user.username else user.first_name or "User"
@@ -572,7 +571,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     styled       = get_styled_plan(plan)
 
     txt = (
-        f"[ 𖥷 вт ] ➺ Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ\n"
+        f"[ 𖥷iТ ] ➺ Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Uꜱᴇʀ     ➺ {display_name}\n"
         f"Aᴄᴄᴇꜱꜱ  ➺ {styled} 👑\n"
@@ -669,7 +668,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     not_joined = await check_force_sub(user.id, context)
     if not_joined:
         await update.message.reply_text(
-            "[ 𖥷 вт ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+            "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
             "━━━━━━━━━━━━━━━━━\n"
             "Join our channels to use the bot:\n"
             "━━━━━━━━━━━━━━━━━",
@@ -686,12 +685,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t   = time.time()
-    msg = await update.message.reply_text("[ 𖥷 вт ] ➺ Pɪɴɢɪɴɢ...")
-    await msg.edit_text(f"[ 𖥷 вт ] ➺ Pᴏɴɢ | {int((time.time() - t) * 1000)}ms")
+    msg = await update.message.reply_text("[ 𖥷iТ ] ➺ Pɪɴɢɪɴɢ...")
+    await msg.edit_text(f"[ 𖥷iТ ] ➺ Pᴏɴɢ | {int((time.time() - t) * 1000)}ms")
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (
-        "[ 𖥷 вт ] Batman Premium Plans\n"
+        "[ 𖥷iТ ] Batman Premium Plans\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         "Aᴄᴄᴇꜱꜱ  ➺ Cᴏʀᴇ\nDᴀʏꜱ     ➺ 7\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 10$\n"
         "━━━━━━━━━━━━━━━━━\n"
@@ -708,7 +707,7 @@ async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link       = get_referral_link(user.id)
     total_refs = ud.get("total_refs", 0)
     txt = (
-        f"[ 𖥷 вт ] Rᴇꜰᴇʀʀᴀʟ\n"
+        f"[ 𖥷iТ ] Rᴇꜰᴇʀʀᴀʟ\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Lɪɴᴋ    ➺ <code>{link}</code>\n"
         f"━━━━━━━━━━━━━━━━━\n"
@@ -753,14 +752,14 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bin_num or not bin_num.isdigit() or len(bin_num) < 6:
         await update.message.reply_text("Uꜱᴀɢᴇ: <code>/bin 411111</code>", parse_mode="HTML")
         return
-    msg = await update.message.reply_text("[ 𖥷 вт ] ➺ Lᴏᴏᴋɪɴɢ ᴜᴘ...")
+    msg = await update.message.reply_text("[ 𖥷iТ ] ➺ Lᴏᴏᴋɪɴɢ ᴜᴘ...")
     try:
         bd = await get_bin_info(bin_num)
         if bd.get("error"):
             await msg.edit_text("BIN not found.")
             return
         txt = (
-            f"[ 𖥷 вт ] ➺ BIN Lookup\n"
+            f"[ 𖥷iТ ] ➺ BIN Lookup\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"BIN     ➺ <code>{bin_num}</code>\n"
             f"Scheme  ➺ {str(bd.get('scheme', 'N/A')).upper()}\n"
@@ -843,7 +842,7 @@ async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     owner_caption = (
-        f"[ 𖥷 вт ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ\n"
+        f"[ 𖥷iТ ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Uꜱᴇʀ ➺ {uname}\n"
         f"ID   ➺ {user.id}\n"
@@ -909,7 +908,7 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     try:
         await query.message.edit_caption(
             caption=(
-                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ\n"
+                f"[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ\n"
                 f"━━━━━━━━━━━━━━━━━\n"
                 f"Uꜱᴇʀ   ➺ {uname}\n"
                 f"ID     ➺ {uid}\n"
@@ -925,7 +924,7 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
         await context.bot.send_message(
             chat_id=uid,
             text=(
-                "[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ ✅\n"
+                "[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ ✅\n"
                 "━━━━━━━━━━━━━━━━━\n"
                 "Your feedback has been posted to the channel!\n"
                 f"📢 {CHANNEL_LINK}\n"
@@ -948,7 +947,7 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     try:
         await query.message.edit_caption(
             caption=(
-                f"[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ\n"
+                f"[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ\n"
                 f"━━━━━━━━━━━━━━━━━\n"
                 f"Uꜱᴇʀ   ➺ {uname}\n"
                 f"ID     ➺ {uid}\n"
@@ -964,7 +963,7 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
         await context.bot.send_message(
             chat_id=uid,
             text=(
-                "[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌\n"
+                "[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌\n"
                 "━━━━━━━━━━━━━━━━━\n"
                 "Your feedback was not approved this time.\n"
                 "━━━━━━━━━━━━━━━━━"
@@ -1006,8 +1005,10 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for uid_str, ud in context.bot_data.get("user_data", {}).items():
                     stored = ud.get("username", "").lower().lstrip("@")
                     if stored and stored == raw_lower:
-                        target_id = int(uid_str); target_name = ud.get("name", "N/A")
-                        target_username = ud.get("username"); target_lang = ud.get("language_code", "N/A")
+                        target_id       = int(uid_str)
+                        target_name     = ud.get("name", "N/A")
+                        target_username = ud.get("username")
+                        target_lang     = ud.get("language_code", "N/A")
                         break
 
     if not target_id:
@@ -1045,7 +1046,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     approval_rate   = f"{(approved_checks / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
 
     txt = (
-        f"[ 𖥷 вт ] Uꜱᴇʀ Iɴꜰᴏ\n"
+        f"[ 𖥷iТ ] Uꜱᴇʀ Iɴꜰᴏ\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"Nᴀᴍᴇ       ➺ {full_name}\n"
         f"Uꜱᴇʀɴᴀᴍᴇ  ➺ {uname_d}\n"
@@ -1128,7 +1129,9 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_id     = query.lstrip("-").isdigit()
     for uid_str, ud in all_users.items():
         if is_id:
-            if uid_str == query: matches.append((uid_str, ud)); break
+            if uid_str == query:
+                matches.append((uid_str, ud))
+                break
         else:
             if ql in ud.get("username", "").lower().lstrip("@") or ql in ud.get("name", "").lower():
                 matches.append((uid_str, ud))
@@ -1142,20 +1145,22 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rp = ud.get("plan", "TRIAL").upper()
         ex = ud.get("expires", 0)
         if rp != "TRIAL" and ex <= now: rp = "TRIAL"
-        prem = rp != "TRIAL" and ex > now
-        tl   = f"{int((ex-now)//86400)}d {int(((ex-now)%86400)//3600)}h" if prem and ex > now else "—"
+        prem    = rp != "TRIAL" and ex > now
+        tl      = f"{int((ex - now) // 86400)}d {int(((ex - now) % 86400) // 3600)}h" if prem and ex > now else "—"
+        uname_l = f"@{ud['username']}" if ud.get("username") else "—"
         blocks.append(
-            f"Nᴀᴍᴇ   ➺ {ud.get('name','Unknown')}\n"
-            f"Uꜱᴇʀ   ➺ @{ud['username']}" if ud.get("username") else f"Uꜱᴇʀ   ➺ —\n"
+            f"Nᴀᴍᴇ   ➺ {ud.get('name', 'Unknown')}\n"
+            f"Uꜱᴇʀ   ➺ {uname_l}\n"
             f"ID     ➺ <code>{uid_str}</code>\n"
             f"Pʟᴀɴ   ➺ {get_styled_plan(rp)} {'✅' if prem else '⬜'}\n"
             f"Lᴇꜰᴛ   ➺ {tl}\n"
-            f"Cʜᴇᴄᴋꜱ ➺ {ud.get('total_checks',0)}\n"
+            f"Cʜᴇᴄᴋꜱ ➺ {ud.get('total_checks', 0)}\n"
         )
     footer = ("" if len(matches) <= MAX_R else f"(showing {MAX_R} of {len(matches)})\n") + "━━━━━━━━━━━━━━━━━"
     txt    = header + ("\n━━━━━━━━━━━━━━━━━\n").join(blocks) + "\n" + footer
     if len(txt) > MAX_MSG:
-        for i in range(0, len(txt), MAX_MSG): await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
+        for i in range(0, len(txt), MAX_MSG):
+            await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
     else:
         await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -1264,7 +1269,7 @@ async def cmd_addcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.send_message(chat_id=uid, text=(
-            f"[ 𖥷 вт ] ➺ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n━━━━━━━━━━━━━━━━━\n"
+            f"[ 𖥷iТ ] ➺ Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ\n━━━━━━━━━━━━━━━━━\n"
             f"Aᴅᴅᴇᴅ   ➺ +{amt}\nBᴀʟᴀɴᴄᴇ ➺ {ud['credits']}\n━━━━━━━━━━━━━━━━━"
         ))
     except Exception:
@@ -1303,18 +1308,19 @@ async def cmd_allplans(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      if d.get("plan", "TRIAL").upper() != "TRIAL" and d.get("expires", 0) > now]
     if not premium_users:
         await update.message.reply_text("No active premium users."); return
-    txt = f"[ 𖥷 вт ] Live Premium ➺ {len(premium_users)} Users\n━━━━━━━━━━━━━━━━━\n\n"
+    txt = f"[ 𖥷iТ ] Live Premium ➺ {len(premium_users)} Users\n━━━━━━━━━━━━━━━━━\n\n"
     for uid_str, ud in premium_users:
         rem = ud["expires"] - now
         txt += (
-            f"Nᴀᴍᴇ ➺ {ud.get('name','Unknown')}\n"
+            f"Nᴀᴍᴇ ➺ {ud.get('name', 'Unknown')}\n"
             f"ID   ➺ <code>{uid_str}</code>\n"
             f"Pʟᴀɴ ➺ {get_styled_plan(ud['plan'])}\n"
-            f"Lᴇꜰᴛ ➺ {int(rem//86400)}d {int((rem%86400)//3600)}h\n"
+            f"Lᴇꜰᴛ ➺ {int(rem // 86400)}d {int((rem % 86400) // 3600)}h\n"
             f"━━━━━━━━━━━━━━━━━\n"
         )
     if len(txt) > MAX_MSG:
-        for i in range(0, len(txt), MAX_MSG): await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
+        for i in range(0, len(txt), MAX_MSG):
+            await update.message.reply_text(txt[i:i+MAX_MSG], parse_mode="HTML")
     else:
         await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -1331,7 +1337,7 @@ async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_geturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    lines = ["[ 𖥷 вт ] Gate URLs\n━━━━━━━━━━━━━━━━━"]
+    lines = ["[ 𖥷iТ ] Gate URLs\n━━━━━━━━━━━━━━━━━"]
     for gate in GATE_URLS:
         url = context.bot_data.get(f"gate_url_{gate}") or GATE_URLS.get(gate) or "NOT SET"
         lines.append(f"{gate.upper()} ➺ <code>{url}</code>")
@@ -1349,7 +1355,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent = 0; failed = 0; blocked = 0
 
     broadcast_text = (
-        f"[ 𖥷 вт ] Batman Announcement\n━━━━━━━━━━━━━━━━━\n"
+        f"[ 𖥷iТ ] Batman Announcement\n━━━━━━━━━━━━━━━━━\n"
         f"{text}\n━━━━━━━━━━━━━━━━━\n"
         f"Pʀᴏ ➺ <a href='{BOT_LINK}'>Batman Card Checker</a>"
     )
@@ -1376,7 +1382,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(0.05)
 
     await status_msg.edit_text(
-        f"[ 𖥷 вт ] Bʀᴏᴀᴅᴄᴀꜱᴛ\n━━━━━━━━━━━━━━━━━\n"
+        f"[ 𖥷iТ ] Bʀᴏᴀᴅᴄᴀꜱᴛ\n━━━━━━━━━━━━━━━━━\n"
         f"Cʜᴀɴɴᴇʟ ➺ {'✅' if chan_ok else '❌'}\n━━━━━━━━━━━━━━━━━\n"
         f"Sᴇɴᴛ    ➺ {sent}\nBʟᴏᴄᴋᴇᴅ ➺ {blocked}\nFᴀɪʟᴇᴅ  ➺ {failed}\n━━━━━━━━━━━━━━━━━"
     )
@@ -1463,7 +1469,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "mgates":
         await edit(
-            "[ 𖥷 вт ] Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ\n━━━━━━━━━━━━━━━━━\n"
+            "[ 𖥷iТ ] Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ\n━━━━━━━━━━━━━━━━━\n"
             "Aᴜᴛʜ Gᴀᴛᴇꜱ   ➺ 1  (Free)\n"
             "Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ ➺ 4  (Free)\n"
             "Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ ➺ 3  (Premium)\n━━━━━━━━━━━━━━━━━",
@@ -1471,7 +1477,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "mprice":
         await edit(
-            "[ 𖥷 вт ] Batman Premium Plans\n━━━━━━━━━━━━━━━━━\n\n"
+            "[ 𖥷iТ ] Batman Premium Plans\n━━━━━━━━━━━━━━━━━\n\n"
             "Aᴄᴄᴇꜱꜱ  ➺ Cᴏʀᴇ\nDᴀʏꜱ     ➺ 7\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
             "Aᴄᴄᴇꜱꜱ  ➺ Eʟɪᴛᴇ\nDᴀʏꜱ     ➺ 15\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
             "Aᴄᴄᴇꜱꜱ  ➺ Rᴏᴏᴛ\nDᴀʏꜱ     ➺ 30\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\nPʀɪᴄᴇ   ➺ 30$\n━━━━━━━━━━━━━━━━━",
@@ -1479,12 +1485,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "mauth":
         await edit(
-            "[ 𖥷 вт ] Auth Gates (Free)\n━━━━━━━━━━━━━━━━━\n\nBʀᴀɪɴᴛʀᴇᴇ Aᴜᴛʜ ➺ /b3\n━━━━━━━━━━━━━━━━━",
+            "[ 𖥷iТ ] Auth Gates (Free)\n━━━━━━━━━━━━━━━━━\n\nBʀᴀɪɴᴛʀᴇᴇ Aᴜᴛʜ ➺ /b3\n━━━━━━━━━━━━━━━━━",
             kb_auth_gates())
 
     elif data == "mcharge":
         await edit(
-            "[ 𖥷 вт ] Charge Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
+            "[ 𖥷iТ ] Charge Gates (Free)\n━━━━━━━━━━━━━━━━━\n\n"
             "Sᴛʀɪᴘᴇ  ➺ /chk\nPᴀʏPᴀʟ  ➺ /pp\nSʜᴏᴘɪꜰʏ ➺ /sh\nPᴀʏU    ➺ /pyu\n━━━━━━━━━━━━━━━━━",
             kb_charge_gates())
 
@@ -1493,11 +1499,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await query.answer("Premium Gates require a premium plan!", show_alert=True)
             except Exception: pass
             await edit(
-                "[ 𖥷 вт ] Premium Gates\n━━━━━━━━━━━━━━━━━\n\n"
+                "[ 𖥷iТ ] Premium Gates\n━━━━━━━━━━━━━━━━━\n\n"
                 "Upgrade: /plan", kb_upgrade())
             return
         await edit(
-            "[ 𖥷 вт ] Premium Gates 👑\n━━━━━━━━━━━━━━━━━\n\n"
+            "[ 𖥷iТ ] Premium Gates 👑\n━━━━━━━━━━━━━━━━━\n\n"
             "Sᴛʀɪᴘᴇ Aᴜᴛʜ ➺ /au\nSᴛʀɪᴘᴇ Mᴀꜱꜱ ➺ /mss\nPᴀʏPᴀʟ Mᴀꜱꜱ ➺ /mpp2\n━━━━━━━━━━━━━━━━━",
             kb_premium_gates())
 
@@ -1505,7 +1511,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link       = get_referral_link(user.id)
         total_refs = ud.get("total_refs", 0)
         await edit(
-            f"[ 𖥷 вт ] Rᴇꜰᴇʀʀᴀʟ\n━━━━━━━━━━━━━━━━━\n"
+            f"[ 𖥷iТ ] Rᴇꜰᴇʀʀᴀʟ\n━━━━━━━━━━━━━━━━━\n"
             f"Lɪɴᴋ    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n"
             f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs}\nEᴀʀɴᴇᴅ ➺ {total_refs * REFERRAL_CREDITS} credits\n"
             f"Pᴇʀ Rᴇꜰ ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━\nShare your link!",
@@ -1540,7 +1546,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data in ("pay10", "pay15", "pay30"):
         await edit(
-            "[ 𖥷 вт ] Payment\n━━━━━━━━━━━━━━━━━\n\n"
+            "[ 𖥷iТ ] Payment\n━━━━━━━━━━━━━━━━━\n\n"
             "To purchase a premium plan, contact support.\n\n━━━━━━━━━━━━━━━━━",
             kb_payment())
 
