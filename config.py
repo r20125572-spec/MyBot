@@ -2,10 +2,6 @@ import os
 import aiohttp
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BOT CONFIGURATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "0"))
 
@@ -57,16 +53,13 @@ FORCE_CHANNELS = [
     ("batcardchkGroup", GROUP_LINK),
 ]
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BIN LOOKUP
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def get_bin_info(bin_num: str) -> dict:
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=8)
         ) as s:
             async with s.get(
-                f"https://lookup.binlist.net/{bin_num}",
+                "https://lookup.binlist.net/" + bin_num,
                 headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
             ) as r:
                 if r.status != 200:
@@ -90,11 +83,8 @@ async def get_bin_info(bin_num: str) -> dict:
     except Exception:
         return {"error": True}
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SHARED KEYBOARD
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_result() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🦇 CARD X CHK ➺", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman ➺", url=DEV_LINK)],
+        [InlineKeyboardButton("\U0001F987 CARD X CHK \u279a", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("\U0001F5E1\uFE0F DEV \u279a Batman \u279a", url=DEV_LINK)],
     ])
