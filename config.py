@@ -6,7 +6,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # BOT CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# ★★★ FIX: Use env var if set, otherwise fallback to hardcoded token ★★★
+# ★ FIX: Fallback to hardcoded token if env var is missing
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8813507423:AAFWkdkk8Je4kB93AB5fu6qQ0-8eo-jlRKE")
 OWNER_ID = int(os.environ.get("OWNER_ID", "8283904645"))
 
