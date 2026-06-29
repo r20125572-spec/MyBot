@@ -6,29 +6,37 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # BOT CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8813507423:AAFWkdkk8Je4kB93AB5fu6qQ0-8eo-jlRKE")
-OWNER_ID = int(os.environ.get("OWNER_ID", "8283904645"))
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8032773834:AAEWbgMolss5toTzWd5zQe3KTUp3Zy2D5-k")
+OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
-_ch_raw = os.environ.get("CHANNEL_ID", "@Batcardchk").strip()
+_ch_raw    = os.environ.get("CHANNEL_ID", "@Batcardchk").strip()
 CHANNEL_ID = int(_ch_raw) if _ch_raw.lstrip("-").isdigit() else _ch_raw
 
-VERSION = "V4.2"
+VERSION  = "V4.3"
 DEV_LINK = "https://t.me/Batmancardchk"
 
 CHANNEL_USERNAME = "@Batcardchk"
-GROUP_USERNAME = "@batcardchkGroup"
-CHANNEL_LINK = "https://t.me/Batcardchk"
-GROUP_LINK = "https://t.me/batcardchkGroup"
-SUPPORT_LINK = "https://t.me/cardchkSupport"
+GROUP_USERNAME   = "@batcardchkGroup"
+CHANNEL_LINK     = "https://t.me/Batcardchk"
+GROUP_LINK       = "https://t.me/batcardchkGroup"
+SUPPORT_LINK     = "https://t.me/cardchkSupport"
 
-BOT_USERNAME = "cardchk_bot"
-BOT_LINK = "https://t.me/cardchk_bot"
+BOT_USERNAME  = "Batmanchk_bot"
+BOT_LINK      = "https://t.me/Batmanchk_bot"
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
-BOT_PHOTO = "batman.jpg"
+BOT_PHOTO     = "batman.jpg"
 
-API_TIMEOUT = 120
+API_TIMEOUT      = 120
 REFERRAL_CREDITS = 150
-LOCK_FILE = "/tmp/batman_bot.lock"
+LOCK_FILE        = "/tmp/batman_bot.lock"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FORCE JOIN — channel & group (users MUST join both)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FORCE_CHANNELS = [
+    ("Batcardchk",      CHANNEL_LINK),
+    ("batcardchkGroup", GROUP_LINK),
+]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GATES CONFIGURATION
@@ -57,11 +65,6 @@ GATE_SITES = {
 
 PREMIUM_GATES = {"au", "mss", "mpp2"}
 
-FORCE_CHANNELS = [
-    ("Batcardchk",     CHANNEL_LINK),
-    ("batcardchkGroup", GROUP_LINK),
-]
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -74,7 +77,7 @@ async def get_bin_info(bin_num: str) -> dict:
             ) as r:
                 if r.status != 200:
                     return {"error": True}
-                data = await r.json(content_type=None)
+                data    = await r.json(content_type=None)
                 country = data.get("country") or {}
                 bank    = data.get("bank") or {}
                 alpha2  = (country.get("alpha2") or "").upper()
@@ -83,23 +86,23 @@ async def get_bin_info(bin_num: str) -> dict:
                     if len(alpha2) == 2 else ""
                 )
                 return {
-                    "scheme":         data.get("scheme", "N/A"),
-                    "type":           data.get("type",   "N/A"),
-                    "bank":           bank.get("name",   "N/A"),
-                    "country":        country.get("name", "N/A"),
-                    "country_emoji":  emoji,
-                    "error":          False,
+                    "scheme":        data.get("scheme", "N/A"),
+                    "type":          data.get("type",   "N/A"),
+                    "bank":          bank.get("name",   "N/A"),
+                    "country":       country.get("name", "N/A"),
+                    "country_emoji": emoji,
+                    "error":         False,
                 }
     except Exception:
         return {"error": True}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SHARED KEYBOARD
+# SHARED RESULT KEYBOARD
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_result() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Channel", url=CHANNEL_LINK),
-         InlineKeyboardButton("💬 Support", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🦇 CARD X CHK ➺", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman ➺", url=DEV_LINK)],
+        [InlineKeyboardButton("🔗 Channel",          url=CHANNEL_LINK),
+         InlineKeyboardButton("💬 Support",          url=SUPPORT_LINK)],
+        [InlineKeyboardButton("🦇 CARD X CHK ➺",    url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🗡️ DEV ➺ Batman ➺",  url=DEV_LINK)],
     ])
