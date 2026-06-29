@@ -5,8 +5,10 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BOT CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+
+# ★★★ FIX: Use env var if set, otherwise fallback to hardcoded token ★★★
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8813507423:AAFWkdkk8Je4kB93AB5fu6qQ0-8eo-jlRKE")
+OWNER_ID = int(os.environ.get("OWNER_ID", "8283904645"))
 
 _ch_raw = os.environ.get("CHANNEL_ID", "@Batcardchk").strip()
 CHANNEL_ID = int(_ch_raw) if _ch_raw.lstrip("-").isdigit() else _ch_raw
