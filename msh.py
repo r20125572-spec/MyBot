@@ -552,4 +552,4 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         timeout=aiohttp.ClientTimeout(total=PP_TIMEOUT), 
         connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
     ) as session:
-        tasks = [check_single_pp_card(session, c, semaphore) for c
+        tasks
