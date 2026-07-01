@@ -197,7 +197,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
         return
 
-    # ── Extract cards from text, reply, or file ──
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
@@ -259,8 +258,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s = str(bin_data.get("scheme", "N/A")).upper()
         t = str(bin_data.get("type", "N/A")).upper()
         b = bin_data.get("bank", "N/A")
-        country = str(bin_data.get("country", "N/A")).upper()
-        flag = bin_data.get("country_emoji", "")
         bin_txt = f"{s} - {t} - {b}"
 
     lines = [
@@ -350,7 +347,6 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
         return
 
-    # ── Extract cards from text, reply, or file ──
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
@@ -511,7 +507,6 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
         return
 
-    # ── Extract cards from text, reply, or file ──
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
@@ -552,4 +547,12 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         timeout=aiohttp.ClientTimeout(total=PP_TIMEOUT), 
         connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
     ) as session:
-        tasks
+        tasks = [check_single_pp_card(session, c, semaphore) for c in cards]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    try: 
+        bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
+    except Exception: 
+        bin_data = {"error": True}
+
+    parsed = [r if not isinstance(r, Exception) else {"card
