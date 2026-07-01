@@ -555,4 +555,4 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: 
         bin_data = {"error": True}
 
-    parsed = [r if not isinstance(r, Exception) else {"card
+    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false
