@@ -63,11 +63,16 @@ SITES = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_cards(text: str) -> list:
     cards = []
-    parts = text.replace("|", "\n").replace(";", "\n").split("\n")
+    # Support multiple separators: |, ;, newline, comma, space
+    text = text.replace("|", "\n").replace(";", "\n").replace(",", "\n")
+    parts = text.split("\n")
     for p in parts:
         c = p.strip()
         if c and len(c) >= 13:
-            cards.append(c)
+            # Clean up the card - remove spaces and special chars
+            c = re.sub(r'\s+', '', c)
+            if len(c) >= 13:
+                cards.append(c)
     return cards
 
 
@@ -75,24 +80,48 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
     """Download a text file from Telegram and return its content as string."""
     try:
         file = await bot.get_file(file_id)
-        return file.decode("utf-8", errors="ignore")
-    except Exception:
+        # Download as bytes
+        content = await file.download_as_bytearray()
+        if content:
+            try:
+                # Try UTF-8 first
+                return content.decode("utf-8", errors="ignore")
+            except:
+                try:
+                    # Try latin-1
+                    return content.decode("latin-1", errors="ignore")
+                except:
+                    return content.decode("utf-8", errors="ignore")
+        return None
+    except Exception as e:
+        print(f"Download error: {e}")
         return None
 
 
 async def extract_cards_from_update(update: Update, bot) -> list | None:
     """
     Extract cards from multiple input methods:
-    1. Reply to a text message containing cards
-    2. Reply to a file document containing cards (.txt)
-    3. Send a file directly as document (with /msh as caption)
-    4. Direct text after command: /msh cc|mm|yy|cvv
-    
-    Returns None if no valid cards found.
+    1. Direct text after command: /msh cc|mm|yy|cvv
+    2. Reply to a text message containing cards
+    3. Reply to a file document containing cards (.txt)
+    4. Send a file directly as document (with command as caption)
     """
     msg = update.message
-
-    # ── Method 1: Reply to message (text or file) ──
+    
+    # ── Method 1: Direct text after command ──
+    if msg.text and msg.text.strip():
+        text = msg.text
+        # If it's a command, extract args
+        if text.startswith('/'):
+            # Remove the command (e.g., "/msh" or "/mchk@bot")
+            parts = text.split(maxsplit=1)
+            if len(parts) > 1 and parts[1].strip():
+                return parse_cards(parts[1])
+        else:
+            # Plain text with cards
+            return parse_cards(text)
+    
+    # ── Method 2: Reply to message (text or file) ──
     if msg.reply_to_message:
         replied = msg.reply_to_message
 
@@ -102,27 +131,31 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
 
         # Reply to file document
         if replied.document and replied.document.file_id:
-            text = await _download_file_cards(bot, replied.document.file_id)
-            if text:
-                return parse_cards(text)
+            content = await _download_file_cards(bot, replied.document.file_id)
+            if content:
+                return parse_cards(content)
 
-    # ── Method 2: Direct file sent (user sent file, /msh is caption) ──
+    # ── Method 3: Direct file sent (user sent file with command as caption) ──
     if msg.document and msg.document.file_id:
-        text = await _download_file_cards(bot, msg.document.file_id)
-        if text:
-            return parse_cards(text)
-
-    # ── Method 3: Direct text after command ──
-    if msg.text and msg.text.strip():
-        # Remove command from text
-        text = msg.text
-        # If it's a command, extract args
-        if text.startswith('/'):
-            parts = text.split(maxsplit=1)
-            if len(parts) > 1:
-                return parse_cards(parts[1])
-        else:
-            return parse_cards(text)
+        # Check if caption contains the command (or any text)
+        if msg.caption:
+            # If caption has command, extract cards from caption
+            if msg.caption.startswith('/'):
+                parts = msg.caption.split(maxsplit=1)
+                if len(parts) > 1 and parts[1].strip():
+                    cards = parse_cards(parts[1])
+                    if cards:
+                        return cards
+            # If caption is plain text with cards
+            else:
+                cards = parse_cards(msg.caption)
+                if cards:
+                    return cards
+        
+        # If no cards found in caption, read from file
+        content = await _download_file_cards(bot, msg.document.file_id)
+        if content:
+            return parse_cards(content)
 
     return None
 
@@ -200,32 +233,32 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇɴᴅ ᴡɪᴴʟᴇ ᴡᴏʟ ᴡᴏʟꜰ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰꜱᴇ ᴀ ꜰᴇɪᴄᴇ ᴡɪꜱꜱ\n\n"
-            "• Sᴇɴᴅ ᴛɪʟᴇ ᴀꜱ ꜱᴇ ᴀꜱᴇ ᴀꜱᴇ ᴡɪꜱꜱ\n"
-            "• Rᴇᴘʟʏ ᴛᴏ ᴛᴏꜱ ᴛᴏꜱ ᴡᴏʟꜰ, ᴛᴏᴛᴏꜱ /msh ᴀꜱ ᴀꜱ ꜱ ᴛᴏᴡᴏꜰ\n"
-            "• Oʀ ᴜᴇᴄᴇᴇ ᴄᴀʀᴅꜱ ᴡᴏʟꜰ ᴡᴇᴏᴅ ᴛᴏꜱ\n\n"
-            "Fᴏʀᴍᴀᴛ: <code>/msh cc|mm|yy|cvv</code>",
+            f"⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ, ᴏʀ ᴜꜱᴇ:\n\n"
+            "• <code>/msh cc|mm|yy|cvv</code>\n"
+            "• Reply to a .txt file with /msh\n"
+            "• Send a .txt file with /msh as caption\n\n"
+            f"Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ.",
             parse_mode="HTML",
         )
         return
 
     if len(cards) > MAX_CARDS:
-        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀ ʀᴜɴ. Yᴏᴜꜱ ꜱᴇ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML")
+        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ. Yᴏᴜ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML")
         return
 
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
         await update.message.reply_text(
-            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
+            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
             parse_mode="HTML"
         )
         return
 
     rotator = ProxyRotator(PROXIES)
     sites = SITES if SITES else ["https://powerbuild.store"]
-    proxy_info = f"Pʀᴏxɪᴇꜱꜱ ➺ {rotator.count()}" + (" (Nᴏɴᴇ)" if not PROXIES else "")
+    proxy_info = f"Pʀᴏxɪᴇꜱ ➺ {rotator.count()}" + (" (Nᴏɴᴇ)" if not PROXIES else "")
     msg = await update.message.reply_text(
-        f"🦇 {SH_GATE_NAME}\n━━━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", 
+        f"🦇 {SH_GATE_NAME}\n━━━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -261,20 +294,20 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bin_txt = f"{s} - {t} - {b}"
 
     lines = [
-        f"🦇 {SH_GATE_NAME} ➛ Cᴏᴍᴘᴘʟᴇᴛᴇᴅ", "━━━━━━━━━━━━━━━━━━━━",
-        f"📊 Tᴏᴛᴛᴀʟ ➺ {len(parsed)}", f"✅ Aᴘᴘʀᴏᴠᴏᴠᴇᴅ ➺ {len(approved_list)}",
-        f"❌ Dᴇᴄʟɪɴᴇᴅᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱꜱꜱ ➺ {len(error_list)}",
+        f"🦇 {SH_GATE_NAME} ➛ Cᴏᴍᴘʟᴇᴛᴇᴅ", "━━━━━━━━━━━━━━━━━━━━",
+        f"📊 Tᴏᴛᴀʟ ➺ {len(parsed)}", f"✅ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)}",
+        f"❌ Dᴇᴄʟɪɴᴇᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
+        f"⚠️ Eʀʀᴏʀꜱ ➺ {len(error_list)}",
         f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s", "━━━━━━━━━━━━━━━━━━",
     ]
 
     approved_lines = []
     if approved_list:
-        approved_lines.append(f"\n✅ Aᴘᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
+        approved_lines.append(f"\n✅ Aᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
         approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
         for i, r in enumerate(approved_list, 1):
             masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴄᴇ ➺ ${r['price']}\n     Rᴇꜱꜱᴘ ➺ {r['response'][:50]}")
+            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
 
     footer_lines = [f"\n━━━━━━━━━━━━━━━━", f"🏦 Bɪɴ ➺ {bin_txt}", "━━━━━━━━━━━━━━━━", f"🦇 Uꜱᴇʀ ➺ {u}"]
     full_text = "\n".join(lines + approved_lines + footer_lines)
@@ -287,7 +320,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         try: 
             await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
+                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱᴜʟᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
                 parse_mode="HTML", 
                 reply_markup=kb_result(), 
                 disable_web_page_preview=True
@@ -300,7 +333,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chunk_lines.append("━━━━━━━━━━━━━━━━━━")
             for j, r in enumerate(chunk, i+1):
                 masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
+                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
             try: 
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id, 
@@ -350,18 +383,18 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇꜱꜱ ᴡᴏꜱꜱ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰᴇɪᴄᴇ ᴀ ꜱᴇꜱᴢ with cards\n\n"
-            "• Sᴇɴᴅ ᴛɪʟᴇ ᴀ ꜱᴇ ᴀ ꜱᴇ ᴀꜱᴇ as document\n"
-            "• Rᴇᴘʟʏ ᴛᴏᴛᴏꜱ with /msh as caption\n\n"
-            "• Oꜱ ᴇᴄᴇᴛ ᴄᴀʀᴅꜱ ᴡᴏꜱ ꜱ\n\n"
-            "Fᴏʀᴍᴀᴍ: <code>/mchk cc|mm|yy|cvv</code>",
+            f"⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ, ᴏʀ ᴜꜱᴇ:\n\n"
+            "• <code>/mchk cc|mm|yy|cvv</code>\n"
+            "• Reply to a .txt file with /mchk\n"
+            "• Send a .txt file with /mchk as caption\n\n"
+            f"Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ.",
             parse_mode="HTML",
         )
         return
 
     if len(cards) > MAX_CARDS:
         await update.message.reply_text(
-            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜ ꜱᴇ ꜱᴇ: {len(cards)}", 
+            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ. Yᴏᴜ ꜱᴇɴᴛ: {len(cards)}", 
             parse_mode="HTML"
         )
         return
@@ -369,13 +402,13 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
         await update.message.reply_text(
-            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
+            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
             parse_mode="HTML"
         )
         return
 
     msg = await update.message.reply_text(
-        f"🦇 STRIPE MASS 0$ 💳 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱ...", 
+        f"🦇 STRIPE MASS 0$ 💳 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -410,11 +443,11 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bin_txt = f"{s} - {b} - {flag} {country}"
 
     lines = [
-        "🦇 STRIPE MASS 0$ 💳 🟢 ➛ Cᴏᴍᴘᴘᴛᴇᴅ",
+        "🦇 STRIPE MASS 0$ 💳 🟢 ➛ Cᴏᴍᴘʟᴇᴛᴇᴅ",
         "━━━━━━━━━━━━━━━━━━━━", f"📊 Tᴏᴛᴀʟ ➺ {len(parsed)}",
         f"✅ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)}",
         f"❌ Dᴇᴄʟɪɴᴇᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱꜱꜱ ➺ {len(error_list)}",
+        f"⚠️ Eʀʀᴏʀꜱ ➺ {len(error_list)}",
         f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s",
         "━━━━━━━━━━━━━━━━━━",
     ]
@@ -425,7 +458,7 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
         for i, r in enumerate(approved_list, 1):
             masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Rᴀᴡ ➺ {r['response'][:60]}")
+            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Rᴇꜱᴘ ➺ {r['response'][:60]}")
 
     footer_lines = [
         "\n━━━━━━━━━━━━━━━━━━", f"🏦 Iɴꜰᴏ ➺ {bin_txt}",
@@ -442,7 +475,7 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         try: 
             await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱꜱᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
+                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱᴜʟᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
                 parse_mode="HTML", 
                 reply_markup=kb_result(), 
                 disable_web_page_preview=True
@@ -457,7 +490,7 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             for j, r in enumerate(chunk, i+1):
                 masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Rᴛᴡ ➺ {r['response'][:60]}")
+                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Rᴇꜱᴘ ➺ {r['response'][:60]}")
             try: 
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id, 
@@ -510,18 +543,18 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
-            "⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇꜱꜱ ᴡᴇꜱꜱ ᴡᴏᴡꜱꜱ, ᴏʀ ʀᴇᴘʟʏ ᴀ ꜰᴇɪᴄᴇ ᴀ ꜰᴇᴢ with cards\n\n"
-            "• Sᴇɴᴅ ᴛɪʟᴇ ᴀ ꜱᴇ ᴀ ꜱᴇ ᴀꜱᴢ as document\n"
-            "• Rᴇᴘʟʏ ᴛᴏᴛᴏꜱ with /mpp as caption\n"
-            "• Oꜱᴇᴄᴇᴛ ᴄᴀʀᴅꜱ ᴡᴏᴜꜱ ꜱ\n\n"
-            "Fᴏʀᴍᴀᴍ: <code>/mpp email|pass</code>",
+            f"⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ, ᴏʀ ᴜꜱᴇ:\n\n"
+            "• <code>/mpp cc|mm|yy|cvv</code>\n"
+            "• Reply to a .txt file with /mpp\n"
+            "• Send a .txt file with /mpp as caption\n\n"
+            f"Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ.",
             parse_mode="HTML",
         )
         return
 
     if len(cards) > MAX_CARDS:
         await update.message.reply_text(
-            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴏ ᴘʀʀᴜɴ. Yᴏᴜᴜᴇ ꜱᴇ: {len(cards)}", 
+            f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ. Yᴏᴜ ꜱᴇɴᴛ: {len(cards)}", 
             parse_mode="HTML"
         )
         return
@@ -529,13 +562,13 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
         await update.message.reply_text(
-            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
+            f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", 
             parse_mode="HTML"
         )
         return
 
     msg = await update.message.reply_text(
-        f"🦇 {PP_GATE_NAME} 🛒 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱꜱꜱ...", 
+        f"🦇 {PP_GATE_NAME} 🛒 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -555,4 +588,8 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: 
         bin_data = {"error": True}
 
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false
+    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
+    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
+    error_list = [r for r in parsed if r.get("error")]
+
+    username = update.eff
