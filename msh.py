@@ -2,15 +2,16 @@ import aiohttp
 import asyncio
 import time
 import re
-from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes
+from io import BytesIO
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, ContextTypes, CallbackQueryHandler
 from config import API_TIMEOUT, get_bin_info, kb_result
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 SHARED CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MAX_CARDS = 50
-SEMAPHORE_LIMIT = 5
+MAX_CARDS = 500
+SEMAPHORE_LIMIT = 10
 
 def get_styled_plan(raw_plan: str) -> str:
     plan_upper = raw_plan.upper()
@@ -23,7 +24,7 @@ def get_styled_plan(raw_plan: str) -> str:
 # 🦇 SHOPIFY MASS CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SH_API = "https://autosh.up.railway.app/shopii"
-SH_GATE_NAME = "SHOPIFY MASS | 1$"
+SH_GATE_NAME = "Sʜᴏᴘɪғʏ"
 SH_API_TIMEOUT = 120
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -37,7 +38,7 @@ CHK_TIMEOUT = 180
 # 🦇 PAYPAL MASS CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PP_NEW_API = "https://paypal0-1.onrender.com/pp1/cc={card}"
-PP_GATE_NAME = "PAYPAL MASS | 0.10 ᴜꜱᴅ"
+PP_GATE_NAME = "PᴀʏPᴀʟ"
 PP_TIMEOUT = API_TIMEOUT
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -45,7 +46,6 @@ PP_TIMEOUT = API_TIMEOUT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PROXIES = [
     "http://purevpn0s12153504:1LTpwxbCJbEdXo@px041202.pointtoserver.com:10780",
-    "http://user:pass@ip:port",
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -53,8 +53,6 @@ PROXIES = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SITES = [
     "https://powerbuild.store",
-    "https://examplestore.com",
-    "https://anotherstore.myshopify.com",
 ]
 
 
@@ -63,15 +61,16 @@ SITES = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_cards(text: str) -> list:
     cards = []
-    # Support multiple separators: |, ;, newline, comma, space
-    text = text.replace("|", "\n").replace(";", "\n").replace(",", "\n")
+    # Support multiple separators: |, ;, newline, comma, space, tab
+    text = text.replace("|", "\n").replace(";", "\n").replace(",", "\n").replace("\t", "\n")
     parts = text.split("\n")
     for p in parts:
         c = p.strip()
-        if c and len(c) >= 13:
+        if c:
             # Clean up the card - remove spaces and special chars
             c = re.sub(r'\s+', '', c)
-            if len(c) >= 13:
+            # Check if it looks like a card (at least 13 digits)
+            if len(c) >= 13 and any(char.isdigit() for char in c):
                 cards.append(c)
     return cards
 
@@ -109,17 +108,8 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
     msg = update.message
     
     # ── Method 1: Direct text after command ──
-    if msg.text and msg.text.strip():
-        text = msg.text
-        # If it's a command, extract args
-        if text.startswith('/'):
-            # Remove the command (e.g., "/msh" or "/mchk@bot")
-            parts = text.split(maxsplit=1)
-            if len(parts) > 1 and parts[1].strip():
-                return parse_cards(parts[1])
-        else:
-            # Plain text with cards
-            return parse_cards(text)
+    if update.args:
+        return parse_cards(" ".join(update.args))
     
     # ── Method 2: Reply to message (text or file) ──
     if msg.reply_to_message:
@@ -137,25 +127,27 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
 
     # ── Method 3: Direct file sent (user sent file with command as caption) ──
     if msg.document and msg.document.file_id:
-        # Check if caption contains the command (or any text)
-        if msg.caption:
-            # If caption has command, extract cards from caption
-            if msg.caption.startswith('/'):
-                parts = msg.caption.split(maxsplit=1)
-                if len(parts) > 1 and parts[1].strip():
-                    cards = parse_cards(parts[1])
-                    if cards:
-                        return cards
-            # If caption is plain text with cards
-            else:
-                cards = parse_cards(msg.caption)
-                if cards:
-                    return cards
+        # If caption has cards, parse from caption first
+        if msg.caption and msg.caption.strip():
+            cards = parse_cards(msg.caption)
+            if cards:
+                return cards
         
         # If no cards found in caption, read from file
         content = await _download_file_cards(bot, msg.document.file_id)
         if content:
             return parse_cards(content)
+
+    # ── Method 4: Message text (if command was in message) ──
+    if msg.text and msg.text.strip():
+        text = msg.text
+        # If it's a command, extract args
+        if text.startswith('/'):
+            parts = text.split(maxsplit=1)
+            if len(parts) > 1:
+                return parse_cards(parts[1])
+        else:
+            return parse_cards(text)
 
     return None
 
@@ -196,6 +188,20 @@ def get_user_plan_ui(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
     return get_styled_plan(raw_plan)
 
 
+def create_result_buttons() -> InlineKeyboardMarkup:
+    """Create the 4 action buttons for result"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 LIVE", callback_data="result_live"),
+            InlineKeyboardButton("🔐 3DS", callback_data="result_3ds"),
+        ],
+        [
+            InlineKeyboardButton("💎 CHARGE", callback_data="result_charge"),
+            InlineKeyboardButton("📦 ALL", callback_data="result_all"),
+        ]
+    ])
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🦇 SHOPIFY MASS WORKERS & COMMAND
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -211,19 +217,34 @@ async def check_single_shopify_card(session: aiohttp.ClientSession, card: str, s
                     data = {"Response": await resp.text(), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
                 if not isinstance(data, dict): 
                     data = {"Response": str(data), "Status": "false", "Gateway": "N/A", "Price": "N/A", "CC": card}
+                
+                response_text = str(data.get("Response", "ERROR"))
+                status = str(data.get("Status", "false")).lower()
+                
+                # Determine card status
+                if status == "true" or "approved" in response_text.lower():
+                    card_status = "approved"
+                elif "3ds" in response_text.lower() or "3d secure" in response_text.lower():
+                    card_status = "3ds"
+                elif "charged" in response_text.lower() or "captured" in response_text.lower():
+                    card_status = "charged"
+                else:
+                    card_status = "dead"
+                
                 return {
                     "card": card, 
                     "gateway": data.get("Gateway", "N/A"), 
                     "price": data.get("Price", "N/A"), 
-                    "response": str(data.get("Response", "ERROR")), 
-                    "status": str(data.get("Status", "false")).lower(), 
+                    "response": response_text, 
+                    "status": status,
+                    "card_status": card_status,
                     "cc_used": data.get("CC", card), 
                     "error": None
                 }
         except asyncio.TimeoutError: 
-            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
+            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e: 
-            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
+            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
 
 async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("msh_on", True):
@@ -258,7 +279,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sites = SITES if SITES else ["https://powerbuild.store"]
     proxy_info = f"Pʀᴏxɪᴇꜱ ➺ {rotator.count()}" + (" (Nᴏɴᴇ)" if not PROXIES else "")
     msg = await update.message.reply_text(
-        f"🦇 {SH_GATE_NAME}\n━━━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
+        f"[₪] Gᴀᴛᴇ ➺ {SH_GATE_NAME} | 1$ Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -281,68 +302,45 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: 
         bin_data = {"error": True}
 
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
-    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
+    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false", "card_status": "dead"} for r in results]
+    
+    # Categorize results
+    approved_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "approved"]
+    charged_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "charged"]
+    threeds_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "3ds"]
+    dead_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "dead"]
     error_list = [r for r in parsed if r.get("error")]
 
     u = update.effective_user.username or update.effective_user.first_name or "User"
-    bin_txt = "N/A"
-    if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper()
-        t = str(bin_data.get("type", "N/A")).upper()
-        b = bin_data.get("bank", "N/A")
-        bin_txt = f"{s} - {t} - {b}"
+    
+    # Store results in context for button actions
+    context.bot_data[f"msh_results_{update.effective_user.id}"] = {
+        "parsed": parsed,
+        "approved": approved_list,
+        "charged": charged_list,
+        "threeds": threeds_list,
+        "dead": dead_list,
+        "error": error_list,
+        "gate": SH_GATE_NAME,
+        "total": len(parsed)
+    }
 
     lines = [
-        f"🦇 {SH_GATE_NAME} ➛ Cᴏᴍᴘʟᴇᴛᴇᴅ", "━━━━━━━━━━━━━━━━━━━━",
-        f"📊 Tᴏᴛᴀʟ ➺ {len(parsed)}", f"✅ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)}",
-        f"❌ Dᴇᴄʟɪɴᴇᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱ ➺ {len(error_list)}",
-        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s", "━━━━━━━━━━━━━━━━━━",
+        f"[₪] Gᴀᴛᴇ ➺ {SH_GATE_NAME} | 1$ Usd ",
+        "━━━━━━━━━━━━━━",
+        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
+        f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
+        "━━━━━━━━━━━━━━",
+        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅",
+        f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎",
+        f"3ᴅs ➺ {len(threeds_list)} 🔐",
+        f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌",
+        f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️",
+        f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
     ]
-
-    approved_lines = []
-    if approved_list:
-        approved_lines.append(f"\n✅ Aᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
-        approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
-        for i, r in enumerate(approved_list, 1):
-            masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
-
-    footer_lines = [f"\n━━━━━━━━━━━━━━━━", f"🏦 Bɪɴ ➺ {bin_txt}", "━━━━━━━━━━━━━━━━", f"🦇 Uꜱᴇʀ ➺ {u}"]
-    full_text = "\n".join(lines + approved_lines + footer_lines)
-
-    if len(full_text) <= 4000:
-        try: 
-            await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: 
-            await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
-    else:
-        try: 
-            await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱᴜʟᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
-                parse_mode="HTML", 
-                reply_markup=kb_result(), 
-                disable_web_page_preview=True
-            )
-        except Exception: 
-            pass
-        for i in range(0, len(approved_list), 15):
-            chunk = approved_list[i:i+15]
-            chunk_lines = [f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})"]
-            chunk_lines.append("━━━━━━━━━━━━━━━━━━")
-            for j, r in enumerate(chunk, i+1):
-                masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Gᴀᴛᴇᴡᴀʏ ➺ {r['gateway']}\n     Pʀɪᴄᴇ ➺ ${r['price']}\n     Rᴇꜱᴘ ➺ {r['response'][:50]}")
-            try: 
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id, 
-                    text="\n".join(chunk_lines)[:4000], 
-                    parse_mode="HTML"
-                )
-            except Exception: 
-                pass
-            await asyncio.sleep(0.3)
+    
+    full_text = "\n".join(lines)
+    await msg.edit_text(full_text, parse_mode="HTML", reply_markup=create_result_buttons())
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -363,17 +361,29 @@ async def check_single_stripe_card(session: aiohttp.ClientSession, card: str, se
                 raw_response = re.sub(r'https?://\S+', '', raw_response).strip()
                 if not raw_response: 
                     raw_response = "NO RESPONSE"
+                
+                # Determine card status
+                if "approved" in raw_response.lower():
+                    card_status = "approved"
+                elif "3ds" in raw_response.lower() or "3d secure" in raw_response.lower():
+                    card_status = "3ds"
+                elif "charged" in raw_response.lower() or "captured" in raw_response.lower():
+                    card_status = "charged"
+                else:
+                    card_status = "dead"
+                
                 return {
                     "card": card, 
                     "cc_used": card, 
                     "response": raw_response, 
-                    "status": "true" if "approved" in raw_response.lower() else "false", 
+                    "status": "true" if "approved" in raw_response.lower() else "false",
+                    "card_status": card_status,
                     "error": None
                 }
         except asyncio.TimeoutError: 
-            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
+            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e: 
-            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
+            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
 
 async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("mchk_on", True):
@@ -408,7 +418,7 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text(
-        f"🦇 STRIPE MASS 0$ 💳 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
+        f"[₪] Gᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ | 0$ Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -428,78 +438,41 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: 
         bin_data = {"error": True}
 
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
-    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
+    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false", "card_status": "dead"} for r in results]
+    
+    approved_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "approved"]
+    charged_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "charged"]
+    threeds_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "3ds"]
+    dead_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "dead"]
     error_list = [r for r in parsed if r.get("error")]
 
-    username = update.effective_user.first_name or "User"
-    plan_ui = get_user_plan_ui(context, update.effective_user.id)
-    bin_txt = "N/A"
-    if bin_data and not bin_data.get("error"):
-        s = str(bin_data.get("scheme", "N/A")).upper()
-        b = bin_data.get("bank", "N/A")
-        country = str(bin_data.get("country", "N/A")).upper()
-        flag = bin_data.get("country_emoji", "")
-        bin_txt = f"{s} - {b} - {flag} {country}"
+    context.bot_data[f"mchk_results_{update.effective_user.id}"] = {
+        "parsed": parsed,
+        "approved": approved_list,
+        "charged": charged_list,
+        "threeds": threeds_list,
+        "dead": dead_list,
+        "error": error_list,
+        "gate": "Sᴛʀɪᴘᴇ",
+        "total": len(parsed)
+    }
 
     lines = [
-        "🦇 STRIPE MASS 0$ 💳 🟢 ➛ Cᴏᴍᴘʟᴇᴛᴇᴅ",
-        "━━━━━━━━━━━━━━━━━━━━", f"📊 Tᴏᴛᴀʟ ➺ {len(parsed)}",
-        f"✅ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)}",
-        f"❌ Dᴇᴄʟɪɴᴇᴅ ➺ {len(parsed) - len(approved_list) - len(error_list)}",
-        f"⚠️ Eʀʀᴏʀꜱ ➺ {len(error_list)}",
-        f"⏱️ Tɪᴍᴇ ➺ {time.time() - start_time:.2f}s",
-        "━━━━━━━━━━━━━━━━━━",
+        f"[₪] Gᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ | 0$ Usd ",
+        "━━━━━━━━━━━━━━",
+        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
+        f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
+        "━━━━━━━━━━━━━━",
+        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅",
+        f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎",
+        f"3ᴅs ➺ {len(threeds_list)} 🔐",
+        f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌",
+        f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️",
+        f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
     ]
-
-    approved_lines = []
-    if approved_list:
-        approved_lines.append(f"\n✅ Aᴘᴘʀᴏᴠᴇᴅ ({len(approved_list)})")
-        approved_lines.append("━━━━━━━━━━━━━━━━━━━━")
-        for i, r in enumerate(approved_list, 1):
-            masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-            approved_lines.append(f"  {i}. <code>{masked}</code>\n     Rᴇꜱᴘ ➺ {r['response'][:60]}")
-
-    footer_lines = [
-        "\n━━━━━━━━━━━━━━━━━━", f"🏦 Iɴꜰᴏ ➺ {bin_txt}",
-        "━━━━━━━━━━━━━━━━━━", f"Uꜱᴇʀ ➺ {username} 👑 ({plan_ui})",
-        "Pʀᴏ ➺ Batman⚡",
-    ]
-    full_text = "\n".join(lines + approved_lines + footer_lines)
-
-    if len(full_text) <= 4000:
-        try: 
-            await msg.edit_text(full_text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
-        except Exception: 
-            await msg.edit_text(full_text[:4000], parse_mode="HTML", reply_markup=kb_result())
-    else:
-        try: 
-            await msg.edit_text(
-                "\n".join(lines) + "\n\n📜 Fᴜʟʟ ʀᴇꜱᴜʟᴛ sᴇɴᴛ ʙᴇʟᴏᴡ ⬇️" + "\n".join(footer_lines), 
-                parse_mode="HTML", 
-                reply_markup=kb_result(), 
-                disable_web_page_preview=True
-            )
-        except Exception: 
-            pass
-        for i in range(0, len(approved_list), 15):
-            chunk = approved_list[i:i+15]
-            chunk_lines = [
-                f"✅ Aᴘᴘʀᴏᴠᴇᴅ ({i+1}-{min(i+15, len(approved_list))}/{len(approved_list)})", 
-                "━━━━━━━━━━━━━━━━━━"
-            ]
-            for j, r in enumerate(chunk, i+1):
-                masked = r["card"][:6] + "xxxx" + r["card"][-4:] if len(r["card"]) > 10 else r["card"]
-                chunk_lines.append(f"  {j}. <code>{masked}</code>\n     Rᴇꜱᴘ ➺ {r['response'][:60]}")
-            try: 
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id, 
-                    text="\n".join(chunk_lines)[:4000], 
-                    parse_mode="HTML"
-                )
-            except Exception: 
-                pass
-            await asyncio.sleep(0.3)
+    
+    full_text = "\n".join(lines)
+    await msg.edit_text(full_text, parse_mode="HTML", reply_markup=create_result_buttons())
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -523,17 +496,28 @@ async def check_single_pp_card(session: aiohttp.ClientSession, card: str, semaph
                 raw = re.sub(r'https?://\S+', '', raw).strip()
                 if not raw: 
                     raw = "NO RESPONSE"
+                
+                if status == "approved":
+                    card_status = "approved"
+                elif "3ds" in raw.lower() or "3d secure" in raw.lower():
+                    card_status = "3ds"
+                elif "charged" in raw.lower() or "captured" in raw.lower():
+                    card_status = "charged"
+                else:
+                    card_status = "dead"
+                
                 return {
                     "card": card, 
                     "cc_used": card, 
                     "response": raw,
-                    "status": "true" if status == "approved" else "false", 
+                    "status": "true" if status == "approved" else "false",
+                    "card_status": card_status,
                     "error": None,
                 }
         except asyncio.TimeoutError:
-            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false"}
+            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e:
-            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false"}
+            return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
 
 async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("mpp_on", True):
@@ -568,7 +552,7 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text(
-        f"🦇 {PP_GATE_NAME} 🛒 🟢\n━━━━━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
+        f"[₪] Gᴀᴛᴇ ➺ PᴀʏPᴀʟ | 0.10$ Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -588,8 +572,42 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: 
         bin_data = {"error": True}
 
-    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false"} for r in results]
-    approved_list = [r for r in parsed if not r.get("error") and (r["status"] == "true" or "approved" in r["response"].lower())]
+    parsed = [r if not isinstance(r, Exception) else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false", "card_status": "dead"} for r in results]
+    
+    approved_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "approved"]
+    charged_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "charged"]
+    threeds_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "3ds"]
+    dead_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "dead"]
     error_list = [r for r in parsed if r.get("error")]
 
-    username = update.eff
+    context.bot_data[f"mpp_results_{update.effective_user.id}"] = {
+        "parsed": parsed,
+        "approved": approved_list,
+        "charged": charged_list,
+        "threeds": threeds_list,
+        "dead": dead_list,
+        "error": error_list,
+        "gate": "PᴀʏPᴀʟ",
+        "total": len(parsed)
+    }
+
+    lines = [
+        f"[₪] Gᴀᴛᴇ ➺ PᴀʏPᴀʟ | 0.10$ Usd ",
+        "━━━━━━━━━━━━━━",
+        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
+        f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
+        "━━━━━━━━━━━━━━",
+        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅",
+        f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎",
+        f"3ᴅs ➺ {len(threeds_list)} 🔐",
+        f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌",
+        f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️",
+        f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
+    ]
+    
+    full_text = "\n".join(lines)
+    await msg.edit_text(full_text, parse_mode="HTML", reply_markup=create_result_buttons())
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇
