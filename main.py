@@ -467,14 +467,29 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb_result(), disable_web_page_preview=True)
 
-async def cmd_chk(u, c):  await process_gate(u, c, "chk",  "Stripe Charge")
-async def cmd_pp(u, c):   await process_gate(u, c, "pp",   "PayPal Charge")
-async def cmd_sh(u, c):   await process_gate(u, c, "sh",   "Shopify Charge")
-async def cmd_pyu(u, c):  await process_gate(u, c, "pyu",  "PayU Charge")
-async def cmd_b3(u, c):   await process_gate(u, c, "b3",   "Braintree Auth")
-async def cmd_au(u, c):   await process_gate(u, c, "au",   "Stripe Auth")
-async def cmd_mss(u, c):  await process_gate(u, c, "mss",  "Stripe Mass")
-async def cmd_mpp2(u, c): await process_gate(u, c, "mpp2", "PayPal Mass")
+async def cmd_chk(update, context):  
+    await process_gate(update, context, "chk", "Stripe Charge")
+
+async def cmd_pp(update, context):   
+    await process_gate(update, context, "pp", "PayPal Charge")
+
+async def cmd_sh(update, context):   
+    await process_gate(update, context, "sh", "Shopify Charge")
+
+async def cmd_pyu(update, context):  
+    await process_gate(update, context, "pyu", "PayU Charge")
+
+async def cmd_b3(update, context):   
+    await process_gate(update, context, "b3", "Braintree Auth")
+
+async def cmd_au(update, context):   
+    await process_gate(update, context, "au", "Stripe Auth")
+
+async def cmd_mss(update, context):  
+    await process_gate(update, context, "mss", "Stripe Mass")
+
+async def cmd_mpp2(update, context): 
+    await process_gate(update, context, "mpp2", "PayPal Mass")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PREMIUM ACTIVATION
@@ -542,5 +557,4 @@ async def _grant(uid: int, plan: str, days: int, update: Update, context: Contex
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # USER COMMANDS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def cmd_start(update
+#
