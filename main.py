@@ -8,7 +8,7 @@ import os
 import fcntl
 from typing import Optional
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -23,7 +23,7 @@ from config import (
     BOT_LINK, BOT_USERNAME, BOT_PHOTO_URL, BOT_PHOTO,
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
-    get_bin_info, kb_result,
+    get_bin_info,
 )
 from mass import get_mass_handlers   # /au  /mss  /mpp2  + result buttons
 
@@ -83,19 +83,24 @@ def B(text: str) -> str:
     return "".join(bold_map.get(ch, ch) for ch in text)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HELPERS
+# PLAN HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_styled_plan(raw_plan: str) -> str:
     p = raw_plan.upper()
-    if p == "CORE":  return "Cᴏʀᴇ"
-    if p == "ELITE": return "Eʟɪᴛᴇ"
-    if p == "ROOT":  return "Rᴏᴏᴛ"
-    return "Tʀɪᴀʟ"
+    if p == "CORE":  return "𝗖𝗼𝗿𝗲"
+    if p == "ELITE": return "𝗘𝗹𝗶𝘁𝗲"
+    if p == "ROOT":  return "𝗥𝗼𝗼𝘁"
+    return "𝗧𝗿𝗶𝗮𝗹"
 
 def get_plan_icon(raw_plan: str) -> str:
     p = raw_plan.upper()
     if p in ("CORE", "ELITE", "ROOT"): return "👑"
-    return ""
+    return "🆓"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# USER DATA
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEFAULT_CREDITS = 150
 
 def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
     uid = str(user_id)
@@ -103,24 +108,25 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
         context.bot_data["user_data"] = {}
     if uid not in context.bot_data["user_data"]:
         context.bot_data["user_data"][uid] = {
-            "name":            "User",
-            "first_name":      "User",
-            "last_name":       "",
-            "username":        "",
-            "language_code":   "en",
-            "joined":          datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "last_active":     datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "credits":         150,
-            "plan":            "TRIAL",
-            "expires":         0,
-            "total_refs":      0,
-            "total_checks":    0,
-            "approved_checks": 0,
-            "declined_checks": 0,
-            "last_gate":       "N/A",
-            "last_card":       "N/A",
-            "codes_redeemed":  0,
-            "keys_redeemed":   0,
+            "name":                 "User",
+            "first_name":           "User",
+            "last_name":            "",
+            "username":             "",
+            "language_code":        "en",
+            "joined":               datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "last_active":          datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "credits":              DEFAULT_CREDITS,
+            "plan":                 "TRIAL",
+            "expires":              0,
+            "credits_before_prem":  DEFAULT_CREDITS,   # restored when premium ends
+            "total_refs":           0,
+            "total_checks":         0,
+            "approved_checks":      0,
+            "declined_checks":      0,
+            "last_gate":            "N/A",
+            "last_card":            "N/A",
+            "codes_redeemed":       0,
+            "keys_redeemed":        0,
         }
     return context.bot_data["user_data"][uid]
 
@@ -134,11 +140,45 @@ def _update_user_meta(ud: dict, user) -> None:
     if getattr(user, "language_code", None):
         ud["language_code"] = user.language_code
 
-def gen_code(length: int = 10) -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AUTO-EXPIRE PREMIUM  (call before any premium-sensitive action)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def check_and_expire_premium(
+    ud: dict, user_id: int, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """
+    Returns True if premium was just expired (so caller can send a notice).
+    Restores pre-premium credits when expiry happens.
+    """
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    if raw_plan == "TRIAL":
+        return False
+    if ud.get("expires", 0) > time.time():
+        return False
 
-def gen_receipt() -> str:
-    return f"Batman{random.randint(100000, 999999)}-CHK"
+    # Premium has lapsed — restore credits and downgrade
+    restored = ud.get("credits_before_prem", DEFAULT_CREDITS)
+    ud["plan"]    = "TRIAL"
+    ud["expires"] = 0
+    ud["credits"] = restored
+
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=(
+                "🦇 <b>Batman Card Checker</b>\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "⏰ <b>Pʀᴇᴍɪᴜᴍ Exᴘɪʀᴇᴅ</b>\n\n"
+                f"Yᴏᴜʀ ᴘʀᴇᴍɪᴜᴍ ᴘʟᴀɴ ʜᴀs ᴇɴᴅᴇᴅ.\n"
+                f"Cʀᴇᴅɪᴛꜱ Rᴇsᴛᴏʀᴇᴅ ➺ <b>{restored}</b>\n\n"
+                "Rᴇɴᴇᴡ ᴡɪᴛʜ /plan\n"
+                "━━━━━━━━━━━━━━━━━"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    return True
 
 def is_user_premium(ud: dict) -> bool:
     return ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
@@ -146,53 +186,164 @@ def is_user_premium(ud: dict) -> bool:
 def get_referral_link(user_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
 
+def gen_receipt() -> str:
+    return f"Batman{random.randint(100000, 999999)}-CHK"
+
+def gen_code(length: int = 10) -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# KEYBOARDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def kb_main(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡️ " + B("CHECKER"),  callback_data="mgates"),
+         InlineKeyboardButton("💎 " + B("BUY NOW"),  callback_data="mprice")],
+        [InlineKeyboardButton("📢 " + B("UPDATES") + " ➺", url=CHANNEL_LINK),
+         InlineKeyboardButton("👥 " + B("GROUP")   + " ➺", url=GROUP_LINK)],
+        [InlineKeyboardButton("🔗 " + B("REFER & EARN"), callback_data="mrefer")],
+        [InlineKeyboardButton("🛟 " + B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+    ])
+
+def kb_back(cb: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 " + B("BACK"), callback_data=cb)]])
+
+def kb_price() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔷 " + B("10$ — CORE"),  callback_data="pay10"),
+         InlineKeyboardButton("🔶 " + B("15$ — ELITE"), callback_data="pay15")],
+        [InlineKeyboardButton("💠 " + B("30$ — ROOT"),  callback_data="pay30")],
+        [InlineKeyboardButton("🛟 " + B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
+    ])
+
+def kb_payment() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛟 " + B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mprice")],
+    ])
+
+def kb_gate_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 " + B("AUTH"),    callback_data="mauth"),
+         InlineKeyboardButton("💳 " + B("CHARGE"),  callback_data="mcharge"),
+         InlineKeyboardButton("👑 " + B("PREMIUM"), callback_data="mmass")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
+    ])
+
+def kb_auth_gates() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔹 " + B("BRAINTREE"), callback_data="ib3")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+    ])
+
+def kb_charge_gates() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔹 " + B("STRIPE"),  callback_data="ichk"),
+         InlineKeyboardButton("🔸 " + B("PAYPAL"),  callback_data="ipp")],
+        [InlineKeyboardButton("🟣 " + B("SHOPIFY"), callback_data="ish"),
+         InlineKeyboardButton("🔺 " + B("PAYU"),    callback_data="ipyu")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+    ])
+
+def kb_premium_gates() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👑 " + B("STRIPE AUTH"), callback_data="iau")],
+        [InlineKeyboardButton("👑 " + B("STRIPE MASS"), callback_data="imss")],
+        [InlineKeyboardButton("👑 " + B("PAYPAL MASS"), callback_data="impp2")],
+        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+    ])
+
+def kb_upgrade() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 " + B("BUY PREMIUM"), callback_data="mprice")],
+        [InlineKeyboardButton("🛟 " + B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+    ])
+
+# ── Card result bottom buttons ─────────────────────────────────────────────
+# Trial/Free  → one BUY NOW button
+# Premium     → one channel link button (BatmanCardXChk)
+def kb_card_result(plan: str) -> InlineKeyboardMarkup:
+    p = plan.upper()
+    if p in ("CORE", "ELITE", "ROOT"):
+        # Premium user — show channel link so they can share the result
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "🦇 " + B("BATMANCARDXCHK") + " ➺",
+                url=CHANNEL_LINK
+            )]
+        ])
+    else:
+        # Trial / free user — show BUY NOW
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 " + B("BUY NOW"), callback_data="mprice")]
+        ])
+
+def kb_fb_owner(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
+    ]])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PROFILE TEXT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     ud       = get_user_data(user.id, context)
     raw_plan = ud.get("plan", "TRIAL").upper()
     expires  = ud.get("expires", 0)
     now      = time.time()
     if raw_plan != "TRIAL" and expires <= now:
-        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0; expires = 0
+        raw_plan = "TRIAL"
+        ud["plan"]    = "TRIAL"
+        ud["expires"] = 0
+        ud["credits"] = ud.get("credits_before_prem", DEFAULT_CREDITS)
+        expires = 0
     premium    = raw_plan != "TRIAL"
-    credits    = "Unlimited" if premium else str(ud.get("credits", 150))
+    credits    = "♾️ Unlimited" if premium else str(ud.get("credits", DEFAULT_CREDITS))
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
     total_refs = ud.get("total_refs", 0)
     plan_icon  = get_plan_icon(raw_plan)
 
     lines = [
-        f"[ 𖥷iТ ] Batman Card Checker",
-        f"━━━━━━━━━━━━━━━━━",
-        f"Uꜱᴇʀ    ➺ {uname} {plan_icon}".rstrip(),
-        f"ID      ➺ <code>{user.id}</code>",
-        f"Aᴄᴄᴇꜱꜱ  ➺ {get_styled_plan(raw_plan)}",
-        f"Cʀᴇᴅɪᴛꜱ ➺ {credits}",
+        "🦇 <b>Batman Card Checker</b>",
+        "━━━━━━━━━━━━━━━━━",
+        f"👤 <b>Uꜱᴇʀ</b>    ➺ {uname} {plan_icon}",
+        f"🆔 <b>ID</b>      ➺ <code>{user.id}</code>",
+        f"🎖 <b>Aᴄᴄᴇꜱꜱ</b>  ➺ <b>{get_styled_plan(raw_plan)}</b>",
+        f"💳 <b>Cʀᴇᴅɪᴛꜱ</b> ➺ <b>{credits}</b>",
     ]
     if premium and expires > now:
         exp_date = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
         rem_d    = int((expires - now) / 86400)
         rem_h    = int(((expires - now) % 86400) / 3600)
-        lines.append(f"Exᴘɪʀᴇꜱ ➺ {exp_date}")
-        lines.append(f"Lᴇꜰᴛ    ➺ {rem_d}d {rem_h}h")
+        lines.append(f"📅 <b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}")
+        lines.append(f"⏳ <b>Lᴇꜰᴛ</b>    ➺ {rem_d}d {rem_h}h")
         receipt = ud.get("last_receipt")
         if receipt:
-            lines.append(f"Rᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>")
-    lines.append(f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)")
-    lines.append(f"Jᴏɪɴᴇᴅ  ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
-    lines.append(f"Dᴇᴠ     ➺ <a href='{DEV_LINK}'>Batman</a>")
+            lines.append(f"🧾 <b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>")
+    else:
+        lines.append(f"📅 <b>Exᴘɪʀᴇꜱ</b> ➺ Never")
+    lines.append(f"👥 <b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)")
+    lines.append(f"📆 <b>Jᴏɪɴᴇᴅ</b>  ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
+    lines.append(f"🔗 <b>Dᴇᴠ</b>     ➺ <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a>")
     lines.append("━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     return (
-        f"━━━━━━━━━━━━━━━━━\n{gate_name}\n━━━━━━━━━━━━━━━━━\n\n"
-        f"Cᴏsᴛ    ➺ {cost} Credit(s) per check\n\n"
-        f"Uꜱᴀɢᴇ:\n<code>/{cmd} cc|mm|yy|cvv</code>\n\n"
-        f"Exᴀᴍᴘʟᴇ:\n<code>/{cmd} 4111111111111111|12|2026|123</code>\n\n"
+        f"🦇 <b>Batman Card Checker</b>\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"<b>{gate_name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+        f"💳 <b>Cᴏsᴛ</b>    ➺ <b>{cost}</b> Credit(s) per check\n\n"
+        f"📌 <b>Uꜱᴀɢᴇ:</b>\n<code>/{cmd} cc|mm|yy|cvv</code>\n\n"
+        f"✏️ <b>Exᴀᴍᴘʟᴇ:</b>\n<code>/{cmd} 4111111111111111|12|2026|123</code>\n\n"
         f"━━━━━━━━━━━━━━━━━"
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE SUBSCRIBE — SECURE SYSTEM
+# FORCE SUBSCRIBE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
     if user_id == OWNER_ID:
@@ -216,8 +367,9 @@ def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 FORCE_SUB_TEXT = (
-    "[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ\n"
+    "🦇 <b>Batman Card Checker</b>\n"
     "━━━━━━━━━━━━━━━━━\n"
+    "⚠️ <b>Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n\n"
     "You must join our channel & group to use this bot.\n"
     "After joining press the ✅ Verify button below.\n"
     "━━━━━━━━━━━━━━━━━"
@@ -227,7 +379,8 @@ async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id    = update.effective_user.id
     not_joined = await check_force_sub(user_id, context)
     if not_joined:
-        await update.message.reply_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
+        await update.message.reply_text(
+            FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
         return False
     return True
 
@@ -247,13 +400,17 @@ def build_check_result(
     is_error:     bool = False,
 ) -> str:
     if is_timeout:
-        status = "Tɪᴍᴇᴏᴜᴛ"
+        status_icon = "⏳"
+        status      = "Tɪᴍᴇᴏᴜᴛ"
     elif is_error:
-        status = "Eʀʀᴏʀ"
+        status_icon = "⚠️"
+        status      = "Eʀʀᴏʀ"
     elif is_approved:
-        status = "Aᴘᴘʀᴏᴠᴇᴅ"
+        status_icon = "✅"
+        status      = "Aᴘᴘʀᴏᴠᴇᴅ"
     else:
-        status = "Dᴇᴄʟɪɴᴇᴅ"
+        status_icon = "❌"
+        status      = "Dᴇᴄʟɪɴᴇᴅ"
 
     plan_icon  = get_plan_icon(plan)
     plan_label = get_styled_plan(plan)
@@ -264,94 +421,22 @@ def build_check_result(
         bank    = bin_data.get("bank",    "N/A")
         country = str(bin_data.get("country", "N/A")).upper()
         flag    = bin_data.get("country_emoji", "")
-        bin_txt = f"{scheme} - {bank} - {flag} {country}".strip()
+        bin_txt = f"{scheme} — {bank} — {flag} {country}".strip()
 
-    uname_display = f"{username} {plan_icon} ({plan_label})".strip()
+    uname_display = f"{username} {plan_icon} ({plan_label})"
 
     lines = [
-        f"[ 𖥷iТ ] ➺ {status}",
-        f"🔍 ➺ <code>{card_raw}</code>",
-        f"Gᴀᴛᴇ ➺ {gate_name} 💳",
-        f"Rᴀᴡ  ➺ {raw_response}",
-        f"Iɴꜰᴏ ➺ {bin_txt}",
-        f"Uꜱᴇʀ ➺ {uname_display}",
-        f"Pʀᴏ  ➺ Batman | {time_taken}s",
+        f"🦇 <b>[ 𖥷iТ ] ➺ {status_icon} {status}</b>",
+        f"━━━━━━━━━━━━━━━━━",
+        f"🔍 <b>Cᴀʀᴅ</b> ➺ <code>{card_raw}</code>",
+        f"🏦 <b>Gᴀᴛᴇ</b> ➺ <b>{gate_name}</b>",
+        f"📩 <b>Rᴀᴡ</b>  ➺ {raw_response}",
+        f"ℹ️ <b>Iɴꜰᴏ</b> ➺ {bin_txt}",
+        f"👤 <b>Uꜱᴇʀ</b> ➺ {uname_display}",
+        f"⚡ <b>Pʀᴏ</b>  ➺ 𝗕𝗮𝘁𝗺𝗮𝗻 | {time_taken}s",
+        f"━━━━━━━━━━━━━━━━━",
     ]
     return "\n".join(lines)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# KEYBOARDS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def kb_main(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("CHECKER"),  callback_data="mgates"),
-         InlineKeyboardButton(B("BUY NOW"), callback_data="mprice")],
-        [InlineKeyboardButton(B("UPDATES") + " ➺", url=CHANNEL_LINK),
-         InlineKeyboardButton(B("GROUP")   + " ➺", url=GROUP_LINK)],
-        [InlineKeyboardButton("🔗 " + B("REFER & EARN"), callback_data="mrefer")],
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
-    ])
-
-def kb_back(cb: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 " + B("BACK"), callback_data=cb)]])
-
-def kb_price() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("10$ - CORE"),  callback_data="pay10"),
-         InlineKeyboardButton(B("15$ - ELITE"), callback_data="pay15"),
-         InlineKeyboardButton(B("30$ - ROOT"),  callback_data="pay30")],
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
-    ])
-
-def kb_payment() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mprice")],
-    ])
-
-def kb_gate_main() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("AUTH"),    callback_data="mauth"),
-         InlineKeyboardButton(B("CHARGE"),  callback_data="mcharge"),
-         InlineKeyboardButton("👑 " + B("PREMIUM"), callback_data="mmass")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
-    ])
-
-def kb_auth_gates() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
-    ])
-
-def kb_charge_gates() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE"),  callback_data="ichk"),
-         InlineKeyboardButton(B("PAYPAL"),  callback_data="ipp")],
-        [InlineKeyboardButton(B("SHOPIFY"), callback_data="ish"),
-         InlineKeyboardButton(B("PAYU"),    callback_data="ipyu")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
-    ])
-
-def kb_premium_gates() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE AUTH")  + " 👑", callback_data="iau")],
-        [InlineKeyboardButton(B("STRIPE MASS")  + " 👑", callback_data="imss")],
-        [InlineKeyboardButton(B("PAYPAL MASS")  + " 👑", callback_data="impp2")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
-    ])
-
-def kb_upgrade() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 " + B("BUY PREMIUM"), callback_data="mprice")],
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
-    ])
-
-def kb_fb_owner(key: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
-    ]])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # REFERRAL SYSTEM
@@ -372,13 +457,15 @@ async def process_referral(new_user_id: int, referrer_id: int,
     try:
         await context.bot.send_message(
             chat_id=referrer_id,
+            parse_mode="HTML",
             text=(
-                f"Rᴇꜰᴇʀʀᴀʟ Bᴏɴᴜꜱ\n"
-                f"━━━━━━━━━━━━━━━━━\n"
-                f"Someone joined via your link!\n"
-                f"Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ    ➺ +{REFERRAL_CREDITS}\n"
-                f"Tᴏᴛᴀʟ Rᴇꜰᴇʀʀᴀʟꜱ ➺ {referrer_ud['total_refs']}\n"
-                f"━━━━━━━━━━━━━━━━━"
+                "🦇 <b>Batman Card Checker</b>\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "🎉 <b>Rᴇꜰᴇʀʀᴀʟ Bᴏɴᴜꜱ!</b>\n\n"
+                "Someone joined via your link!\n"
+                f"💳 <b>Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ</b>    ➺ <b>+{REFERRAL_CREDITS}</b>\n"
+                f"👥 <b>Tᴏᴛᴀʟ Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ <b>{referrer_ud['total_refs']}</b>\n"
+                "━━━━━━━━━━━━━━━━━"
             ),
         )
     except Exception:
@@ -386,8 +473,8 @@ async def process_referral(new_user_id: int, referrer_id: int,
     return True
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GATE PROCESSING  (single-card gates only: chk pp sh pyu b3)
-# /au /mss /mpp2 are handled exclusively by mass.py
+# GATE PROCESSING  (single-card: chk pp sh pyu b3)
+# /au /mss /mpp2 handled exclusively by mass.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _api_request(session, url: str, card: str, site: str) -> dict:
     if "{card}" in url:
@@ -406,21 +493,23 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     user = update.effective_user
 
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
-        await update.message.reply_text("Bot is under maintenance. Try again later.")
+        await update.message.reply_text(
+            "🔧 <b>Bot is under maintenance.</b> Try again later.", parse_mode="HTML")
         return
 
     if not context.bot_data.get(f"{gate_key}_on", True):
-        await update.message.reply_text(f"Gate [{gate_name}] is currently OFF.")
+        await update.message.reply_text(
+            f"⛔ Gate <b>[{gate_name}]</b> is currently OFF.", parse_mode="HTML")
         return
 
     if not await require_membership(update, context):
         return
 
     ud      = get_user_data(user.id, context)
-    premium = is_user_premium(ud)
     _update_user_meta(ud, user)
+    await check_and_expire_premium(ud, user.id, context)
+    premium = is_user_premium(ud)
 
-    # card from inline args OR reply-to-text
     card_raw = None
     if context.args:
         card_raw = context.args[0].strip()
@@ -429,17 +518,20 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     if not card_raw:
         await update.message.reply_text(
-            f"Uꜱᴀɢᴇ: <code>/{gate_key} cc|mm|yy|cvv</code>", parse_mode="HTML")
+            f"📌 <b>Uꜱᴀɢᴇ:</b> <code>/{gate_key} cc|mm|yy|cvv</code>", parse_mode="HTML")
         return
 
     if not premium:
         credits = ud.get("credits", 0)
         if credits <= 0:
             await update.message.reply_text(
-                "[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ\n"
+                "🦇 <b>Batman Card Checker</b>\n"
                 "━━━━━━━━━━━━━━━━━\n"
+                "❌ <b>Nᴏ Cʀᴇᴅɪᴛꜱ</b>\n\n"
                 "Buy a plan: /plan\n"
-                "Refer friends for free credits: /refer",
+                "Refer friends for free credits: /refer\n"
+                "━━━━━━━━━━━━━━━━━",
+                parse_mode="HTML",
                 reply_markup=kb_upgrade(),
             )
             return
@@ -451,10 +543,11 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     if not api_url:
         await update.message.reply_text(
-            f"Gate API not set. Owner: /seturl {gate_key} &lt;url&gt;", parse_mode="HTML")
+            f"⚠️ Gate API not set.\nOwner: <code>/seturl {gate_key} &lt;url&gt;</code>",
+            parse_mode="HTML")
         return
 
-    msg        = await update.message.reply_text("[ 𖥷iТ ] ➺ Sᴄᴀɴɴɪɴɢ...")
+    msg        = await update.message.reply_text("🦇 <b>[ 𖥷iТ ] ➺ Sᴄᴀɴɴɪɴɢ...</b>", parse_mode="HTML")
     start_time = time.time()
 
     uname = f"@{user.username}" if user.username else user.first_name or "User"
@@ -497,8 +590,11 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             bin_data=bin_data, username=uname, plan=plan,
             time_taken=time_taken, is_approved=is_approved,
         )
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(), disable_web_page_preview=True)
+        await msg.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=kb_card_result(plan),
+            disable_web_page_preview=True,
+        )
 
     except asyncio.TimeoutError:
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
@@ -509,8 +605,11 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_timeout=True,
         )
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(), disable_web_page_preview=True)
+        await msg.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=kb_card_result(plan),
+            disable_web_page_preview=True,
+        )
     except Exception as e:
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
         logger.error(f"Gate [{gate_key}] error: {e}")
@@ -521,12 +620,13 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_error=True,
         )
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(), disable_web_page_preview=True)
+        await msg.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=kb_card_result(plan),
+            disable_web_page_preview=True,
+        )
 
-# ── Single-card gate command wrappers ──────────────────
-# NOTE: /au /mss /mpp2 are intentionally NOT here — they are
-#       mass-checking commands registered exclusively from mass.py.
+# ── Single-card gate wrappers ──────────────────────────
 async def cmd_chk(update, context):  await process_gate(update, context, "chk",  "Stripe Charge")
 async def cmd_pp(update, context):   await process_gate(update, context, "pp",   "PayPal Charge")
 async def cmd_sh(update, context):   await process_gate(update, context, "sh",   "Shopify Charge")
@@ -549,6 +649,11 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
 
     ud         = get_user_data(user_id, context)
     expires_ts = time.time() + days * 86400
+
+    # Save credits before going premium so we can restore them later
+    if ud.get("plan", "TRIAL").upper() == "TRIAL":
+        ud["credits_before_prem"] = ud.get("credits", DEFAULT_CREDITS)
+
     ud["name"]         = name
     ud["plan"]         = plan.upper()
     ud["expires"]      = expires_ts
@@ -561,17 +666,19 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     styled       = get_styled_plan(plan)
 
     txt = (
-        f"[ 𖥷iТ ] ➺ Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Uꜱᴇʀ     ➺ {display_name}\n"
-        f"Aᴄᴄᴇꜱꜱ  ➺ {styled} 👑\n"
-        f"Dᴀʏꜱ    ➺ {days}\n"
-        f"Cʀᴇᴅɪᴛꜱ ➺ Unlimited\n"
-        f"Exᴘɪʀᴇꜱ ➺ {exp_date}\n"
-        f"Rᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Save this receipt ID.\n"
-        f"Pʀᴏ ➺ Batman"
+        "🦇 <b>Batman Card Checker</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "🎉 <b>Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ!</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Uꜱᴇʀ</b>     ➺ {display_name}\n"
+        f"🎖 <b>Aᴄᴄᴇꜱꜱ</b>  ➺ <b>{styled} 👑</b>\n"
+        f"📆 <b>Dᴀʏꜱ</b>    ➺ <b>{days}</b>\n"
+        f"💳 <b>Cʀᴇᴅɪᴛꜱ</b> ➺ <b>♾️ Unlimited</b>\n"
+        f"⏰ <b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}\n"
+        f"🧾 <b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "📌 Save this receipt ID.\n"
+        "⚡ <b>Pʀᴏ</b> ➺ 𝗕𝗮𝘁𝗺𝗮𝗻"
     )
     try:
         await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
@@ -599,7 +706,9 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
 async def _grant(uid: int, plan: str, days: int,
                  update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = get_user_data(uid, context)
-    ud["plan"]    = plan
+    if ud.get("plan", "TRIAL").upper() == "TRIAL":
+        ud["credits_before_prem"] = ud.get("credits", DEFAULT_CREDITS)
+    ud["plan"]    = plan.upper()
     ud["expires"] = time.time() + days * 86400
 
     display_name  = ud.get("name", "Unknown")
@@ -622,15 +731,17 @@ async def _grant(uid: int, plan: str, days: int,
     exp_date   = datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d %H:%M")
 
     await update.message.reply_text(
-        f"[ 𖥷iТ ] ➺ Gʀᴀɴᴛᴇᴅ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Uꜱᴇʀ    ➺ {uname_line}\n"
-        f"ID      ➺ <code>{uid}</code>\n"
-        f"Pʟᴀɴ    ➺ {get_styled_plan(plan)} 👑\n"
-        f"Dᴀʏꜱ    ➺ {days}\n"
-        f"Exᴘɪʀᴇꜱ ➺ {exp_date}\n"
-        f"Rᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>\n"
-        f"━━━━━━━━━━━━━━━━━",
+        "🦇 <b>Batman Card Checker</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "✅ <b>Gʀᴀɴᴛᴇᴅ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Uꜱᴇʀ</b>    ➺ {uname_line}\n"
+        f"🆔 <b>ID</b>      ➺ <code>{uid}</code>\n"
+        f"🎖 <b>Pʟᴀɴ</b>    ➺ <b>{get_styled_plan(plan)} 👑</b>\n"
+        f"📆 <b>Dᴀʏꜱ</b>    ➺ <b>{days}</b>\n"
+        f"⏰ <b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}\n"
+        f"🧾 <b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>\n"
+        "━━━━━━━━━━━━━━━━━",
         parse_mode="HTML",
     )
 
@@ -643,21 +754,21 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 3:
         await update.message.reply_text(
-            "Usage: /add <user_id|@username> <plan> <days>\n"
-            "Plans: CORE  ELITE  ROOT", parse_mode="HTML")
+            "📌 <b>Usage:</b> /add &lt;user_id|@username&gt; &lt;plan&gt; &lt;days&gt;\n"
+            "Plans: <b>CORE  ELITE  ROOT</b>", parse_mode="HTML")
         return
     uid = await resolve_user(args[0], context)
     if not uid:
-        await update.message.reply_text(f"User not found: {args[0]}")
+        await update.message.reply_text(f"❌ User not found: {args[0]}")
         return
     plan = args[1].upper()
     if plan not in ("CORE", "ELITE", "ROOT"):
-        await update.message.reply_text("Invalid plan. Use: CORE  ELITE  ROOT")
+        await update.message.reply_text("❌ Invalid plan. Use: CORE  ELITE  ROOT")
         return
     try:
         days = int(args[2])
     except ValueError:
-        await update.message.reply_text("Days must be an integer.")
+        await update.message.reply_text("❌ Days must be a number.")
         return
     await _grant(uid, plan, days, update, context)
 
@@ -665,92 +776,186 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
-        await update.message.reply_text("Usage: /remove <user_id|@username>")
+        await update.message.reply_text("📌 <b>Usage:</b> /remove &lt;user_id|@username&gt;", parse_mode="HTML")
         return
     uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message.reply_text(f"User not found: {context.args[0]}")
+        await update.message.reply_text(f"❌ User not found: {context.args[0]}")
         return
     ud = get_user_data(uid, context)
+    restored = ud.get("credits_before_prem", DEFAULT_CREDITS)
     ud["plan"]    = "TRIAL"
     ud["expires"] = 0
+    ud["credits"] = restored
     await update.message.reply_text(
-        f"✅ Removed premium from <code>{uid}</code>.", parse_mode="HTML")
+        f"✅ Removed premium from <code>{uid}</code>.\n"
+        f"💳 Credits restored to <b>{restored}</b>.", parse_mode="HTML")
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner command: /info @username  or  /info user_id"""
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "📌 <b>Usage:</b> /info &lt;@username | user_id&gt;", parse_mode="HTML")
+        return
+    uid = await resolve_user(context.args[0], context)
+    if not uid:
+        await update.message.reply_text(f"❌ User not found: {context.args[0]}")
+        return
+    ud       = context.bot_data.get("user_data", {}).get(str(uid), {})
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    now      = time.time()
+    expires  = ud.get("expires", 0)
+    # Auto-expire check
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"
+    premium  = raw_plan != "TRIAL" and expires > now
+    credits  = "♾️ Unlimited" if premium else str(ud.get("credits", DEFAULT_CREDITS))
+    uname    = f"@{ud.get('username','')}" if ud.get("username") else ud.get("name", "Unknown")
+    exp_str  = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M") if expires > 0 else "N/A"
+    rem_str  = ""
+    if premium and expires > now:
+        rem_d = int((expires - now) / 86400)
+        rem_h = int(((expires - now) % 86400) / 3600)
+        rem_str = f"\n⏳ <b>Lᴇꜰᴛ</b>    ➺ <b>{rem_d}d {rem_h}h</b>"
+
+    text = (
+        "🦇 <b>Batman Card Checker — User Info</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Nᴀᴍᴇ</b>    ➺ {uname}\n"
+        f"🆔 <b>ID</b>      ➺ <code>{uid}</code>\n"
+        f"🎖 <b>Pʟᴀɴ</b>    ➺ <b>{get_styled_plan(raw_plan)}</b> {get_plan_icon(raw_plan)}\n"
+        f"💳 <b>Cʀᴇᴅɪᴛꜱ</b> ➺ <b>{credits}</b>\n"
+        f"📅 <b>Exᴘɪʀᴇꜱ</b> ➺ {exp_str}"
+        f"{rem_str}\n"
+        f"📊 <b>Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ</b>    ➺ {ud.get('total_checks', 0)}\n"
+        f"✅ <b>Aᴘᴘʀᴏᴠᴇᴅ</b>          ➺ {ud.get('approved_checks', 0)}\n"
+        f"❌ <b>Dᴇᴄʟɪɴᴇᴅ</b>          ➺ {ud.get('declined_checks', 0)}\n"
+        f"🏦 <b>Lᴀꜱᴛ Gᴀᴛᴇ</b>         ➺ {ud.get('last_gate', 'N/A')}\n"
+        f"🃏 <b>Lᴀꜱᴛ Cᴀʀᴅ</b> (BIN)   ➺ <code>{ud.get('last_card', 'N/A')}</code>\n"
+        f"👥 <b>Rᴇꜰᴇʀʀᴀʟꜱ</b>         ➺ {ud.get('total_refs', 0)}\n"
+        f"📆 <b>Jᴏɪɴᴇᴅ</b>             ➺ {ud.get('joined', 'N/A')}\n"
+        f"🕐 <b>Lᴀꜱᴛ Aᴄᴛɪᴠᴇ</b>       ➺ {ud.get('last_active', 'N/A')}\n"
+        f"🧾 <b>Lᴀꜱᴛ Rᴇᴄᴇɪᴘᴛ</b>      ➺ <code>{ud.get('last_receipt', 'N/A')}</code>\n"
+        "━━━━━━━━━━━━━━━━━"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /seturl <gate_key> <url>")
+        await update.message.reply_text("📌 <b>Usage:</b> /seturl &lt;gate_key&gt; &lt;url&gt;", parse_mode="HTML")
         return
     key = context.args[0].lower()
     url = context.args[1]
     context.bot_data[f"gate_url_{key}"] = url
-    await update.message.reply_text(f"✅ URL set for gate <code>{key}</code>.", parse_mode="HTML")
+    await update.message.reply_text(
+        f"✅ URL set for gate <code>{key}</code>.", parse_mode="HTML")
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     if not context.args:
-        await update.message.reply_text("Usage: /broadcast <message>")
+        await update.message.reply_text(
+            "📌 <b>Usage:</b> /broadcast &lt;your message here&gt;", parse_mode="HTML")
         return
     text    = " ".join(context.args)
     users   = context.bot_data.get("user_data", {})
     sent    = 0
     failed  = 0
-    for uid_str in users:
+    status_msg = await update.message.reply_text(
+        f"📢 Broadcasting to <b>{len(users)}</b> users...", parse_mode="HTML")
+    for uid_str in list(users.keys()):
         try:
-            await context.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="HTML")
+            await context.bot.send_message(
+                chat_id=int(uid_str), text=text, parse_mode="HTML")
             sent += 1
         except Exception:
             failed += 1
-    await update.message.reply_text(f"✅ Sent: {sent}  ❌ Failed: {failed}")
+    await status_msg.edit_text(
+        "🦇 <b>Broadcast Complete</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"✅ <b>Sent</b>   ➺ {sent}\n"
+        f"❌ <b>Failed</b> ➺ {failed}\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
+    )
 
 async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     current = context.bot_data.get("maintenance", False)
     context.bot_data["maintenance"] = not current
-    state = "ON 🔴" if not current else "OFF 🟢"
-    await update.message.reply_text(f"Maintenance mode: {state}")
+    state = "🔴 ON" if not current else "🟢 OFF"
+    await update.message.reply_text(
+        f"🔧 <b>Maintenance mode:</b> <b>{state}</b>", parse_mode="HTML")
 
 async def cmd_gate_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner: /gate <key> on|off"""
     if update.effective_user.id != OWNER_ID:
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /gate <gate_key> on|off")
+        await update.message.reply_text("📌 <b>Usage:</b> /gate &lt;gate_key&gt; on|off", parse_mode="HTML")
         return
     key   = context.args[0].lower()
     state = context.args[1].lower() == "on"
     context.bot_data[f"{key}_on"] = state
+    icon  = "🟢 ON" if state else "🔴 OFF"
     await update.message.reply_text(
-        f"Gate <code>{key}</code> is now {'ON 🟢' if state else 'OFF 🔴'}.", parse_mode="HTML")
+        f"🏦 Gate <code>{key}</code> is now <b>{icon}</b>.", parse_mode="HTML")
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     users = context.bot_data.get("user_data", {})
     total = len(users)
+    now   = time.time()
     premium = sum(
         1 for ud in users.values()
-        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
+        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > now
     )
     await update.message.reply_text(
-        f"[ 𖥷iТ ] Stats\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Total users  ➺ {total}\n"
-        f"Premium      ➺ {premium}\n"
-        f"━━━━━━━━━━━━━━━━━",
+        "🦇 <b>Batman Card Checker — Stats</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>Total Users</b>  ➺ <b>{total}</b>\n"
+        f"👑 <b>Premium</b>      ➺ <b>{premium}</b>\n"
+        f"🆓 <b>Trial</b>        ➺ <b>{total - premium}</b>\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # USER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _send_start_photo(target, caption: str, reply_markup, parse_mode="HTML"):
+    """
+    Send the Batman bot photo with caption.
+    target = update.message  (for /start)
+    BOT_PHOTO can be a local file path OR a Telegram file_id string.
+    """
+    try:
+        if BOT_PHOTO and os.path.isfile(BOT_PHOTO):
+            with open(BOT_PHOTO, "rb") as f:
+                await target.reply_photo(
+                    photo=f, caption=caption,
+                    parse_mode=parse_mode, reply_markup=reply_markup)
+        elif BOT_PHOTO:
+            # Assume it's a file_id or URL
+            await target.reply_photo(
+                photo=BOT_PHOTO, caption=caption,
+                parse_mode=parse_mode, reply_markup=reply_markup)
+        else:
+            await target.reply_text(caption, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception:
+        # Fallback to text if photo fails
+        await target.reply_text(caption, parse_mode=parse_mode, reply_markup=reply_markup)
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud   = get_user_data(user.id, context)
     _update_user_meta(ud, user)
+    await check_and_expire_premium(ud, user.id, context)
 
     if context.args and context.args[0].startswith("ref_"):
         try:
@@ -759,34 +964,46 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    text = (
-        f"[ 𖥷iТ ] Batman Card Checker\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Wᴇʟᴄᴏᴍᴇ, {user.first_name}!\n\n"
-        f"Tʜᴇ #𝟭 Cᴀʀᴅ Cʜᴇᴄᴋɪɴɢ Bᴏᴛ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Vᴇʀsɪᴏɴ ➺ {VERSION}\n"
-        f"Pʀᴏ     ➺ Batman"
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    credits  = "♾️ Unlimited" if is_user_premium(ud) else str(ud.get("credits", DEFAULT_CREDITS))
+    uname    = f"@{user.username}" if user.username else user.first_name or "User"
+
+    caption = (
+        "🦇 <b>Batman Card Checker</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Uꜱᴇʀ</b>    ➺ {uname} {get_plan_icon(raw_plan)}\n"
+        f"🆔 <b>ID</b>      ➺ <code>{user.id}</code>\n"
+        f"🎖 <b>Aᴄᴄᴇꜱꜱ</b>  ➺ <b>{get_styled_plan(raw_plan)}</b>\n"
+        f"💳 <b>Cʀᴇᴅɪᴛꜱ</b> ➺ <b>{credits}</b>\n"
+        f"📆 <b>Jᴏɪɴᴇᴅ</b>  ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"🔗 <b>Dᴇᴠ</b>     ➺ <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a>\n"
+        f"📡 <b>Vᴇʀꜱɪᴏɴ</b> ➺ <b>{VERSION}</b>"
     )
-    await update.message.reply_text(text, reply_markup=kb_main(user.id))
+    await _send_start_photo(update.message, caption, kb_main(user.id))
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    _update_user_meta(get_user_data(user.id, context), user)
+    ud   = get_user_data(user.id, context)
+    _update_user_meta(ud, user)
+    await check_and_expire_premium(ud, user.id, context)
     await update.message.reply_text(
         ui_profile(user, context), parse_mode="HTML",
         reply_markup=kb_back("bmain"), disable_web_page_preview=True)
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Pʟᴀɴꜱ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Cᴏʀᴇ  ➺ $10 / 30 days\n"
-        f"Eʟɪᴛᴇ ➺ $15 / 30 days\n"
-        f"Rᴏᴏᴛ  ➺ $30 / 30 days\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"All plans include unlimited credits.\n"
-        f"Contact support to purchase.",
+        "🦇 <b>Batman Card Checker</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "💎 <b>Pʀᴇᴍɪᴜᴍ Pʟᴀɴꜱ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "🔷 <b>CORE</b>  ➺ $10 / 30 days\n"
+        "🔶 <b>ELITE</b> ➺ $15 / 30 days\n"
+        "💠 <b>ROOT</b>  ➺ $30 / 30 days\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "✅ All plans include <b>Unlimited credits</b>.\n"
+        "📩 Contact support to purchase.",
+        parse_mode="HTML",
         reply_markup=kb_price(),
     )
 
@@ -795,47 +1012,53 @@ async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = get_referral_link(user.id)
     ud   = get_user_data(user.id, context)
     await update.message.reply_text(
-        f"[ 𖥷iТ ] ➺ Rᴇꜰᴇʀ & Eᴀʀɴ\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"Yᴏᴜʀ Lɪɴᴋ ➺ {link}\n"
-        f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {ud.get('total_refs', 0)}\n"
-        f"Eᴀʀɴᴇᴅ   ➺ {ud.get('total_refs', 0) * REFERRAL_CREDITS} credits\n"
-        f"━━━━━━━━━━━━━━━━━",
+        "🦇 <b>Batman Card Checker</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "🔗 <b>Rᴇꜰᴇʀ & Eᴀʀɴ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"🔗 <b>Yᴏᴜʀ Lɪɴᴋ</b> ➺ {link}\n"
+        f"👥 <b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ <b>{ud.get('total_refs', 0)}</b>\n"
+        f"💳 <b>Eᴀʀɴᴇᴅ</b>   ➺ <b>{ud.get('total_refs', 0) * REFERRAL_CREDITS}</b> credits\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
     )
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "[ 𖥷iТ ] ➺ Cᴏᴍᴍᴀɴᴅꜱ\n"
+    await update.message.reply_text(
+        "🦇 <b>Batman Card Checker — Commands</b>\n"
         "━━━━━━━━━━━━━━━━━\n"
-        "<b>Free Gates:</b>\n"
-        "/chk cc|mm|yy|cvv  ➺ Stripe Charge\n"
-        "/pp  cc|mm|yy|cvv  ➺ PayPal Charge\n"
-        "/sh  cc|mm|yy|cvv  ➺ Shopify Charge\n"
-        "/pyu cc|mm|yy|cvv  ➺ PayU Charge\n"
-        "/b3  cc|mm|yy|cvv  ➺ Braintree Auth\n\n"
-        "<b>Premium Gates:</b>\n"
-        "/au  cc|mm|yy|cvv  ➺ Sᴛʀɪᴘᴇ Aᴜᴛʜ (mass + file)\n"
-        "/mss cc|mm|yy|cvv  ➺ Sᴛʀɪᴘᴇ Mᴀss (mass + file)\n"
-        "/mpp2 cc|mm|yy|cvv ➺ PᴀʏPᴀʟ Mᴀss (mass + file)\n\n"
-        "<b>File support (premium):</b>\n"
-        "Upload a .txt file → send /au /mss /mpp2 as caption,\n"
-        "OR reply to a file with the command.\n\n"
-        "<b>Other:</b>\n"
+        "🆓 <b>Free Gates:</b>\n"
+        "/chk <code>cc|mm|yy|cvv</code>  ➺ Stripe Charge\n"
+        "/pp  <code>cc|mm|yy|cvv</code>  ➺ PayPal Charge\n"
+        "/sh  <code>cc|mm|yy|cvv</code>  ➺ Shopify Charge\n"
+        "/pyu <code>cc|mm|yy|cvv</code>  ➺ PayU Charge\n"
+        "/b3  <code>cc|mm|yy|cvv</code>  ➺ Braintree Auth\n\n"
+        "👑 <b>Premium Gates:</b>\n"
+        "/au   ➺ Sᴛʀɪᴘᴇ Aᴜᴛʜ (mass + file)\n"
+        "/mss  ➺ Sᴛʀɪᴘᴇ Mᴀss (mass + file)\n"
+        "/mpp2 ➺ PᴀʏPᴀʟ Mᴀss (mass + file)\n\n"
+        "📁 <b>File Support (Premium):</b>\n"
+        "Upload .txt → send /au /mss /mpp2 as caption\n"
+        "OR reply to any .txt file with the command.\n\n"
+        "📋 <b>Other:</b>\n"
         "/profile  ➺ Your profile\n"
         "/plan     ➺ Buy premium\n"
-        "/refer    ➺ Refer & earn\n"
-        "━━━━━━━━━━━━━━━━━"
+        "/refer    ➺ Refer & earn credits\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
     )
-    await update.message.reply_text(text, parse_mode="HTML")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK QUERY HANDLER (inline buttons)
+# CALLBACK QUERY HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data  = query.data
     user  = query.from_user
+
+    ud = context.bot_data.get("user_data", {}).get(str(user.id), {})
+    await check_and_expire_premium(ud, user.id, context)
 
     async def edit(text: str, kb=None, **kw):
         try:
@@ -846,82 +1069,121 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     if data == "bmain":
-        text = (
-            f"[ 𖥷iТ ] Batman Card Checker\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"Wᴇʟᴄᴏᴍᴇ, {user.first_name}!\n\n"
-            f"Tʜᴇ #𝟭 Cᴀʀᴅ Cʜᴇᴄᴋɪɴɢ Bᴏᴛ\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"Vᴇʀsɪᴏɴ ➺ {VERSION}\n"
-            f"Pʀᴏ     ➺ Batman"
+        raw_plan = ud.get("plan", "TRIAL").upper()
+        credits  = "♾️ Unlimited" if is_user_premium(ud) else str(ud.get("credits", DEFAULT_CREDITS))
+        uname    = f"@{user.username}" if user.username else user.first_name or "User"
+        caption = (
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Uꜱᴇʀ</b>    ➺ {uname} {get_plan_icon(raw_plan)}\n"
+            f"🆔 <b>ID</b>      ➺ <code>{user.id}</code>\n"
+            f"🎖 <b>Aᴄᴄᴇꜱꜱ</b>  ➺ <b>{get_styled_plan(raw_plan)}</b>\n"
+            f"💳 <b>Cʀᴇᴅɪᴛꜱ</b> ➺ <b>{credits}</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Dᴇᴠ</b>     ➺ <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a>\n"
+            f"📡 <b>Vᴇʀꜱɪᴏɴ</b> ➺ <b>{VERSION}</b>"
         )
-        await edit(text, kb_main(user.id))
+        await edit(caption, kb_main(user.id))
+
     elif data == "mgates":
         await edit(
-            "[ 𖥷iТ ] ➺ Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ\n━━━━━━━━━━━━━━━━━",
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "⚡ <b>Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ</b>",
             kb_gate_main())
+
     elif data == "mauth":
         await edit(
-            "[ 𖥷iТ ] ➺ Aᴜᴛʜ Gᴀᴛᴇꜱ\n━━━━━━━━━━━━━━━━━\n/b3 ➺ Braintree Auth",
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "🔑 <b>Aᴜᴛʜ Gᴀᴛᴇꜱ</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "/b3 ➺ Braintree Auth",
             kb_auth_gates())
+
     elif data == "mcharge":
         await edit(
-            "[ 𖥷iТ ] ➺ Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ\n━━━━━━━━━━━━━━━━━\n"
-            "/chk ➺ Stripe  /pp ➺ PayPal\n/sh ➺ Shopify  /pyu ➺ PayU",
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "💳 <b>Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "/chk ➺ Stripe  |  /pp ➺ PayPal\n"
+            "/sh  ➺ Shopify  |  /pyu ➺ PayU",
             kb_charge_gates())
+
     elif data == "mmass":
         await edit(
-            "[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ\n━━━━━━━━━━━━━━━━━\n"
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "👑 <b>Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
             "/au   ➺ Sᴛʀɪᴘᴇ Aᴜᴛʜ\n"
             "/mss  ➺ Sᴛʀɪᴘᴇ Mᴀss\n"
             "/mpp2 ➺ PᴀʏPᴀʟ Mᴀss\n\n"
-            "Supports file upload + reply-to-file.",
+            "📁 Supports file upload + reply-to-file.",
             kb_premium_gates())
+
     elif data == "mprice":
         await edit(
-            "[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Pʟᴀɴꜱ\n━━━━━━━━━━━━━━━━━\n"
-            "Cᴏʀᴇ  ➺ $10 / 30 days\n"
-            "Eʟɪᴛᴇ ➺ $15 / 30 days\n"
-            "Rᴏᴏᴛ  ➺ $30 / 30 days\n━━━━━━━━━━━━━━━━━\n"
-            "Contact support to purchase.",
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "💎 <b>Pʀᴇᴍɪᴜᴍ Pʟᴀɴꜱ</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "🔷 <b>CORE</b>  ➺ $10 / 30 days\n"
+            "🔶 <b>ELITE</b> ➺ $15 / 30 days\n"
+            "💠 <b>ROOT</b>  ➺ $30 / 30 days\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "📩 Contact support to purchase.",
             kb_price())
+
     elif data == "mrefer":
         link = get_referral_link(user.id)
-        ud   = get_user_data(user.id, context)
         await edit(
-            f"[ 𖥷iТ ] ➺ Rᴇꜰᴇʀ & Eᴀʀɴ\n━━━━━━━━━━━━━━━━━\n"
-            f"Yᴏᴜʀ Lɪɴᴋ ➺ {link}\n"
-            f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {ud.get('total_refs', 0)}\n━━━━━━━━━━━━━━━━━",
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Yᴏᴜʀ Lɪɴᴋ</b> ➺ {link}\n"
+            f"👥 <b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ <b>{ud.get('total_refs', 0)}</b>\n"
+            "━━━━━━━━━━━━━━━━━",
             kb_back("bmain"))
+
     elif data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
             await query.answer("Please join all channels first!", show_alert=True)
         else:
             await edit(
-                "[ 𖥷iТ ] ➺ Vᴇʀɪꜰɪᴇᴅ ✅\nYou are now subscribed. Use /start.",
+                "🦇 <b>Batman Card Checker</b>\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "✅ <b>Vᴇʀɪꜰɪᴇᴅ!</b> You are now subscribed.\n"
+                "Use /start to continue.\n"
+                "━━━━━━━━━━━━━━━━━",
                 kb_main(user.id))
+
     elif data in ("ib3", "ichk", "ipp", "ish", "ipyu", "iau", "imss", "impp2"):
         gate_map = {
-            "ib3":   ("b3",   "Braintree Auth"),
-            "ichk":  ("chk",  "Stripe Charge"),
-            "ipp":   ("pp",   "PayPal Charge"),
-            "ish":   ("sh",   "Shopify Charge"),
-            "ipyu":  ("pyu",  "PayU Charge"),
-            "iau":   ("au",   "Sᴛʀɪᴘᴇ Aᴜᴛʜ"),
-            "imss":  ("mss",  "Sᴛʀɪᴘᴇ Mᴀss"),
-            "impp2": ("mpp2", "PᴀʏPᴀʟ Mᴀss"),
+            "ib3":   ("b3",   "Braintree Auth",  0),
+            "ichk":  ("chk",  "Stripe Charge",   1),
+            "ipp":   ("pp",   "PayPal Charge",   1),
+            "ish":   ("sh",   "Shopify Charge",  1),
+            "ipyu":  ("pyu",  "PayU Charge",     1),
+            "iau":   ("au",   "Sᴛʀɪᴘᴇ Aᴜᴛʜ",    0),
+            "imss":  ("mss",  "Sᴛʀɪᴘᴇ Mᴀss",    0),
+            "impp2": ("mpp2", "PᴀʏPᴀʟ Mᴀss",    0),
         }
-        cmd, name = gate_map[data]
-        cost      = 0 if cmd in ("au", "mss", "mpp2", "b3") else 1
+        cmd, name, cost = gate_map[data]
         await edit(gate_info_text(name, cmd, cost), kb_back("mgates"))
-    # payment callbacks (owner flow)
+
     elif data.startswith("pay"):
         plan_map = {"pay10": ("CORE", 30), "pay15": ("ELITE", 30), "pay30": ("ROOT", 30)}
         plan, days = plan_map.get(data, ("CORE", 30))
         await edit(
-            f"[ 𖥷iТ ] ➺ Pᴜʀᴄʜᴀꜱᴇ {get_styled_plan(plan)}\n━━━━━━━━━━━━━━━━━\n"
-            f"Contact support with your user ID:\n<code>{user.id}</code>\n━━━━━━━━━━━━━━━━━",
+            "🦇 <b>Batman Card Checker</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            f"💎 <b>Pᴜʀᴄʜᴀꜱᴇ {get_styled_plan(plan)}</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "Contact support with your user ID:\n"
+            f"<code>{user.id}</code>\n"
+            "━━━━━━━━━━━━━━━━━",
             kb_payment())
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -930,35 +1192,36 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_application() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # ── User commands ────────────────────────────────────
+    # ── User commands ─────────────────────────────────
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("plan",    cmd_plan))
     app.add_handler(CommandHandler("refer",   cmd_refer))
 
-    # ── Free single-card gates ───────────────────────────
+    # ── Free single-card gates ────────────────────────
     app.add_handler(CommandHandler("chk",  cmd_chk))
     app.add_handler(CommandHandler("pp",   cmd_pp))
     app.add_handler(CommandHandler("sh",   cmd_sh))
     app.add_handler(CommandHandler("pyu",  cmd_pyu))
     app.add_handler(CommandHandler("b3",   cmd_b3))
 
-    # ── Premium mass gates (/au /mss /mpp2) + result buttons
+    # ── Premium mass gates + result buttons ───────────
     for handler in get_mass_handlers():
         app.add_handler(handler)
 
-    # ── Owner commands ────────────────────────────────────
+    # ── Owner commands ────────────────────────────────
     app.add_handler(CommandHandler("add",         cmd_add))
     app.add_handler(CommandHandler("remove",      cmd_remove))
+    app.add_handler(CommandHandler("info",        cmd_info))
     app.add_handler(CommandHandler("seturl",      cmd_seturl))
     app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
     app.add_handler(CommandHandler("maintenance", cmd_maintenance))
     app.add_handler(CommandHandler("gate",        cmd_gate_toggle))
     app.add_handler(CommandHandler("stats",       cmd_stats))
 
-    # ── Inline button callbacks ───────────────────────────
-    # result_ callbacks are already registered by get_mass_handlers()
+    # ── Inline button callbacks ───────────────────────
+    # result_ callbacks registered by get_mass_handlers() above
     app.add_handler(CallbackQueryHandler(cb_handler))
 
     return app
@@ -973,7 +1236,7 @@ async def main():
 
     app = build_application()
 
-    loop = asyncio.get_running_loop()
+    loop       = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
     def _sig_handler(*_):
@@ -989,7 +1252,7 @@ async def main():
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
         )
-        logger.info("Bot started. Waiting for updates...")
+        logger.info("🦇 Batman Card Checker — Bot started.")
         await stop_event.wait()
     except Conflict:
         logger.error("Telegram conflict: another bot instance is running with the same token.")
