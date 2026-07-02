@@ -5,7 +5,6 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BOT CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8032773834:AAEWbgMolss5toTzWd5zQe3KTUp3Zy2D5-k")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
@@ -24,14 +23,14 @@ SUPPORT_LINK     = "https://t.me/cardchkSupport"
 BOT_USERNAME  = "Batmanchk_bot"
 BOT_LINK      = "https://t.me/Batmanchk_bot"
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
-BOT_PHOTO     = "batman.jpg"
+BOT_PHOTO     = "batman.jpg"   # local file — place batman.jpg next to main.py
 
 API_TIMEOUT      = 120
 REFERRAL_CREDITS = 150
 LOCK_FILE        = "/tmp/batman_bot.lock"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE JOIN — channel & group (users MUST join both)
+# FORCE JOIN  (users must join both before using the bot)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FORCE_CHANNELS = [
     ("Batcardchk",      CHANNEL_LINK),
@@ -39,7 +38,7 @@ FORCE_CHANNELS = [
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GATES CONFIGURATION
+# GATE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
@@ -72,7 +71,7 @@ async def get_bin_info(bin_num: str) -> dict:
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as s:
             async with s.get(
-                f"https://lookup.binlist.net/{bin_num}",
+                f"https://lookup.binlist.net/{str(bin_num)[:6]}",
                 headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
             ) as r:
                 if r.status != 200:
@@ -97,12 +96,12 @@ async def get_bin_info(bin_num: str) -> dict:
         return {"error": True}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SHARED RESULT KEYBOARD
+# SHARED RESULT KEYBOARD  (kept for compatibility)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_result() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Channel",          url=CHANNEL_LINK),
-         InlineKeyboardButton("💬 Support",          url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🦇 CARD X CHK ➺",    url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🗡️ DEV ➺ Batman ➺",  url=DEV_LINK)],
+        [InlineKeyboardButton("Channel",          url=CHANNEL_LINK),
+         InlineKeyboardButton("Support",          url=SUPPORT_LINK)],
+        [InlineKeyboardButton("BatmanCardXChk",   url=CHANNEL_LINK)],
+        [InlineKeyboardButton("Dev — Batman",     url=DEV_LINK)],
     ])
