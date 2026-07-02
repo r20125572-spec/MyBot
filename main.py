@@ -25,6 +25,7 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
+from mass import get_mass_handlers  # <-- ADDED IMPORT FOR MASS HANDLERS
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -194,9 +195,6 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
 # FORCE SUBSCRIBE — SECURE SYSTEM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
-    """Returns list of (display_name, link) for channels/groups the user hasn't joined.
-    Owner is always exempt.
-    """
     if user_id == OWNER_ID:
         return []
     not_joined = []
@@ -206,7 +204,6 @@ async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> l
             if member.status in ("left", "kicked"):
                 not_joined.append((name, link))
         except Exception:
-            # If we can't verify (e.g. bot not admin), treat as not joined to stay safe
             not_joined.append((name, link))
     return not_joined
 
@@ -229,10 +226,6 @@ FORCE_SUB_TEXT = (
 )
 
 async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Returns True if the user passes force-join, False (and sends the join message) otherwise.
-    Use this at the top of every user-facing command.
-    """
     user_id    = update.effective_user.id
     not_joined = await check_force_sub(user_id, context)
     if not_joined:
@@ -424,7 +417,6 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(f"Gate [{gate_name}] is currently OFF.")
         return
 
-    # ── Force-join check ──────────────────────────────
     if not await require_membership(update, context):
         return
 
@@ -672,7 +664,7 @@ async def _grant(uid: int, plan: str, days: int,
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# USER COMMANDS  (all protected by require_membership)
+# USER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -682,7 +674,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud.setdefault("total_refs", 0)
     _update_user_meta(ud, user)
 
-    # Handle referral arg before gate check
     if context.args:
         arg = context.args[0]
         if arg.startswith("ref_"):
@@ -692,7 +683,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-    # ── Force-join gate ──────────────────────────────
     not_joined = await check_force_sub(user.id, context)
     if not_joined:
         await update.message.reply_text(
@@ -837,7 +827,6 @@ async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg  = update.message
     user = update.effective_user
 
-    # Force-join check for caption-triggered media handler
     if not await require_membership(update, context):
         return
 
@@ -1012,7 +1001,7 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
         pass
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# OWNER COMMANDS  (no force-join required)
+# OWNER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1489,7 +1478,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
-    # ── "Verify / I Joined" button ─────────────────────
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
@@ -1504,7 +1492,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         else:
-            # All joined — show profile
             try:
                 await query.answer("✅ Verified! Welcome.", show_alert=False)
             except Exception:
@@ -1730,6 +1717,10 @@ def main():
         ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2),
     ]:
         app.add_handler(CommandHandler(cmd, func))
+
+    # Register Mass Handlers (from mass.py)
+    for handler in get_mass_handlers():  # <-- ADDED MASS HANDLER REGISTRATION
+        app.add_handler(handler)
 
     app.add_handler(CallbackQueryHandler(callback_handler))
 
