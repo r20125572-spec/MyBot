@@ -25,7 +25,7 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
-from mass import get_mass_handlers  # Imports your mass.py file with file support
+from mass import get_mass_handlers   # /au  /mss  /mpp2  + result buttons
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -386,7 +386,8 @@ async def process_referral(new_user_id: int, referrer_id: int,
     return True
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GATE PROCESSING
+# GATE PROCESSING  (single-card gates only: chk pp sh pyu b3)
+# /au /mss /mpp2 are handled exclusively by mass.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _api_request(session, url: str, card: str, site: str) -> dict:
     if "{card}" in url:
@@ -412,7 +413,6 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(f"Gate [{gate_name}] is currently OFF.")
         return
 
-    # ── Force-join check ──────────────────────────────
     if not await require_membership(update, context):
         return
 
@@ -420,31 +420,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     premium = is_user_premium(ud)
     _update_user_meta(ud, user)
 
-    if gate_key in PREMIUM_GATES and not premium:
-        gate_label = {
-            "au":   "Stripe Auth (/au)",
-            "mss":  "Stripe Mass (/mss)",
-            "mpp2": "PayPal Mass (/mpp2)",
-        }.get(gate_key, gate_key.upper())
-        await update.message.reply_text(
-            f"[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"Gᴀᴛᴇ ➺ {gate_label}\n\n"
-            f"Fʀᴇᴇ Gᴀᴛᴇꜱ:\n"
-            f"/chk  ➺ Stripe Charge\n"
-            f"/pp   ➺ PayPal Charge\n"
-            f"/sh   ➺ Shopify Charge\n"
-            f"/pyu  ➺ PayU Charge\n"
-            f"/b3   ➺ Braintree Auth\n\n"
-            f"Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ:\n"
-            f"/au   ➺ Stripe Auth\n"
-            f"/mss  ➺ Stripe Mass\n"
-            f"/mpp2 ➺ PayPal Mass\n\n"
-            f"Pʀᴏ  ➺ Batman | /plan",
-            parse_mode="HTML", reply_markup=kb_upgrade(),
-        )
-        return
-
+    # card from inline args OR reply-to-text
     card_raw = None
     if context.args:
         card_raw = context.args[0].strip()
@@ -548,14 +524,14 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result(), disable_web_page_preview=True)
 
+# ── Single-card gate command wrappers ──────────────────
+# NOTE: /au /mss /mpp2 are intentionally NOT here — they are
+#       mass-checking commands registered exclusively from mass.py.
 async def cmd_chk(update, context):  await process_gate(update, context, "chk",  "Stripe Charge")
 async def cmd_pp(update, context):   await process_gate(update, context, "pp",   "PayPal Charge")
 async def cmd_sh(update, context):   await process_gate(update, context, "sh",   "Shopify Charge")
 async def cmd_pyu(update, context):  await process_gate(update, context, "pyu",  "PayU Charge")
 async def cmd_b3(update, context):   await process_gate(update, context, "b3",   "Braintree Auth")
-async def cmd_au(update, context):   await process_gate(update, context, "au",   "Stripe Auth")
-async def cmd_mss(update, context):  await process_gate(update, context, "mss",  "Stripe Mass")
-async def cmd_mpp2(update, context): await process_gate(update, context, "mpp2", "PayPal Mass")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PREMIUM ACTIVATION
@@ -643,4 +619,391 @@ async def _grant(uid: int, plan: str, days: int,
     receipt    = await send_activation_msg(uid, plan, days, context)
     uname_line = f"@{display_uname}" if display_uname else display_name
     exp_ts     = ud["expires"]
-    exp_date   = datetime.fromtimestamp(
+    exp_date   = datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d %H:%M")
+
+    await update.message.reply_text(
+        f"[ 𖥷iТ ] ➺ Gʀᴀɴᴛᴇᴅ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Uꜱᴇʀ    ➺ {uname_line}\n"
+        f"ID      ➺ <code>{uid}</code>\n"
+        f"Pʟᴀɴ    ➺ {get_styled_plan(plan)} 👑\n"
+        f"Dᴀʏꜱ    ➺ {days}\n"
+        f"Exᴘɪʀᴇꜱ ➺ {exp_date}\n"
+        f"Rᴇᴄᴇɪᴘᴛ ➺ <code>{receipt}</code>\n"
+        f"━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML",
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OWNER COMMANDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    args = context.args
+    if len(args) < 3:
+        await update.message.reply_text(
+            "Usage: /add <user_id|@username> <plan> <days>\n"
+            "Plans: CORE  ELITE  ROOT", parse_mode="HTML")
+        return
+    uid = await resolve_user(args[0], context)
+    if not uid:
+        await update.message.reply_text(f"User not found: {args[0]}")
+        return
+    plan = args[1].upper()
+    if plan not in ("CORE", "ELITE", "ROOT"):
+        await update.message.reply_text("Invalid plan. Use: CORE  ELITE  ROOT")
+        return
+    try:
+        days = int(args[2])
+    except ValueError:
+        await update.message.reply_text("Days must be an integer.")
+        return
+    await _grant(uid, plan, days, update, context)
+
+async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /remove <user_id|@username>")
+        return
+    uid = await resolve_user(context.args[0], context)
+    if not uid:
+        await update.message.reply_text(f"User not found: {context.args[0]}")
+        return
+    ud = get_user_data(uid, context)
+    ud["plan"]    = "TRIAL"
+    ud["expires"] = 0
+    await update.message.reply_text(
+        f"✅ Removed premium from <code>{uid}</code>.", parse_mode="HTML")
+
+async def cmd_seturl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /seturl <gate_key> <url>")
+        return
+    key = context.args[0].lower()
+    url = context.args[1]
+    context.bot_data[f"gate_url_{key}"] = url
+    await update.message.reply_text(f"✅ URL set for gate <code>{key}</code>.", parse_mode="HTML")
+
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /broadcast <message>")
+        return
+    text    = " ".join(context.args)
+    users   = context.bot_data.get("user_data", {})
+    sent    = 0
+    failed  = 0
+    for uid_str in users:
+        try:
+            await context.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+    await update.message.reply_text(f"✅ Sent: {sent}  ❌ Failed: {failed}")
+
+async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    current = context.bot_data.get("maintenance", False)
+    context.bot_data["maintenance"] = not current
+    state = "ON 🔴" if not current else "OFF 🟢"
+    await update.message.reply_text(f"Maintenance mode: {state}")
+
+async def cmd_gate_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner: /gate <key> on|off"""
+    if update.effective_user.id != OWNER_ID:
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /gate <gate_key> on|off")
+        return
+    key   = context.args[0].lower()
+    state = context.args[1].lower() == "on"
+    context.bot_data[f"{key}_on"] = state
+    await update.message.reply_text(
+        f"Gate <code>{key}</code> is now {'ON 🟢' if state else 'OFF 🔴'}.", parse_mode="HTML")
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    users = context.bot_data.get("user_data", {})
+    total = len(users)
+    premium = sum(
+        1 for ud in users.values()
+        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
+    )
+    await update.message.reply_text(
+        f"[ 𖥷iТ ] Stats\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Total users  ➺ {total}\n"
+        f"Premium      ➺ {premium}\n"
+        f"━━━━━━━━━━━━━━━━━",
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# USER COMMANDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ud   = get_user_data(user.id, context)
+    _update_user_meta(ud, user)
+
+    if context.args and context.args[0].startswith("ref_"):
+        try:
+            ref_id = int(context.args[0][4:])
+            await process_referral(user.id, ref_id, context)
+        except ValueError:
+            pass
+
+    text = (
+        f"[ 𖥷iТ ] Batman Card Checker\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Wᴇʟᴄᴏᴍᴇ, {user.first_name}!\n\n"
+        f"Tʜᴇ #𝟭 Cᴀʀᴅ Cʜᴇᴄᴋɪɴɢ Bᴏᴛ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Vᴇʀsɪᴏɴ ➺ {VERSION}\n"
+        f"Pʀᴏ     ➺ Batman"
+    )
+    await update.message.reply_text(text, reply_markup=kb_main(user.id))
+
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    _update_user_meta(get_user_data(user.id, context), user)
+    await update.message.reply_text(
+        ui_profile(user, context), parse_mode="HTML",
+        reply_markup=kb_back("bmain"), disable_web_page_preview=True)
+
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Pʟᴀɴꜱ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Cᴏʀᴇ  ➺ $10 / 30 days\n"
+        f"Eʟɪᴛᴇ ➺ $15 / 30 days\n"
+        f"Rᴏᴏᴛ  ➺ $30 / 30 days\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"All plans include unlimited credits.\n"
+        f"Contact support to purchase.",
+        reply_markup=kb_price(),
+    )
+
+async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    link = get_referral_link(user.id)
+    ud   = get_user_data(user.id, context)
+    await update.message.reply_text(
+        f"[ 𖥷iТ ] ➺ Rᴇꜰᴇʀ & Eᴀʀɴ\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"Yᴏᴜʀ Lɪɴᴋ ➺ {link}\n"
+        f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {ud.get('total_refs', 0)}\n"
+        f"Eᴀʀɴᴇᴅ   ➺ {ud.get('total_refs', 0) * REFERRAL_CREDITS} credits\n"
+        f"━━━━━━━━━━━━━━━━━",
+    )
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "[ 𖥷iТ ] ➺ Cᴏᴍᴍᴀɴᴅꜱ\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "<b>Free Gates:</b>\n"
+        "/chk cc|mm|yy|cvv  ➺ Stripe Charge\n"
+        "/pp  cc|mm|yy|cvv  ➺ PayPal Charge\n"
+        "/sh  cc|mm|yy|cvv  ➺ Shopify Charge\n"
+        "/pyu cc|mm|yy|cvv  ➺ PayU Charge\n"
+        "/b3  cc|mm|yy|cvv  ➺ Braintree Auth\n\n"
+        "<b>Premium Gates:</b>\n"
+        "/au  cc|mm|yy|cvv  ➺ Sᴛʀɪᴘᴇ Aᴜᴛʜ (mass + file)\n"
+        "/mss cc|mm|yy|cvv  ➺ Sᴛʀɪᴘᴇ Mᴀss (mass + file)\n"
+        "/mpp2 cc|mm|yy|cvv ➺ PᴀʏPᴀʟ Mᴀss (mass + file)\n\n"
+        "<b>File support (premium):</b>\n"
+        "Upload a .txt file → send /au /mss /mpp2 as caption,\n"
+        "OR reply to a file with the command.\n\n"
+        "<b>Other:</b>\n"
+        "/profile  ➺ Your profile\n"
+        "/plan     ➺ Buy premium\n"
+        "/refer    ➺ Refer & earn\n"
+        "━━━━━━━━━━━━━━━━━"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CALLBACK QUERY HANDLER (inline buttons)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+    user  = query.from_user
+
+    async def edit(text: str, kb=None, **kw):
+        try:
+            await query.edit_message_text(
+                text, parse_mode="HTML", reply_markup=kb,
+                disable_web_page_preview=True, **kw)
+        except BadRequest:
+            pass
+
+    if data == "bmain":
+        text = (
+            f"[ 𖥷iТ ] Batman Card Checker\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"Wᴇʟᴄᴏᴍᴇ, {user.first_name}!\n\n"
+            f"Tʜᴇ #𝟭 Cᴀʀᴅ Cʜᴇᴄᴋɪɴɢ Bᴏᴛ\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"Vᴇʀsɪᴏɴ ➺ {VERSION}\n"
+            f"Pʀᴏ     ➺ Batman"
+        )
+        await edit(text, kb_main(user.id))
+    elif data == "mgates":
+        await edit(
+            "[ 𖥷iТ ] ➺ Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ\n━━━━━━━━━━━━━━━━━",
+            kb_gate_main())
+    elif data == "mauth":
+        await edit(
+            "[ 𖥷iТ ] ➺ Aᴜᴛʜ Gᴀᴛᴇꜱ\n━━━━━━━━━━━━━━━━━\n/b3 ➺ Braintree Auth",
+            kb_auth_gates())
+    elif data == "mcharge":
+        await edit(
+            "[ 𖥷iТ ] ➺ Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ\n━━━━━━━━━━━━━━━━━\n"
+            "/chk ➺ Stripe  /pp ➺ PayPal\n/sh ➺ Shopify  /pyu ➺ PayU",
+            kb_charge_gates())
+    elif data == "mmass":
+        await edit(
+            "[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇꜱ\n━━━━━━━━━━━━━━━━━\n"
+            "/au   ➺ Sᴛʀɪᴘᴇ Aᴜᴛʜ\n"
+            "/mss  ➺ Sᴛʀɪᴘᴇ Mᴀss\n"
+            "/mpp2 ➺ PᴀʏPᴀʟ Mᴀss\n\n"
+            "Supports file upload + reply-to-file.",
+            kb_premium_gates())
+    elif data == "mprice":
+        await edit(
+            "[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Pʟᴀɴꜱ\n━━━━━━━━━━━━━━━━━\n"
+            "Cᴏʀᴇ  ➺ $10 / 30 days\n"
+            "Eʟɪᴛᴇ ➺ $15 / 30 days\n"
+            "Rᴏᴏᴛ  ➺ $30 / 30 days\n━━━━━━━━━━━━━━━━━\n"
+            "Contact support to purchase.",
+            kb_price())
+    elif data == "mrefer":
+        link = get_referral_link(user.id)
+        ud   = get_user_data(user.id, context)
+        await edit(
+            f"[ 𖥷iТ ] ➺ Rᴇꜰᴇʀ & Eᴀʀɴ\n━━━━━━━━━━━━━━━━━\n"
+            f"Yᴏᴜʀ Lɪɴᴋ ➺ {link}\n"
+            f"Rᴇꜰᴇʀʀᴀʟꜱ ➺ {ud.get('total_refs', 0)}\n━━━━━━━━━━━━━━━━━",
+            kb_back("bmain"))
+    elif data == "check_sub":
+        not_joined = await check_force_sub(user.id, context)
+        if not_joined:
+            await query.answer("Please join all channels first!", show_alert=True)
+        else:
+            await edit(
+                "[ 𖥷iТ ] ➺ Vᴇʀɪꜰɪᴇᴅ ✅\nYou are now subscribed. Use /start.",
+                kb_main(user.id))
+    elif data in ("ib3", "ichk", "ipp", "ish", "ipyu", "iau", "imss", "impp2"):
+        gate_map = {
+            "ib3":   ("b3",   "Braintree Auth"),
+            "ichk":  ("chk",  "Stripe Charge"),
+            "ipp":   ("pp",   "PayPal Charge"),
+            "ish":   ("sh",   "Shopify Charge"),
+            "ipyu":  ("pyu",  "PayU Charge"),
+            "iau":   ("au",   "Sᴛʀɪᴘᴇ Aᴜᴛʜ"),
+            "imss":  ("mss",  "Sᴛʀɪᴘᴇ Mᴀss"),
+            "impp2": ("mpp2", "PᴀʏPᴀʟ Mᴀss"),
+        }
+        cmd, name = gate_map[data]
+        cost      = 0 if cmd in ("au", "mss", "mpp2", "b3") else 1
+        await edit(gate_info_text(name, cmd, cost), kb_back("mgates"))
+    # payment callbacks (owner flow)
+    elif data.startswith("pay"):
+        plan_map = {"pay10": ("CORE", 30), "pay15": ("ELITE", 30), "pay30": ("ROOT", 30)}
+        plan, days = plan_map.get(data, ("CORE", 30))
+        await edit(
+            f"[ 𖥷iТ ] ➺ Pᴜʀᴄʜᴀꜱᴇ {get_styled_plan(plan)}\n━━━━━━━━━━━━━━━━━\n"
+            f"Contact support with your user ID:\n<code>{user.id}</code>\n━━━━━━━━━━━━━━━━━",
+            kb_payment())
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# APPLICATION SETUP
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def build_application() -> Application:
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # ── User commands ────────────────────────────────────
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("profile", cmd_profile))
+    app.add_handler(CommandHandler("plan",    cmd_plan))
+    app.add_handler(CommandHandler("refer",   cmd_refer))
+
+    # ── Free single-card gates ───────────────────────────
+    app.add_handler(CommandHandler("chk",  cmd_chk))
+    app.add_handler(CommandHandler("pp",   cmd_pp))
+    app.add_handler(CommandHandler("sh",   cmd_sh))
+    app.add_handler(CommandHandler("pyu",  cmd_pyu))
+    app.add_handler(CommandHandler("b3",   cmd_b3))
+
+    # ── Premium mass gates (/au /mss /mpp2) + result buttons
+    for handler in get_mass_handlers():
+        app.add_handler(handler)
+
+    # ── Owner commands ────────────────────────────────────
+    app.add_handler(CommandHandler("add",         cmd_add))
+    app.add_handler(CommandHandler("remove",      cmd_remove))
+    app.add_handler(CommandHandler("seturl",      cmd_seturl))
+    app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
+    app.add_handler(CommandHandler("maintenance", cmd_maintenance))
+    app.add_handler(CommandHandler("gate",        cmd_gate_toggle))
+    app.add_handler(CommandHandler("stats",       cmd_stats))
+
+    # ── Inline button callbacks ───────────────────────────
+    # result_ callbacks are already registered by get_mass_handlers()
+    app.add_handler(CallbackQueryHandler(cb_handler))
+
+    return app
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ENTRY POINT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def main():
+    if not acquire_instance_lock():
+        logger.error("Another instance is already running. Exiting.")
+        return
+
+    app = build_application()
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _sig_handler(*_):
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _sig_handler)
+
+    try:
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+        logger.info("Bot started. Waiting for updates...")
+        await stop_event.wait()
+    except Conflict:
+        logger.error("Telegram conflict: another bot instance is running with the same token.")
+    except NetworkError as e:
+        logger.error(f"Network error: {e}")
+    finally:
+        try:
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+        except Exception:
+            pass
+        release_instance_lock()
+        logger.info("Bot stopped.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
