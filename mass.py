@@ -81,17 +81,32 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
 
 async def extract_cards_from_update(update: Update, bot) -> list | None:
     msg = update.message
-    if update.args: return parse_cards(" ".join(update.args))
+    
+    # 1. Direct text after command: /msh cc|mm|yy|cvv
+    if update.args:
+        return parse_cards(" ".join(update.args))
+    
+    # 2. Reply to a text message containing cards
     if msg.reply_to_message:
         replied = msg.reply_to_message
-        if replied.text and replied.text.strip(): return parse_cards(replied.text)
+        if replied.text and replied.text.strip():
+            return parse_cards(replied.text)
+        # 3. Reply to a file document containing cards (.txt)
         if replied.document and replied.document.file_id:
             content = await _download_file_cards(bot, replied.document.file_id)
-            if content: return parse_cards(content)
+            if content:
+                return parse_cards(content)
+
+    # 4. Direct file sent (user sent file with command as caption)
     if msg.document and msg.document.file_id:
         content = await _download_file_cards(bot, msg.document.file_id)
-        if content: return parse_cards(content)
-    if msg.text and msg.text.strip() and not msg.text.startswith('/'): return parse_cards(msg.text)
+        if content:
+            return parse_cards(content)
+
+    # 5. Message text (if command was in message without args)
+    if msg.text and msg.text.strip() and not msg.text.startswith('/'):
+        return parse_cards(msg.text)
+
     return None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -142,12 +157,15 @@ async def check_single_shopify_card(session: aiohttp.ClientSession, card: str, s
                 try: data = await resp.json(content_type=None)
                 except Exception: data = {"Response": await resp.text(), "Status": "false"}
                 if not isinstance(data, dict): data = {"Response": str(data), "Status": "false"}
+                
                 response_text = str(data.get("Response", "ERROR"))
                 status = str(data.get("Status", "false")).lower()
+                
                 if status == "true" or "approved" in response_text.lower(): card_status = "approved"
                 elif "3ds" in response_text.lower() or "3d secure" in response_text.lower(): card_status = "3ds"
                 elif "charged" in response_text.lower() or "captured" in response_text.lower(): card_status = "charged"
                 else: card_status = "dead"
+                
                 return {"card": card, "gateway": data.get("Gateway", "N/A"), "price": data.get("Price", "N/A"), "response": response_text, "status": status, "card_status": card_status, "error": None}
         except asyncio.TimeoutError: return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e: return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
@@ -155,11 +173,14 @@ async def check_single_shopify_card(session: aiohttp.ClientSession, card: str, s
 async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("msh_on", True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML"); return
+
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
-        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ, ᴏʀ ᴜꜱᴇ:\n• <code>/msh cc|mm|yy|cvv</code>\n• Reply to a .txt file with /msh", parse_mode="HTML"); return
+        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ ᴡɪᴛʜ ᴄᴀʀᴅꜱ, ᴏʀ ᴜꜱᴇ:\n• <code>/msh cc|mm|yy|cvv</code>\n• Reply to a .txt file with /msh\n• Send a .txt file with /msh as caption", parse_mode="HTML"); return
+
     if len(cards) > MAX_CARDS:
         await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ. Yᴏᴜ ꜱᴇɴᴛ: {len(cards)}", parse_mode="HTML"); return
+
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
         await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML"); return
@@ -189,9 +210,17 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data[f"msh_results_{update.effective_user.id}"] = {"parsed": parsed, "approved": approved_list, "charged": charged_list, "threeds": threeds_list, "dead": dead_list, "error": error_list, "gate": SH_GATE_NAME, "total": len(parsed)}
 
     lines = [
-        f"[₪] Gᴀᴛᴇ ➺ {SH_GATE_NAME} | 0-5 Usd ", "━━━━━━━━━━━━━━",
-        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅", f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}", "━━━━━━━━━━━━━━",
-        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅", f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎", f"3ᴅs ➺ {len(threeds_list)} 🔐", f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌", f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️", f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
+        f"[₪] Gᴀᴛᴇ ➺ {SH_GATE_NAME} | 0-5 Usd ",
+        "━━━━━━━━━━━━━━",
+        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
+        f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
+        "━━━━━━━━━━━━━━",
+        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅",
+        f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎",
+        f"3ᴅs ➺ {len(threeds_list)} 🔐",
+        f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌",
+        f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️",
+        f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
     ]
     await msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=create_result_buttons())
 
@@ -209,10 +238,12 @@ async def check_single_stripe_card(session: aiohttp.ClientSession, card: str, se
                 raw_response = str(data.get("response", "NO RESPONSE"))
                 raw_response = re.sub(r'https?://\S+', '', raw_response).strip()
                 if not raw_response: raw_response = "NO RESPONSE"
+                
                 if "approved" in raw_response.lower(): card_status = "approved"
                 elif "3ds" in raw_response.lower() or "3d secure" in raw_response.lower(): card_status = "3ds"
                 elif "charged" in raw_response.lower() or "captured" in raw_response.lower(): card_status = "charged"
                 else: card_status = "dead"
+                
                 return {"card": card, "response": raw_response, "status": "true" if "approved" in raw_response.lower() else "false", "card_status": card_status, "error": None}
         except asyncio.TimeoutError: return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e: return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
@@ -220,9 +251,10 @@ async def check_single_stripe_card(session: aiohttp.ClientSession, card: str, se
 async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("mchk_on", True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML"); return
+
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
-        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ, ᴏʀ ᴜꜱᴇ <code>/mchk cc|mm|yy|cvv</code>", parse_mode="HTML"); return
+        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ, ᴏʀ ᴜꜱᴇ <code>/mchk cc|mm|yy|cvv</code>\n• Reply to a .txt file with /mchk\n• Send a .txt file with /mchk as caption", parse_mode="HTML"); return
     if len(cards) > MAX_CARDS:
         await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ.", parse_mode="HTML"); return
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
@@ -230,6 +262,7 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML"); return
 
     msg = await update.message.reply_text(f"[₪] Gᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ | 0$ Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
+
     semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
 
@@ -247,9 +280,17 @@ async def cmd_mchk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data[f"mchk_results_{update.effective_user.id}"] = {"parsed": parsed, "approved": approved_list, "charged": charged_list, "threeds": threeds_list, "dead": dead_list, "error": error_list, "gate": "Sᴛʀɪᴘᴇ", "total": len(parsed)}
 
     lines = [
-        f"[₪] Gᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ | 0$ Usd ", "━━━━━━━━━━━━━━",
-        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅", f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}", "━━━━━━━━━━━━━━",
-        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅", f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎", f"3ᴅs ➺ {len(threeds_list)} 🔐", f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌", f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️", f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
+        f"[₪] Gᴀᴛᴇ ➺ Sᴛʀɪᴘᴇ | 0$ Usd ",
+        "━━━━━━━━━━━━━━",
+        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
+        f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
+        "━━━━━━━━━━━━━━",
+        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅",
+        f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎",
+        f"3ᴅs ➺ {len(threeds_list)} 🔐",
+        f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌",
+        f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️",
+        f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
     ]
     await msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=create_result_buttons())
 
@@ -269,10 +310,12 @@ async def check_single_pp_card(session: aiohttp.ClientSession, card: str, semaph
                 raw = message or "NO RESPONSE"
                 raw = re.sub(r'https?://\S+', '', raw).strip()
                 if not raw: raw = "NO RESPONSE"
+                
                 if status == "approved": card_status = "approved"
                 elif "3ds" in raw.lower() or "3d secure" in raw.lower(): card_status = "3ds"
                 elif "charged" in raw.lower() or "captured" in raw.lower(): card_status = "charged"
                 else: card_status = "dead"
+                
                 return {"card": card, "response": raw, "status": "true" if status == "approved" else "false", "card_status": card_status, "error": None}
         except asyncio.TimeoutError: return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e: return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
@@ -280,9 +323,10 @@ async def check_single_pp_card(session: aiohttp.ClientSession, card: str, semaph
 async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("mpp_on", True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML"); return
+
     cards = await extract_cards_from_update(update, context.bot)
     if not cards:
-        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ, ᴏʀ ᴜꜱᴇ <code>/mpp cc|mm|yy|cvv</code>", parse_mode="HTML"); return
+        await update.message.reply_text("⚠️ Uꜱᴀɢᴇ: Rᴇᴘʟʏ ᴛᴏ ᴀ ᴛᴇxᴛ ᴏʀ ꜰɪʟᴇ, ᴏʀ ᴜꜱᴇ <code>/mpp cc|mm|yy|cvv</code>\n• Reply to a .txt file with /mpp\n• Send a .txt file with /mpp as caption", parse_mode="HTML"); return
     if len(cards) > MAX_CARDS:
         await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ.", parse_mode="HTML"); return
     if not await deduct_credits(context, update.effective_user.id, len(cards)):
@@ -290,6 +334,7 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML"); return
 
     msg = await update.message.reply_text(f"[₪] Gᴀᴛᴇ ➺ {PP_GATE_NAME} | 0.10$ Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
+
     semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
 
@@ -307,9 +352,17 @@ async def cmd_mpp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data[f"mpp_results_{update.effective_user.id}"] = {"parsed": parsed, "approved": approved_list, "charged": charged_list, "threeds": threeds_list, "dead": dead_list, "error": error_list, "gate": PP_GATE_NAME, "total": len(parsed)}
 
     lines = [
-        f"[₪] Gᴀᴛᴇ ➺ {PP_GATE_NAME} | 0.10$ Usd ", "━━━━━━━━━━━━━━",
-        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅", f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}", "━━━━━━━━━━━━━━",
-        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅", f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎", f"3ᴅs ➺ {len(threeds_list)} 🔐", f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌", f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️", f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
+        f"[₪] Gᴀᴛᴇ ➺ {PP_GATE_NAME} | 0.10$ Usd ",
+        "━━━━━━━━━━━━━━",
+        f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
+        f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
+        "━━━━━━━━━━━━━━",
+        f"♘ Aᴘᴘʀᴏᴠᴇᴅ ➺ {len(approved_list)} ✅",
+        f"♞ Cʜᴀʀɢᴇᴅ ➺ {len(charged_list)} 💎",
+        f"3ᴅs ➺ {len(threeds_list)} 🔐",
+        f"Dᴇᴀᴅ ➺ {len(dead_list)} ❌",
+        f"Eʀʀᴏʀs ➺ {len(error_list)} ⚠️",
+        f"Tɪᴍᴇ ➺ {time.time() - start_time:.1f}s",
     ]
     await msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=create_result_buttons())
 
