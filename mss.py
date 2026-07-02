@@ -40,7 +40,6 @@ PP_TIMEOUT = API_TIMEOUT
 # 🦇 LOAD PROXIES & SITES FROM .TXT FILES (OR USE DEFAULTS)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def load_list_from_file(filename: str, default_list: list) -> list:
-    """Reads a text file line by line and returns a list. Falls back to default if file missing."""
     if os.path.exists(filename):
         with open(filename, 'r', encoding='utf-8') as f:
             items = [line.strip() for line in f if line.strip()]
@@ -48,7 +47,6 @@ def load_list_from_file(filename: str, default_list: list) -> list:
                 return items
     return default_list
 
-# It will automatically read from proxies.txt and sites.txt if they exist!
 PROXIES = load_list_from_file("proxies.txt", [
     "http://purevpn0s12153504:1LTpwxbCJbEdXo@px041202.pointtoserver.com:10780",
 ])
@@ -76,10 +74,8 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
         file = await bot.get_file(file_id)
         content = await file.download_as_bytearray()
         if content:
-            try:
-                return content.decode("utf-8", errors="ignore")
-            except:
-                return content.decode("latin-1", errors="ignore")
+            try: return content.decode("utf-8", errors="ignore")
+            except: return content.decode("latin-1", errors="ignore")
         return None
     except Exception as e:
         print(f"Download error: {e}")
@@ -195,7 +191,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
         await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML"); return
 
-    # Load proxies and sites dynamically on each run to catch new additions
     dynamic_proxies = load_list_from_file("proxies.txt", PROXIES)
     dynamic_sites = load_list_from_file("sites.txt", SITES)
 
