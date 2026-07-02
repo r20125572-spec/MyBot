@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import time
 import re
+import os
 from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes, CallbackQueryHandler
@@ -35,33 +36,42 @@ PP_NEW_API = "https://paypal0-1.onrender.com/pp1/cc={card}"
 PP_GATE_NAME = "PᴀʏPᴀʟ"
 PP_TIMEOUT = API_TIMEOUT
 
-PROXIES = [
-    "http://purevpn0s12153504:1LTpwxbCJbEdXo@px041202.pointtoserver.com:10780",
-]
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦇 LOAD PROXIES & SITES FROM .TXT FILES (OR USE DEFAULTS)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def load_list_from_file(filename: str, default_list: list) -> list:
+    """Reads a text file line by line and returns a list. Falls back to default if file missing."""
+    if os.path.exists(filename):
+        with open(filename, 'r', encoding='utf-8') as f:
+            items = [line.strip() for line in f if line.strip()]
+            if items:
+                return items
+    return default_list
 
-SITES = [
+# It will automatically read from proxies.txt and sites.txt if they exist!
+PROXIES = load_list_from_file("proxies.txt", [
+    "http://purevpn0s12153504:1LTpwxbCJbEdXo@px041202.pointtoserver.com:10780",
+])
+
+SITES = load_list_from_file("sites.txt", [
     "https://powerbuild.store",
-]
+])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FILE & CARD PARSING UTILITIES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def parse_cards(text: str) -> list:
-    """Extracts valid card patterns from messy text."""
     cards = []
-    # Regex to match 13-19 digits, followed by separators and MM|YY|CVV
-    # Also matches plain 13-19 digit numbers
     pattern = r'\b(\d{13,19})\s*[^a-zA-Z0-9\n]?\s*(\d{1,2})\s*[^a-zA-Z0-9\n]?\s*(\d{2,4})\s*[^a-zA-Z0-9\n]?\s*(\d{3,4})\b|\b(\d{13,19})\b'
     matches = re.findall(pattern, text)
     for match in matches:
-        if match[0]: # Full match with date
+        if match[0]: 
             cards.append(f"{match[0]}|{match[1]}|{match[2]}|{match[3]}")
-        elif match[4]: # Plain card number
+        elif match[4]: 
             cards.append(match[4])
     return cards
 
 async def _download_file_cards(bot, file_id: str) -> str | None:
-    """Download a text file from Telegram and return its content as string."""
     try:
         file = await bot.get_file(file_id)
         content = await file.download_as_bytearray()
@@ -76,20 +86,11 @@ async def _download_file_cards(bot, file_id: str) -> str | None:
         return None
 
 async def extract_cards_from_update(update: Update, bot) -> list | None:
-    """
-    Extract cards from:
-    1. Direct text after command: /msh cc|mm|yy|cvv
-    2. Reply to a text message containing cards
-    3. Reply to a file document containing cards (.txt)
-    4. Send a file directly as document (with command as caption)
-    """
     msg = update.message
     
-    # 1. Direct text after command
     if update.args:
         return parse_cards(" ".join(update.args))
     
-    # 2. Reply to message (text or file)
     if msg.reply_to_message:
         replied = msg.reply_to_message
         if replied.text and replied.text.strip():
@@ -99,13 +100,11 @@ async def extract_cards_from_update(update: Update, bot) -> list | None:
             if content:
                 return parse_cards(content)
 
-    # 3. Direct file sent (user sent file with command as caption)
     if msg.document and msg.document.file_id:
         content = await _download_file_cards(bot, msg.document.file_id)
         if content:
             return parse_cards(content)
 
-    # 4. Message text (if command was in message without args)
     if msg.text and msg.text.strip() and not msg.text.startswith('/'):
         return parse_cards(msg.text)
 
@@ -145,7 +144,6 @@ async def deduct_credits(context: ContextTypes.DEFAULT_TYPE, user_id: int, amoun
     return True
 
 def create_result_buttons() -> InlineKeyboardMarkup:
-    """Create the 4 action buttons for result"""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ LIVE", callback_data="result_live"),
@@ -197,9 +195,14 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data = context.bot_data.get("user_data", {}).get(str(update.effective_user.id), {})
         await update.message.reply_text(f"❌ Nᴇᴇᴅ {len(cards)} ᴄʀᴇᴅɪᴛꜱ, ʜᴀᴠᴇ {user_data.get('credits', 0)}.", parse_mode="HTML"); return
 
-    rotator = ProxyRotator(PROXIES)
-    sites = SITES if SITES else ["https://powerbuild.store"]
-    msg = await update.message.reply_text(f"[₪] Gᴀᴛᴇ ➺ {SH_GATE_NAME} | 0-5 Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
+    # Load proxies and sites dynamically on each run to catch new additions
+    dynamic_proxies = load_list_from_file("proxies.txt", PROXIES)
+    dynamic_sites = load_list_from_file("sites.txt", SITES)
+
+    rotator = ProxyRotator(dynamic_proxies)
+    sites = dynamic_sites if dynamic_sites else ["https://powerbuild.store"]
+    proxy_info = f"Pʀᴏxɪᴇꜱ ➺ {rotator.count()}" + (" (Nᴏɴᴇ)" if not dynamic_proxies else "")
+    msg = await update.message.reply_text(f"[₪] Gᴀᴛᴇ ➺ {SH_GATE_NAME} | 0-5 Usd \n━━━━━━━━━━━━━━\n      [◈] Sᴛᴀᴛᴜs ➺ Sᴛᴀʀᴛɪɴɢ...\n━━━━━━━━━━━━━━\n📊 Cᴀʀᴅꜱ ➺ {len(cards)}\n{proxy_info}\n🌐 Sɪᴛᴇꜱ ➺ {len(sites)}\n━━━━━━━━━━━━━━━━━━━━\n⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...", parse_mode="HTML")
 
     semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
@@ -382,7 +385,6 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     user_id = query.from_user.id
     
-    # Find which mass result key exists for this user
     data_key = None
     for prefix in ["msh", "mchk", "mpp"]:
         key = f"{prefix}_results_{user_id}"
