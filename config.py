@@ -23,14 +23,14 @@ SUPPORT_LINK     = "https://t.me/cardchkSupport"
 BOT_USERNAME  = "Batmanchk_bot"
 BOT_LINK      = "https://t.me/Batmanchk_bot"
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
-BOT_PHOTO     = "batman.jpg"   # local file — place batman.jpg next to main.py
+BOT_PHOTO     = "batman.jpg" 
 
 API_TIMEOUT      = 120
 REFERRAL_CREDITS = 150
 LOCK_FILE        = "/tmp/batman_bot.lock"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE JOIN  (users must join both before using the bot)
+# FORCE JOIN  
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FORCE_CHANNELS = [
     ("Batcardchk",      CHANNEL_LINK),
@@ -96,12 +96,14 @@ async def get_bin_info(bin_num: str) -> dict:
         return {"error": True}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SHARED RESULT KEYBOARD  (kept for compatibility)
+# SHARED RESULT KEYBOARD  (Dynamic based on Premium)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def kb_result() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Channel",          url=CHANNEL_LINK),
-         InlineKeyboardButton("Support",          url=SUPPORT_LINK)],
-        [InlineKeyboardButton("BatmanCardXChk",   url=CHANNEL_LINK)],
-        [InlineKeyboardButton("Dev — Batman",     url=DEV_LINK)],
-    ])
+def kb_result(is_premium: bool = False) -> InlineKeyboardMarkup:
+    if is_premium:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("Batcardchk", url=CHANNEL_LINK)],
+        ])
+    else:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")],
+        ])
