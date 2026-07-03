@@ -139,13 +139,16 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
                     try: data = await resp.json(content_type=None)
                     except Exception: data = {"response": await resp.text(), "status": "false"}
             if not isinstance(data, dict): data = {"Response": str(data), "Status": "false"}
+            
             response_text = str(data.get("Response") or data.get("response") or data.get("message") or "ERROR").strip()
             status = str(data.get("Status") or data.get("status") or "false").lower()
             resp_lower = response_text.lower()
+            
             if status == "true" or "approved" in resp_lower: card_status = "approved"
             elif "3ds" in resp_lower or "3d secure" in resp_lower: card_status = "3ds"
             elif "charged" in resp_lower or "captured" in resp_lower: card_status = "charged"
             else: card_status = "dead"
+            
             return {"card": card, "response": response_text, "status": status, "card_status": card_status, "error": None}
         except asyncio.TimeoutError:
             return {"card": card, "error": "TIMEOUT", "response": "TIMEOUT", "status": "false", "card_status": "dead"}
@@ -155,7 +158,6 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
 async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_key: str):
     cfg = GATE_CONFIG[gate_key]
     gate_name = cfg["name"]
-    
     user_id = update.effective_user.id
     
     # Force Sub Check
@@ -169,7 +171,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         if not_joined:
             rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
             rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
-            await update.message.reply_text("<b>[ 𖥷 вт ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\nJoin channels to use mass check.\n━━━━━━━━━━━━━━━━━", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+            await update.message.reply_text("<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\nJoin channels to use mass check.\n━━━━━━━━━━━━━━━━━", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
             return
 
     # Premium Check
@@ -220,6 +222,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     error_list    = [r for r in parsed if r.get("error")]
     elapsed = time.time() - start_time
 
+    # Save results
     context.bot_data[f"mass_results_{user_id}_{gate_key}"] = {
         "parsed": parsed, "approved": approved_list, "charged": charged_list,
         "threeds": threeds_list, "dead": dead_list, "error": error_list,
@@ -256,43 +259,70 @@ async def cmd_au(update, context):   await process_mass(update, context, "au")
 async def cmd_mss(update, context):  await process_mass(update, context, "mss")
 async def cmd_mpp2(update, context): await process_mass(update, context, "mpp2")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MASS CALLBACK HANDLER (FIXED TO SEND .TXT FILES)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer("Generating file...", show_alert=False)
     user_id = query.from_user.id
+    
+    # 1. Find the stored results for this user
     result_key = context.bot_data.get(f"last_mass_{user_id}")
     if not result_key or result_key not in context.bot_data:
-        for k in context.bot_data:
-            if k.startswith(f"mass_results_{user_id}_"): result_key = k; break
-    if not result_key:
-        await query.answer("Results expired.", show_alert=True); return
+        await query.answer("⚠️ Results expired. Run the check again.", show_alert=True)
+        return
 
-    results, action = context.bot_data[result_key], query.data
+    results = context.bot_data[result_key]
+    action = query.data
+    file_name = f"MASS_RESULT_{user_id}.txt"
+    caption = ""
+    
+    # 2. Handle ALL button (Sends card + full response)
+    if action == "result_all":
+        parsed = results.get("parsed", [])
+        if not parsed:
+            await query.answer("No results found.", show_alert=True)
+            return
+        lines = []
+        for r in parsed:
+            card = r.get("card", "N/A")
+            status = r.get("card_status", "N/A").upper()
+            resp = r.get("error") if r.get("error") else r.get("response", "N/A")
+            lines.append(f"Card: {card}\nStatus: {status}\nResponse: {resp}\n{'-'*30}")
+        
+        file_content = "\n".join(lines)
+        caption = f"📦 All Results ({len(parsed)} total) - @Batcardchk"
+        file_name = f"ALL_{user_id}.txt"
+        
+        bio = BytesIO(file_content.encode("utf-8"))
+        bio.name = file_name
+        await context.bot.send_document(chat_id=query.message.chat_id, document=bio, filename=file_name, caption=caption)
+        return
+
+    # 3. Handle LIVE, 3DS, CHARGE buttons (Sends ONLY the card numbers)
     if action == "result_live":
         cards_out = results.get("approved", [])
-        file_content = "\n".join(r["card"] for r in cards_out) if cards_out else "No approved cards found."
-        caption = f"✅ LIVE Cards — {results.get('gate', '')} ({len(cards_out)} cards)"
+        caption = f"✅ LIVE Cards ({len(cards_out)} found) - @Batcardchk"
         file_name = f"LIVE_{user_id}.txt"
     elif action == "result_3ds":
         cards_out = results.get("threeds", [])
-        file_content = "\n".join(r["card"] for r in cards_out) if cards_out else "No 3DS cards found."
-        caption = f"🔐 3DS Cards — {results.get('gate', '')} ({len(cards_out)} cards)"
+        caption = f"🔐 3DS Cards ({len(cards_out)} found) - @Batcardchk"
         file_name = f"3DS_{user_id}.txt"
     elif action == "result_charge":
         cards_out = results.get("charged", [])
-        file_content = "\n".join(r["card"] for r in cards_out) if cards_out else "No charged cards found."
-        caption = f"💎 Charged Cards — {results.get('gate', '')} ({len(cards_out)} cards)"
-        file_name = f"CHARGE_{user_id}.txt"
-    elif action == "result_all":
-        parsed = results.get("parsed", [])
-        if parsed:
-            lines = [f"Card: {r.get('card', 'N/A')}\nStatus: {r.get('card_status', 'N/A').upper()}\nResponse: {r.get('error') if r.get('error') else r.get('response', 'N/A')}\n{'-'*30}" for r in parsed]
-            file_content = "\n".join(lines)
-        else: file_content = "No cards processed."
-        caption = f"📦 All Results — {results.get('gate', '')} ({results.get('total', 0)} cards)"
-        file_name = f"ALL_{user_id}.txt"
-    else: return
+        caption = f"💎 Charged Cards ({len(cards_out)} found) - @Batcardchk"
+        file_name = f"CHARGED_{user_id}.txt"
+    else:
+        return
 
+    if not cards_out:
+        await query.answer(f"No cards found for this category.", show_alert=True)
+        return
+
+    # Create file with just the raw card numbers separated by newlines
+    file_content = "\n".join(r["card"] for r in cards_out)
+    
     bio = BytesIO(file_content.encode("utf-8"))
     bio.name = file_name
     await context.bot.send_document(chat_id=query.message.chat_id, document=bio, filename=file_name, caption=caption)
