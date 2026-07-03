@@ -22,7 +22,7 @@ SUPPORT_LINK     = "https://t.me/cardchkSupport"
 
 BOT_USERNAME  = "Batmanchk_bot"
 BOT_LINK      = "https://t.me/Batmanchk_bot"
-BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/cd1a58d5-1a85-4246-8dac-dae333b02023.jpg"
+BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/baac90d1-06d0-478f-8989-5bef9cbfc9fb.jpg"
 BOT_PHOTO     = "batman.jpg" 
 
 API_TIMEOUT      = 120
