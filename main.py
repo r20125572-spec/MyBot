@@ -25,21 +25,19 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info,
 )
+from mass import get_mass_handlers  # <-- ADDED BACK! THIS MAKES MASS COMMANDS WORK
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# INSTANCE LOCK
+# INSTANCE LOCK (PREVENTS RAILWAY DUPLICATE CRASHES)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _lock_file_handle = None
 
@@ -92,14 +90,11 @@ def get_styled_plan(raw_plan: str) -> str:
     return "Tʀɪᴀʟ"
 
 def get_plan_icon(raw_plan: str) -> str:
-    p = raw_plan.upper()
-    if p in ("CORE", "ELITE", "ROOT"): return "👑"
-    return ""
+    return "👑" if raw_plan.upper() in ("CORE", "ELITE", "ROOT") else ""
 
 def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
     uid = str(user_id)
-    if "user_data" not in context.bot_data:
-        context.bot_data["user_data"] = {}
+    if "user_data" not in context.bot_data: context.bot_data["user_data"] = {}
     if uid not in context.bot_data["user_data"]:
         context.bot_data["user_data"][uid] = {
             "name": "User", "first_name": "User", "last_name": "", "username": "",
@@ -116,10 +111,8 @@ def _update_user_meta(ud: dict, user) -> None:
     ud["last_name"]   = user.last_name or ""
     ud["name"]        = user.full_name or user.first_name or "User"
     ud["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    if user.username:
-        ud["username"] = user.username
-    if getattr(user, "language_code", None):
-        ud["language_code"] = user.language_code
+    if user.username: ud["username"] = user.username
+    if getattr(user, "language_code", None): ud["language_code"] = user.language_code
 
 def is_user_premium(ud: dict) -> bool:
     raw_plan = ud.get("plan", "TRIAL").upper()
@@ -132,14 +125,9 @@ def is_user_premium(ud: dict) -> bool:
         return False
     return is_prem
 
-def gen_code(length: int = 10) -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-def gen_receipt() -> str:
-    return f"Batman{random.randint(100000, 999999)}-CHK"
-
-def get_referral_link(user_id: int) -> str:
-    return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+def gen_code(length: int = 10) -> str: return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+def gen_receipt() -> str: return f"Batman{random.randint(100000, 999999)}-CHK"
+def get_referral_link(user_id: int) -> str: return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
 
 def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     ud       = get_user_data(user.id, context)
@@ -168,8 +156,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         lines.append(f"<b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}")
         lines.append(f"<b>Lᴇꜰᴛ</b>    ➺ {rem_d}d {rem_h}h")
         receipt = ud.get("last_receipt")
-        if receipt:
-            lines.append(f"<b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>")
+        if receipt: lines.append(f"<b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>")
     lines.append(f"<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)")
     lines.append(f"<b>Jᴏɪɴᴇᴅ</b>  ➺ {ud.get('joined', datetime.now().strftime('%Y-%m-%d'))}")
     lines.append(f"<b>Dᴇᴠ</b>     ➺ <a href='{DEV_LINK}'>Batman</a> | {VERSION}")
@@ -189,16 +176,13 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
 # FORCE SUBSCRIBE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
-    if user_id == OWNER_ID:
-        return []
+    if user_id == OWNER_ID: return []
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
-            if member.status in ("left", "kicked"):
-                not_joined.append((name, link))
-        except Exception:
-            not_joined.append((name, link))
+            if member.status in ("left", "kicked"): not_joined.append((name, link))
+        except Exception: not_joined.append((name, link))
     return not_joined
 
 def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
@@ -560,7 +544,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = ("<b>[ 𖥷iТ ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n"
         "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Cᴏʀᴇ\n<b>Dᴀʏꜱ</b>     ➺ 7\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
         "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Eʟɪᴛᴇ\n<b>Dᴀʏꜱ</b>     ➺ 15\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
-        "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ</b>\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
+        "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
     await update.message.reply_text(txt, reply_markup=kb_price(), parse_mode="HTML")
 
 async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -621,32 +605,25 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user = update.effective_user
     
-    # 1. Check if media is in the message itself (caption) OR if it's a reply to media
     media_msg = None
     if msg.photo or msg.video:
         media_msg = msg
     elif msg.reply_to_message and (msg.reply_to_message.photo or msg.reply_to_message.video):
         media_msg = msg.reply_to_message
 
-    # If media was found (either by caption or reply), process it
     if media_msg:
         if media_msg.photo:
-            file_id   = media_msg.photo[-1].file_id
-            file_type = "photo"
+            file_id, file_type = media_msg.photo[-1].file_id, "photo"
         elif media_msg.video:
-            file_id   = media_msg.video.file_id
-            file_type = "video"
+            file_id, file_type = media_msg.video.file_id, "video"
         else:
-            await msg.reply_text("Invalid media type.")
-            return
+            await msg.reply_text("Invalid media type."); return
 
-        # Get user note from the text command or caption
         user_note = (msg.text or msg.caption or "").strip()
         bot_uname = context.bot.username or ""
         for prefix in (f"/fb@{bot_uname}", "/fb"):
             if user_note.lower().startswith(prefix.lower()):
-                user_note = user_note[len(prefix):].strip()
-                break
+                user_note = user_note[len(prefix):].strip(); break
 
         key       = _fb_key(user.id)
         uname     = f"@{user.username}" if user.username else user.first_name or "User"
@@ -657,45 +634,19 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "username": uname, "name": user.full_name or user.first_name or "User",
             "note": user_note, "date": submitted,
         }
-        await msg.reply_text(
-            "━━━━━━━━━━━━━━━━━\n"
-            "<b>Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅</b>\n"
-            "━━━━━━━━━━━━━━━━━\n"
-            "Under review.\n"
-            "━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
+        await msg.reply_text("━━━━━━━━━━━━━━━━━\n<b>Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅</b>\n━━━━━━━━━━━━━━━━━\nUnder review.\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
-        owner_caption = (
-            f"<b>[ 𖥷iТ ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ</b>\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"<b>Uꜱᴇʀ</b> ➺ {uname}\n"
-            f"<b>ID</b>   ➺ {user.id}\n"
-            f"<b>Dᴀᴛᴇ</b> ➺ {submitted}\n"
-            f"<b>Tʏᴘᴇ</b> ➺ {file_type.capitalize()}\n"
-        )
+        owner_caption = f"<b>[ 𖥷iТ ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ</b>\n━━━━━━━━━━━━━━━━━\n<b>Uꜱᴇʀ</b> ➺ {uname}\n<b>ID</b>   ➺ {user.id}\n<b>Dᴀᴛᴇ</b> ➺ {submitted}\n<b>Tʏᴘᴇ</b> ➺ {file_type.capitalize()}\n"
         if user_note: owner_caption += f"<b>Nᴏᴛᴇ</b> ➺ {user_note[:200]}\n"
         owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
 
         try:
-            if file_type == "photo": 
-                await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
-            else: 
-                await context.bot.send_video(chat_id=OWNER_ID, video=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
-        except Exception as e: 
-            logger.error(f"Feedback notify owner failed: {e}")
+            if file_type == "photo": await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
+            else: await context.bot.send_video(chat_id=OWNER_ID, video=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
+        except Exception as e: logger.error(f"Feedback notify owner failed: {e}")
         return
 
-    # If no media found, show usage instructions
-    await msg.reply_text(
-        "━━━━━━━━━━━━━━━━━\n"
-        "📸 <b>Fᴇᴇᴅʙᴀᴄᴋ</b>\n"
-        "━━━━━━━━━━━━━━━━━\n\n"
-        "Reply to a photo/video with <code>/fb</code>\n"
-        "OR send photo/video with <code>/fb</code> as caption\n"
-        "━━━━━━━━━━━━━━━━━",
-        parse_mode="HTML"
-    )
+    await msg.reply_text("━━━━━━━━━━━━━━━━━\n📸 <b>Fᴇᴇᴅʙᴀᴄᴋ</b>\n━━━━━━━━━━━━━━━━━\n\nReply to a photo/video with <code>/fb</code>\nOR send photo/video with <code>/fb</code> as caption\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     fb = context.bot_data.get("fb_pending", {}).get(key)
@@ -751,8 +702,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         target_id, target_name, target_username, target_lang = int(uid_str), ud.get("name", "N/A"), ud.get("username"), ud.get("language_code", "N/A")
                         break
 
-    if not target_id:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /info @username | /info 123456789 | reply → /info"); return
+    if not target_id: await update.message.reply_text("Uꜱᴀɢᴇ: /info @username | /info 123456789 | reply → /info"); return
 
     if target_name == "N/A":
         try:
@@ -781,7 +731,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt += f"<b>Exᴘɪʀᴇꜱ</b>   ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n<b>Rᴇᴍᴀɪɴɪɴɢ</b> ➺ {int(rem // 86400)}d {int((rem % 86400) // 3600)}h\n"
     last_receipt = udata.get("last_receipt")
     if last_receipt: txt += f"<b>Rᴇᴄᴇɪᴘᴛ</b>   ➺ <code>{last_receipt}</code>\n"
-    txt += (f"━━━━━━━━━━━━━━━━━\n<b>Jᴏɪɴᴇᴅ</b>      ➺ {udata.get('joined', 'N/A')}\n<b>Lᴀꜱᴛᴛ Aᴄᴛɪᴠᴇ</b> ➺ {udata.get('last_active', 'N/A')}\n━━━━━━━━━━━━━━━━━\n<b>Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ</b> ➺ {total_checks}\n<b>Aᴘᴘʀᴏᴠᴇᴅ</b>     ➺ {approved_checks}\n<b>Dᴇᴄʟɪɴᴇᴅ</b>     ➺ {declined_checks}\n<b>Rᴀᴛᴇ</b>         ➺ {approval_rate}\n<b>Lᴀꜱᴛᴛ Gᴀᴛᴇ</b>   ➺ {udata.get('last_gate', 'N/A')}\n<b>Lᴀꜱᴛᴛ BIN</b>    ➺ <code>{udata.get('last_card', 'N/A')}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b>   ➺ {total_refs}\n<b>Cᴏᴅᴇꜱ</b>        ➺ {udata.get('codes_redeemed', 0)} redeemed\n<b>Kᴇʏꜱ</b>         ➺ {udata.get('keys_redeemed', 0)} redeemed\n━━━━━━━━━━━━━━━━━")
+    txt += (f"━━━━━━━━━━━━━━━━━\n<b>Jᴏɪɴᴇᴅ</b>      ➺ {udata.get('joined', 'N/A')}\n<b>Lᴀsᴛ Aᴄᴛɪᴠᴇ</b> ➺ {udata.get('last_active', 'N/A')}\n━━━━━━━━━━━━━━━━━\n<b>Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ</b> ➺ {total_checks}\n<b>Aᴘᴘʀᴏᴠᴇᴅ</b>     ➺ {approved_checks}\n<b>Dᴇᴄʟɪɴᴇᴅ</b>     ➺ {declined_checks}\n<b>Rᴀᴛᴇ</b>         ➺ {approval_rate}\n<b>Lᴀsᴛ Gᴀᴛᴇ</b>   ➺ {udata.get('last_gate', 'N/A')}\n<b>Lᴀsᴛ BIN</b>    ➺ <code>{udata.get('last_card', 'N/A')}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b>   ➺ {total_refs}\n<b>Cᴏᴅᴇꜱ</b>        ➺ {udata.get('codes_redeemed', 0)} redeemed\n<b>Kᴇʏꜱ</b>         ➺ {udata.get('keys_redeemed', 0)} redeemed\n━━━━━━━━━━━━━━━━━")
     await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -953,23 +903,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
-            try:
-                await query.edit_message_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
-            except Exception:
-                pass
+            try: await query.edit_message_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
+            except Exception: pass
         else:
             ud = get_user_data(user.id, context); _update_user_meta(ud, user)
-            try:
-                await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
-            except Exception:
-                pass
+            try: await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
+            except Exception: pass
             
     elif data == "bmain":
-        ud = get_user_data(user.id, context)
-        try:
-            await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
-        except Exception:
-            pass
+        try: await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
+        except Exception: pass
             
     elif data == "mgates": await query.edit_message_text("Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Tʏᴘᴇ:", reply_markup=kb_gate_main())
     elif data == "mauth": await query.edit_message_text("Aᴜᴛʜ Gᴀᴛᴇꜱꜱ:", reply_markup=kb_auth_gates())
@@ -979,7 +922,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = ("<b>[ 𖥷iТ ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n"
             "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Cᴏʀᴇ\n<b>Dᴀʏꜱ</b>     ➺ 7\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
             "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Eʟɪᴛᴇ\n<b>Dᴀʏꜱ</b>     ➺ 15\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
-            "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴏᴛ</b>\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
+            "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
         await query.edit_message_text(txt, reply_markup=kb_price(), parse_mode="HTML")
     elif data == "mrefer":
         ud = get_user_data(user.id, context); link = get_referral_link(user.id); total_refs = ud.get("total_refs", 0)
@@ -995,6 +938,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("fb_no_"): await _fb_decline(query, context, data.split("fb_no_")[1])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GLOBAL ERROR HANDLER & POST INIT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = context.error
+    if isinstance(error, Conflict):
+        logger.critical("CONFLICT: Another bot instance is running. Waiting 10s before exit...")
+        await asyncio.sleep(10)
+        os._exit(1)
+        return
+    if isinstance(error, NetworkError):
+        logger.warning(f"Network error (auto-retry): {error}"); return
+    logger.error(f"Unhandled error: {type(error).__name__}: {error}", exc_info=context.error)
+
+async def post_init(application: Application) -> None:
+    logger.info("Cleaning up any existing webhook...")
+    try: await application.bot.delete_webhook(drop_pending_updates=True)
+    except Exception: pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN FUNCTION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
@@ -1004,7 +966,8 @@ def main():
         logger.warning("Another instance is running."); return
 
     try:
-        app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+        app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).post_init(post_init).build()
+        app.add_error_handler(global_error_handler)
 
         # User Commands
         app.add_handler(CommandHandler("start", cmd_start))
@@ -1042,13 +1005,18 @@ def main():
         app.add_handler(CommandHandler("killbot", cmd_killbot))
         app.add_handler(CommandHandler("onbot", cmd_onbot))
 
+        # MASS HANDLERS INTEGRATION (Fixes /au, /mss, /mpp2)
+        for handler in get_mass_handlers():
+            app.add_handler(handler)
+
         # Callbacks
         app.add_handler(CallbackQueryHandler(callback_handler))
 
         logger.info(f"Bot {BOT_USERNAME} started successfully!")
-        app.run_polling(drop_pending_updates=True)
+        app.run_polling(drop_pending_updates=True, close_loop=False, stop_signals=(signal.SIGINT, signal.SIGTERM))
     finally:
         release_instance_lock()
 
 if __name__ == "__main__":
     main()
+
