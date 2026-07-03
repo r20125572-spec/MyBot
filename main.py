@@ -125,7 +125,6 @@ def is_user_premium(ud: dict) -> bool:
     raw_plan = ud.get("plan", "TRIAL").upper()
     is_prem = raw_plan != "TRIAL"
     if is_prem and ud.get("expires", 0) <= time.time():
-        # AUTO-EXPIRE PREMIUM & RESTORE OLD CREDITS
         ud["plan"] = "TRIAL"
         ud["credits"] = ud.get("pre_premium_credits", 150)
         ud["expires"] = 0
@@ -208,7 +207,7 @@ def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 FORCE_SUB_TEXT = (
-    "<b>[ 𖥷 вт ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n"
+    "<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n"
     "━━━━━━━━━━━━━━━━━\n"
     "You must join our channel & group to use this bot.\n"
     "After joining press the ✅ Verify button below.\n"
@@ -250,7 +249,7 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str, bin_dat
 
     uname_display = f"{username} {plan_icon} ({plan_label})".strip()
     lines = [
-        f"<b>[ 𖥷 вт ] ➺ {status}</b>",
+        f"<b>[ 𖥷iТ ] ➺ {status}</b>",
         f"🔍 ➺ <code>{card_raw}</code>",
         f"<b>Gᴀᴛᴇ</b> ➺ {gate_name} 💳",
         f"<b>Rᴀᴡ</b>  ➺ {raw_response}",
@@ -382,7 +381,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     _update_user_meta(ud, user)
 
     if gate_key in PREMIUM_GATES and not premium:
-        await update.message.reply_text(f"<b>[ 𖥷 вт ] ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ</b>\n━━━━━━━━━━━━━━━━━\nUse /plan to upgrade.", parse_mode="HTML", reply_markup=kb_upgrade())
+        await update.message.reply_text(f"<b>[ 𖥷iТ ] ➺ Pʀᴇᴍɪᴜᴍ Oɴʟʏ</b>\n━━━━━━━━━━━━━━━━━\nUse /plan to upgrade.", parse_mode="HTML", reply_markup=kb_upgrade())
         return
 
     card_raw = None
@@ -395,7 +394,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     if not premium:
         credits = ud.get("credits", 0)
         if credits <= 0:
-            await update.message.reply_text("<b>[ 𖥷 вт ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ</b>\n━━━━━━━━━━━━━━━━━\nBuy a plan: /plan", reply_markup=kb_upgrade(), parse_mode="HTML"); return
+            await update.message.reply_text("<b>[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ</b>\n━━━━━━━━━━━━━━━━━\nBuy a plan: /plan", reply_markup=kb_upgrade(), parse_mode="HTML"); return
         ud["credits"] = credits - 1
 
     api_url  = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
@@ -405,7 +404,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     if not api_url:
         await update.message.reply_text(f"Gate API not set.", parse_mode="HTML"); return
 
-    msg        = await update.message.reply_text("[ 𖥷 вт ] ➺ Sᴄᴀɴɴɪɴɢ...")
+    msg        = await update.message.reply_text("[ 𖥷iТ ] ➺ Sᴄᴀɴɴɪɴɢ...")
     start_time = time.time()
     uname = f"@{user.username}" if user.username else user.first_name or "User"
     plan  = ud.get("plan", "TRIAL")
@@ -464,7 +463,6 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
 
     ud = get_user_data(user_id, context)
     
-    # SAVE OLD CREDITS BEFORE UPGRADING
     if ud.get("plan", "TRIAL").upper() == "TRIAL":
         ud["pre_premium_credits"] = ud.get("credits", 150)
         
@@ -479,7 +477,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int, context: Conte
     display_name = f"@{username}" if username else name
     styled       = get_styled_plan(plan)
 
-    txt = (f"<b>[ 𖥷 вт ] ➺ Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n<b>Uꜱᴇʀ</b>     ➺ {display_name}\n<b>Aᴄᴄᴇꜱꜱ</b>  ➺ {styled} 👑\n<b>Dᴀʏꜱ</b>    ➺ {days}\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}\n<b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>\n━━━━━━━━━━━━━━━━━\nSave this receipt ID.\n<b>Pʀᴏ</b> ➺ Batman")
+    txt = (f"<b>[ 𖥷iТ ] ➺ Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n<b>Uꜱᴇʀ</b>     ➺ {display_name}\n<b>Aᴄᴄᴇꜱꜱ</b>  ➺ {styled} 👑\n<b>Dᴀʏꜱ</b>    ➺ {days}\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}\n<b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>\n━━━━━━━━━━━━━━━━━\nSave this receipt ID.\n<b>Pʀᴏ</b> ➺ Batman")
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
     return receipt
@@ -554,15 +552,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update, context): return
     t   = time.time()
-    msg = await update.message.reply_text("[ 𖥷 вт ] ➺ Pɪɴɢɪɴɢ...")
-    await msg.edit_text(f"<b>[ 𖥷 вт ] ➺ Pᴏɴɢ</b> | {int((time.time() - t) * 1000)}ms", parse_mode="HTML")
+    msg = await update.message.reply_text("[ 𖥷iТ ] ➺ Pɪɴɢɪɴɢ...")
+    await msg.edit_text(f"<b>[ 𖥷iТ ] ➺ Pᴏɴɢ</b> | {int((time.time() - t) * 1000)}ms", parse_mode="HTML")
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update, context): return
-    txt = ("<b>[ 𖥷 вт ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n"
+    txt = ("<b>[ 𖥷iТ ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n"
         "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Cᴏʀᴇ\n<b>Dᴀʏꜱ</b>     ➺ 7\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
         "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Eʟɪᴛᴇ\n<b>Dᴀʏꜱ</b>     ➺ 15\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
-        "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
+        "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ</b>\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
     await update.message.reply_text(txt, reply_markup=kb_price(), parse_mode="HTML")
 
 async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -571,7 +569,7 @@ async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud   = get_user_data(user.id, context)
     link = get_referral_link(user.id)
     total_refs = ud.get("total_refs", 0)
-    txt = (f"<b>[ 𖥷 вт ] Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n<b>Pᴇʀ Rᴇꜰ</b>  ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━\nShare your link to earn free credits!")
+    txt = (f"<b>[ 𖥷iТ ] Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n<b>Pᴇʀ Rᴇꜰ</b>  ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━\nShare your link to earn free credits!")
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb_back("bmain"), disable_web_page_preview=True)
 
 async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -602,12 +600,12 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bin_num = context.args[0].strip()[:6] if context.args else None
     if not bin_num or not bin_num.isdigit() or len(bin_num) < 6:
         await update.message.reply_text("Uꜱᴀɢᴇ: <code>/bin 411111</code>", parse_mode="HTML"); return
-    msg = await update.message.reply_text("[ 𖥷 вт ] ➺ Lᴏᴏᴋɪɴɢ ᴜᴘ...")
+    msg = await update.message.reply_text("[ 𖥷iТ ] ➺ Lᴏᴏᴋɪɴɢ ᴜᴘ...")
     try:
         bd = await get_bin_info(bin_num)
         if bd.get("error"):
             await msg.edit_text("BIN not found."); return
-        txt = (f"<b>[ 𖥷 вт ] ➺ BIN Lookup</b>\n━━━━━━━━━━━━━━━━━\n<b>BIN</b>     ➺ <code>{bin_num}</code>\n<b>Scheme</b>  ➺ {str(bd.get('scheme', 'N/A')).upper()}\n<b>Type</b>    ➺ {str(bd.get('type', 'N/A')).upper()}\n<b>Bank</b>    ➺ {bd.get('bank', 'N/A')}\n<b>Country</b> ➺ {bd.get('country_emoji', '')} {str(bd.get('country', 'N/A')).upper()}\n━━━━━━━━━━━━━━━━━")
+        txt = (f"<b>[ 𖥷iТ ] ➺ BIN Lookup</b>\n━━━━━━━━━━━━━━━━━\n<b>BIN</b>     ➺ <code>{bin_num}</code>\n<b>Scheme</b>  ➺ {str(bd.get('scheme', 'N/A')).upper()}\n<b>Type</b>    ➺ {str(bd.get('type', 'N/A')).upper()}\n<b>Bank</b>    ➺ {bd.get('bank', 'N/A')}\n<b>Country</b> ➺ {bd.get('country_emoji', '')} {str(bd.get('country', 'N/A')).upper()}\n━━━━━━━━━━━━━━━━━")
         await msg.edit_text(txt, parse_mode="HTML")
     except Exception as e:
         await msg.edit_text(f"Error: <code>{str(e)[:100]}</code>", parse_mode="HTML")
@@ -621,44 +619,83 @@ def _fb_key(user_id: int) -> str:
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update, context): return
     msg = update.message
-    if msg.photo or msg.video:
-        await handle_fb_media(update, context); return
-    await msg.reply_text("━━━━━━━━━━━━━━━━━\n📸 <b>Fᴇᴇᴅʙᴀᴄᴋ</b>\n━━━━━━━━━━━━━━━━━\n\nSᴇɴᴅ a photo or video WITH the caption /fb\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
-
-async def handle_fb_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_membership(update, context): return
-    msg  = update.message
     user = update.effective_user
-    if msg.photo:
-        file_id   = msg.photo[-1].file_id
-        file_type = "photo"
-    elif msg.video:
-        file_id   = msg.video.file_id
-        file_type = "video"
-    else: return
+    
+    # 1. Check if media is in the message itself (caption) OR if it's a reply to media
+    media_msg = None
+    if msg.photo or msg.video:
+        media_msg = msg
+    elif msg.reply_to_message and (msg.reply_to_message.photo or msg.reply_to_message.video):
+        media_msg = msg.reply_to_message
 
-    raw_caption = (msg.caption or "").strip()
-    user_note   = raw_caption
-    bot_uname   = context.bot.username or ""
-    for prefix in (f"/fb@{bot_uname}", "/fb"):
-        if user_note.lower().startswith(prefix.lower()):
-            user_note = user_note[len(prefix):].strip(); break
+    # If media was found (either by caption or reply), process it
+    if media_msg:
+        if media_msg.photo:
+            file_id   = media_msg.photo[-1].file_id
+            file_type = "photo"
+        elif media_msg.video:
+            file_id   = media_msg.video.file_id
+            file_type = "video"
+        else:
+            await msg.reply_text("Invalid media type.")
+            return
 
-    key       = _fb_key(user.id)
-    uname     = f"@{user.username}" if user.username else user.first_name or "User"
-    submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Get user note from the text command or caption
+        user_note = (msg.text or msg.caption or "").strip()
+        bot_uname = context.bot.username or ""
+        for prefix in (f"/fb@{bot_uname}", "/fb"):
+            if user_note.lower().startswith(prefix.lower()):
+                user_note = user_note[len(prefix):].strip()
+                break
 
-    context.bot_data.setdefault("fb_pending", {})[key] = {"file_id": file_id, "file_type": file_type, "user_id": user.id, "username": uname, "name": user.full_name or user.first_name or "User", "note": user_note, "date": submitted}
-    await msg.reply_text("━━━━━━━━━━━━━━━━━\n<b>Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅</b>\n━━━━━━━━━━━━━━━━━\nUnder review.\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+        key       = _fb_key(user.id)
+        uname     = f"@{user.username}" if user.username else user.first_name or "User"
+        submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    owner_caption = (f"<b>[ 𖥷 вт ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ</b>\n━━━━━━━━━━━━━━━━━\n<b>Uꜱᴇʀ</b> ➺ {uname}\n<b>ID</b>   ➺ {user.id}\n<b>Dᴀᴛᴇ</b> ➺ {submitted}\n<b>Tʏᴘᴇ</b> ➺ {file_type.capitalize()}\n")
-    if user_note: owner_caption += f"<b>Nᴏᴛᴇ</b> ➺ {user_note[:200]}\n"
-    owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
+        context.bot_data.setdefault("fb_pending", {})[key] = {
+            "file_id": file_id, "file_type": file_type, "user_id": user.id,
+            "username": uname, "name": user.full_name or user.first_name or "User",
+            "note": user_note, "date": submitted,
+        }
+        await msg.reply_text(
+            "━━━━━━━━━━━━━━━━━\n"
+            "<b>Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ ✅</b>\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "Under review.\n"
+            "━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML"
+        )
 
-    try:
-        if file_type == "photo": await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
-        else: await context.bot.send_video(chat_id=OWNER_ID, video=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
-    except Exception as e: logger.error(f"Feedback notify owner failed: {e}")
+        owner_caption = (
+            f"<b>[ 𖥷iТ ] ➺ Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ</b>\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"<b>Uꜱᴇʀ</b> ➺ {uname}\n"
+            f"<b>ID</b>   ➺ {user.id}\n"
+            f"<b>Dᴀᴛᴇ</b> ➺ {submitted}\n"
+            f"<b>Tʏᴘᴇ</b> ➺ {file_type.capitalize()}\n"
+        )
+        if user_note: owner_caption += f"<b>Nᴏᴛᴇ</b> ➺ {user_note[:200]}\n"
+        owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
+
+        try:
+            if file_type == "photo": 
+                await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
+            else: 
+                await context.bot.send_video(chat_id=OWNER_ID, video=file_id, caption=owner_caption, reply_markup=kb_fb_owner(key), parse_mode="HTML")
+        except Exception as e: 
+            logger.error(f"Feedback notify owner failed: {e}")
+        return
+
+    # If no media found, show usage instructions
+    await msg.reply_text(
+        "━━━━━━━━━━━━━━━━━\n"
+        "📸 <b>Fᴇᴇᴅʙᴀᴄᴋ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Reply to a photo/video with <code>/fb</code>\n"
+        "OR send photo/video with <code>/fb</code> as caption\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML"
+    )
 
 async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     fb = context.bot_data.get("fb_pending", {}).get(key)
@@ -674,9 +711,9 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
         posted = True
     except Exception as e: logger.error(f"Feedback channel post failed: {e}")
     context.bot_data["fb_pending"].pop(key, None)
-    try: await query.message.edit_caption(caption=f"<b>[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n{'✅ Posted' if posted else '⚠️ Post failed'}\n━━━━━━━━━━━━━━━━━", reply_markup=None, parse_mode="HTML")
+    try: await query.message.edit_caption(caption=f"<b>[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴘᴘʀᴏᴠᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n{'✅ Posted' if posted else '⚠️ Post failed'}\n━━━━━━━━━━━━━━━━━", reply_markup=None, parse_mode="HTML")
     except Exception: pass
-    try: await context.bot.send_message(chat_id=uid, text=f"<b>[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ ✅</b>\n━━━━━━━━━━━━━━━━━\nPosted to channel!\n📢 {CHANNEL_LINK}\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    try: await context.bot.send_message(chat_id=uid, text=f"<b>[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴛᴇᴅ ✅</b>\n━━━━━━━━━━━━━━━━━\nPosted to channel!\n📢 {CHANNEL_LINK}\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
     except Exception: pass
 
 async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
@@ -684,9 +721,9 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     if not fb: await query.answer("Already handled.", show_alert=True); return
     uid = fb["user_id"]
     context.bot_data["fb_pending"].pop(key, None)
-    try: await query.message.edit_caption(caption=f"<b>[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌</b>\n━━━━━━━━━━━━━━━━━", reply_markup=None, parse_mode="HTML")
+    try: await query.message.edit_caption(caption=f"<b>[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌</b>\n━━━━━━━━━━━━━━━━━", reply_markup=None, parse_mode="HTML")
     except Exception: pass
-    try: await context.bot.send_message(chat_id=uid, text="<b>[ 𖥷 вт ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌</b>\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    try: await context.bot.send_message(chat_id=uid, text="<b>[ 𖥷iТ ] ➺ Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ ❌</b>\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
     except Exception: pass
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -738,18 +775,18 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_refs, total_checks, approved_checks, declined_checks = udata.get("total_refs", 0), udata.get("total_checks", 0), udata.get("approved_checks", 0), udata.get("declined_checks", 0)
     approval_rate = f"{(approved_checks / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
 
-    txt = (f"<b>[ 𖥷 вт ] Uꜱᴇʀ Iɴꜰᴏ</b>\n━━━━━━━━━━━━━━━━━\n<b>Nᴀᴍᴇ</b>       ➺ {full_name}\n<b>Uꜱᴇʀɴᴀᴍᴇ</b>  ➺ {uname_d}\n<b>ID</b>         ➺ <code>{target_id}</code>\n<b>Lᴀɴɢ</b>       ➺ {lang_d.upper()}\n━━━━━━━━━━━━━━━━━\n<b>Pʟᴀɴ</b>       ➺ {get_styled_plan(raw_plan)}\n<b>Cʀᴇᴅɪᴛꜱ</b>   ➺ {credits_d}\n<b>Sᴛᴀᴛᴜꜱ</b>    ➺ {'Active' if premium else 'Trial'}\n")
+    txt = (f"<b>[ 𖥷iТ ] Uꜱᴇʀ Iɴꜰᴏ</b>\n━━━━━━━━━━━━━━━━━\n<b>Nᴀᴍᴇ</b>       ➺ {full_name}\n<b>Uꜱᴇʀɴᴀᴍᴇ</b>  ➺ {uname_d}\n<b>ID</b>         ➺ <code>{target_id}</code>\n<b>Lᴀɴɢ</b>       ➺ {lang_d.upper()}\n━━━━━━━━━━━━━━━━━\n<b>Pʟᴀɴ</b>       ➺ {get_styled_plan(raw_plan)}\n<b>Cʀᴇᴅɪᴛꜱ</b>   ➺ {credits_d}\n<b>Sᴛᴀᴛᴜꜱ</b>    ➺ {'Active' if premium else 'Trial'}\n")
     if premium and expires > now:
         rem = expires - now
         txt += f"<b>Exᴘɪʀᴇꜱ</b>   ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n<b>Rᴇᴍᴀɪɴɪɴɢ</b> ➺ {int(rem // 86400)}d {int((rem % 86400) // 3600)}h\n"
     last_receipt = udata.get("last_receipt")
     if last_receipt: txt += f"<b>Rᴇᴄᴇɪᴘᴛ</b>   ➺ <code>{last_receipt}</code>\n"
-    txt += (f"━━━━━━━━━━━━━━━━━\n<b>Jᴏɪɴᴇᴅ</b>      ➺ {udata.get('joined', 'N/A')}\n<b>Lᴀꜱᴛ Aᴄᴛɪᴠᴇ</b> ➺ {udata.get('last_active', 'N/A')}\n━━━━━━━━━━━━━━━━━\n<b>Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ</b> ➺ {total_checks}\n<b>Aᴘᴘʀᴏᴠᴇᴅ</b>     ➺ {approved_checks}\n<b>Dᴇᴄʟɪɴᴇᴅ</b>     ➺ {declined_checks}\n<b>Rᴀᴛᴇ</b>         ➺ {approval_rate}\n<b>Lᴀꜱᴛ Gᴀᴛᴇ</b>   ➺ {udata.get('last_gate', 'N/A')}\n<b>Lᴀꜱᴛ BIN</b>    ➺ <code>{udata.get('last_card', 'N/A')}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b>   ➺ {total_refs}\n<b>Cᴏᴅᴇꜱ</b>        ➺ {udata.get('codes_redeemed', 0)} redeemed\n<b>Kᴇʏꜱ</b>         ➺ {udata.get('keys_redeemed', 0)} redeemed\n━━━━━━━━━━━━━━━━━")
+    txt += (f"━━━━━━━━━━━━━━━━━\n<b>Jᴏɪɴᴇᴅ</b>      ➺ {udata.get('joined', 'N/A')}\n<b>Lᴀꜱᴛᴛ Aᴄᴛɪᴠᴇ</b> ➺ {udata.get('last_active', 'N/A')}\n━━━━━━━━━━━━━━━━━\n<b>Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ</b> ➺ {total_checks}\n<b>Aᴘᴘʀᴏᴠᴇᴅ</b>     ➺ {approved_checks}\n<b>Dᴇᴄʟɪɴᴇᴅ</b>     ➺ {declined_checks}\n<b>Rᴀᴛᴇ</b>         ➺ {approval_rate}\n<b>Lᴀꜱᴛᴛ Gᴀᴛᴇ</b>   ➺ {udata.get('last_gate', 'N/A')}\n<b>Lᴀꜱᴛᴛ BIN</b>    ➺ <code>{udata.get('last_card', 'N/A')}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b>   ➺ {total_refs}\n<b>Cᴏᴅᴇꜱ</b>        ➺ {udata.get('codes_redeemed', 0)} redeemed\n<b>Kᴇʏꜱ</b>         ➺ {udata.get('keys_redeemed', 0)} redeemed\n━━━━━━━━━━━━━━━━━")
     await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text("<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n🟢 <b>USER:</b>\n/start ➺ Start bot\n/plan ➺ View plans\n/bin ➺ BIN lookup\n/rm ➺ Redeem code\n/ping ➺ Speed check\n/refer ➺ Referral link\n/fb ➺ Submit feedback\n\n⚡ <b>FREE CHECKER:</b>\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n👑 <b>PREMIUM ONLY:</b>\n/au ➺ Stripe Mass\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n👑 <b>OWNER:</b>\n/info ➺ Full user info\n/find ➺ Search user\n/allcm ➺ This menu\n/gen ➺ Gen credits\n/key10 /key20 /key30 ➺ Gen keys\n/sub ➺ Grant premium\n/resub ➺ Remove premium\n/addcredits ➺ Add credits\n/seturl ➺ Set gate API URL\n/geturl ➺ View gate URLs\n/broadcast ➺ Message all users\n/killbot /onbot ➺ Maintenance mode\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text("<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n🟢 <b>USER:</b>\n/start ➺ Start bot\n/plan ➺ View plans\n/bin ➺ BIN lookup\n/rm ➺ Redeem code\n/ping ➺ Speed check\n/refer ➺ Referral link\n/fb ➺ Submit feedback\n\n\n⚡ <b>FREE CHECKER:</b>\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n👑 <b>PREMIUM ONLY:</b>\n/au ➺ Stripe Mass\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n👑 <b>OWNER:</b>\n/info ➺ Full user info\n/find ➺ Search user\n/allcm ➺ This menu\n/gen ➺ Gen credits\n/key10 /key20 /key30 ➺ Gen keys\n/sub ➺ Grant premium\n/resub ➺ Remove premium\n/addcredits ➺ Add credits\n/seturl ➺ Set gate API URL\n/geturl ➺ View gate URLs\n/broadcast ➺ Message all users\n/killbot /onbot ➺ Maintenance mode\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -787,7 +824,7 @@ async def _gen_key(update, context, plan: str, days: int):
 
 async def cmd_key10(u, c): await _gen_key(u, c, "CORE",  7)
 async def cmd_key20(u, c): await _gen_key(u, c, "ELITE", 15)
-async def cmd_key30(u, c): await _gen_key(u, c, "ROOT",  30)
+async def cmd_key30(u, c): await _gen_key(u, c, "ROOT", 30)
 
 async def cmd_oneday(update, context):
     if update.effective_user.id != OWNER_ID: return
@@ -893,7 +930,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=int(uid_str), text=msg_text)
             sent += 1
         except Exception: failed += 1
-    await update.message.reply_text(f"✅ <b>Bʀᴏᴀᴅᴄᴀsᴛ Cᴏᴍᴘʟᴇᴛᴇ!</b>\n<b>Sᴇɴᴛ:</b> {sent}\n<b>Fᴀɪʟᴇᴅ:</b> {failed}", parse_mode="HTML")
+    await update.message.reply_text(f"✅ <b>Bʀᴏᴏᴀᴅᴄᴀsᴛ Cᴏᴍᴘᴘʟᴇᴛᴇ!</b>\n<b>Sᴇɴᴛ</b>: {sent}\n<b>Fᴀɪʟᴇᴅ</b>: {failed}", parse_mode="HTML")
 
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -916,30 +953,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
-            try: await query.edit_message_caption(caption=FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
-            except Exception: await query.edit_message_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
+            try:
+                await query.edit_message_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
+            except Exception:
+                pass
         else:
             ud = get_user_data(user.id, context); _update_user_meta(ud, user)
-            txt = ui_profile(user, context)
-            try: await query.edit_message_caption(caption=txt, reply_markup=kb_main(user.id), parse_mode="HTML")
-            except Exception: await query.edit_message_text(txt, reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
+            try:
+                await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
+            except Exception:
+                pass
             
     elif data == "bmain":
-        txt = ui_profile(user, context)
-        try: await query.edit_message_caption(caption=txt, reply_markup=kb_main(user.id), parse_mode="HTML")
-        except Exception: await query.edit_message_text(txt, reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
+        ud = get_user_data(user.id, context)
+        try:
+            await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            pass
+            
     elif data == "mgates": await query.edit_message_text("Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Tʏᴘᴇ:", reply_markup=kb_gate_main())
-    elif data == "mauth": await query.edit_message_text("Aᴜᴛʜ Gᴀᴛᴇs:", reply_markup=kb_auth_gates())
-    elif data == "mcharge": await query.edit_message_text("Cʜᴀʀɢᴇ Gᴀᴛᴇs:", reply_markup=kb_charge_gates())
-    elif data == "mmass": await query.edit_message_text("Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇs 👑:", reply_markup=kb_premium_gates())
+    elif data == "mauth": await query.edit_message_text("Aᴜᴛʜ Gᴀᴛᴇꜱꜱ:", reply_markup=kb_auth_gates())
+    elif data == "mcharge": await query.edit_message_text("Cʜᴀʀɢᴇ Gᴀᴛᴇꜱꜱ:", reply_markup=kb_charge_gates())
+    elif data == "mmass": await query.edit_message_text("Pʀᴇᴍɪᴜᴍᴍ Gᴀᴛᴇꜱꜱ 👑:", reply_markup=kb_premium_gates())
     elif data == "mprice":
-        txt = ("<b>[ 𖥷 вт ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Cᴏʀᴇ\n<b>Dᴀʏꜱ</b>     ➺ 7\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 10$\n━━━━━━━━━━━━━━━━━\n<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Eʟɪᴛᴇ\n<b>Dᴀʏꜱ</b>     ➺ 15\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 15$\n━━━━━━━━━━━━━━━━━\n<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
+        txt = ("<b>[ 𖥷iТ ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n"
+            "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Cᴏʀᴇ\n<b>Dᴀʏꜱ</b>     ➺ 7\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
+            "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Eʟɪᴛᴇ\n<b>Dᴀʏꜱ</b>     ➺ 15\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
+            "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴏᴛ</b>\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
         await query.edit_message_text(txt, reply_markup=kb_price(), parse_mode="HTML")
     elif data == "mrefer":
         ud = get_user_data(user.id, context); link = get_referral_link(user.id); total_refs = ud.get("total_refs", 0)
-        txt = (f"<b>[ 𖥷 вт ] Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━")
+        txt = (f"<b>[ 𖥷iТ ] Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n<b>Pᴇʀ Rᴇꜰ</b>  ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━")
         await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb_back("bmain"), disable_web_page_preview=True)
-    elif data.startswith("pay"): await query.edit_message_text("Tᴏ Bᴜʏ, Cᴏɴᴛᴀᴄᴛ Sᴜᴘᴘᴏʀᴛ:", reply_markup=kb_payment())
+    elif data.startswith("pay"): await query.edit_message_text("Tᴏ Bᴜʏ, Cᴏɴᴛᴀᴄᴛ ᴛ Sᴜᴘᴘᴘᴛᴇ.", reply_markup=kb_payment())
     elif data.startswith("i"):
         gate_map = {"ichk": ("chk", "Stripe Charge"), "ipp": ("pp", "PayPal Charge"), "ish": ("sh", "Shopify Charge"), "ipyu": ("pyu", "PayU Charge"), "ib3": ("b3", "Braintree Auth"), "iau": ("au", "Stripe Auth"), "imss": ("mss", "Stripe Mass"), "impp2": ("mpp2", "PayPal Mass")}
         if data in gate_map:
@@ -960,6 +1006,7 @@ def main():
     try:
         app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
+        # User Commands
         app.add_handler(CommandHandler("start", cmd_start))
         app.add_handler(CommandHandler("ping", cmd_ping))
         app.add_handler(CommandHandler("plan", cmd_plan))
@@ -968,12 +1015,14 @@ def main():
         app.add_handler(CommandHandler("bin", cmd_bin))
         app.add_handler(CommandHandler("fb", cmd_fb))
 
+        # Gate Commands
         app.add_handler(CommandHandler("chk", cmd_chk))
         app.add_handler(CommandHandler("pp", cmd_pp))
         app.add_handler(CommandHandler("sh", cmd_sh))
         app.add_handler(CommandHandler("pyu", cmd_pyu))
         app.add_handler(CommandHandler("b3", cmd_b3))
 
+        # Owner Commands
         app.add_handler(CommandHandler("info", cmd_info))
         app.add_handler(CommandHandler("allcm", cmd_allcm))
         app.add_handler(CommandHandler("find", cmd_find))
@@ -993,15 +1042,8 @@ def main():
         app.add_handler(CommandHandler("killbot", cmd_killbot))
         app.add_handler(CommandHandler("onbot", cmd_onbot))
 
+        # Callbacks
         app.add_handler(CallbackQueryHandler(callback_handler))
-
-        # Import mass checking handlers safely
-        try:
-            from mass import get_mass_handlers
-            for handler in get_mass_handlers():
-                app.add_handler(handler)
-        except Exception as e:
-            logger.error(f"Failed to load mass.py: {e}")
 
         logger.info(f"Bot {BOT_USERNAME} started successfully!")
         app.run_polling(drop_pending_updates=True)
