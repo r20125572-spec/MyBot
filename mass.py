@@ -160,7 +160,6 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     gate_name = cfg["name"]
     user_id = update.effective_user.id
     
-    # Force Sub Check
     if user_id != OWNER_ID:
         not_joined = []
         for name, link in FORCE_CHANNELS:
@@ -174,7 +173,6 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             await update.message.reply_text("<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\nJoin channels to use mass check.\n━━━━━━━━━━━━━━━━━", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
             return
 
-    # Premium Check
     ud = context.bot_data.get("user_data", {}).get(str(user_id), {})
     is_premium = ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > time.time()
     if not is_premium:
@@ -189,7 +187,6 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         await update.message.reply_text(f"⚠️ Mᴀx {MAX_CARDS} ᴄᴀʀᴅꜱ ᴘᴇʀ ʀᴜɴ.", parse_mode="HTML")
         return
 
-    # Dynamic URL Support
     api_url = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
     site = GATE_SITES.get(gate_key, "example.com")
     if not api_url:
@@ -222,7 +219,6 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     error_list    = [r for r in parsed if r.get("error")]
     elapsed = time.time() - start_time
 
-    # Save results
     context.bot_data[f"mass_results_{user_id}_{gate_key}"] = {
         "parsed": parsed, "approved": approved_list, "charged": charged_list,
         "threeds": threeds_list, "dead": dead_list, "error": error_list,
@@ -260,14 +256,13 @@ async def cmd_mss(update, context):  await process_mass(update, context, "mss")
 async def cmd_mpp2(update, context): await process_mass(update, context, "mpp2")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MASS CALLBACK HANDLER (FIXED TO SEND .TXT FILES)
+# MASS CALLBACK HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Generating file...", show_alert=False)
     user_id = query.from_user.id
     
-    # 1. Find the stored results for this user
     result_key = context.bot_data.get(f"last_mass_{user_id}")
     if not result_key or result_key not in context.bot_data:
         await query.answer("⚠️ Results expired. Run the check again.", show_alert=True)
@@ -278,12 +273,10 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     file_name = f"MASS_RESULT_{user_id}.txt"
     caption = ""
     
-    # 2. Handle ALL button (Sends card + full response)
     if action == "result_all":
         parsed = results.get("parsed", [])
         if not parsed:
-            await query.answer("No results found.", show_alert=True)
-            return
+            await query.answer("No results found.", show_alert=True); return
         lines = []
         for r in parsed:
             card = r.get("card", "N/A")
@@ -300,7 +293,6 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_document(chat_id=query.message.chat_id, document=bio, filename=file_name, caption=caption)
         return
 
-    # 3. Handle LIVE, 3DS, CHARGE buttons (Sends ONLY the card numbers)
     if action == "result_live":
         cards_out = results.get("approved", [])
         caption = f"✅ LIVE Cards ({len(cards_out)} found) - @Batcardchk"
@@ -313,14 +305,11 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         cards_out = results.get("charged", [])
         caption = f"💎 Charged Cards ({len(cards_out)} found) - @Batcardchk"
         file_name = f"CHARGED_{user_id}.txt"
-    else:
-        return
+    else: return
 
     if not cards_out:
-        await query.answer(f"No cards found for this category.", show_alert=True)
-        return
+        await query.answer(f"No cards found for this category.", show_alert=True); return
 
-    # Create file with just the raw card numbers separated by newlines
     file_content = "\n".join(r["card"] for r in cards_out)
     
     bio = BytesIO(file_content.encode("utf-8"))
