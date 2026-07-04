@@ -931,49 +931,86 @@ async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot turned ON for users.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK QUERY HANDLER
+# CALLBACK QUERY HANDLER (SHIELDED FOR ZERO CRASHES)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data, user = query.data, query.from_user
 
+    async def edit_text(text: str, reply_markup=None):
+        try:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=reply_markup, disable_web_page_preview=True)
+        except BadRequest as e:
+            if "message is not modified" in str(e).lower(): pass
+            else: logger.error(f"Callback edit error: {e}")
+        except Exception as e:
+            logger.error(f"Callback edit error: {e}")
+
+    # Force join check for all buttons except check_sub itself
+    if data != "check_sub":
+        not_joined = await check_force_sub(user.id, context)
+        if not_joined:
+            await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
+            return
+
+    ud = get_user_data(user.id, context)
+    premium = is_user_premium(ud)
+
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
-            try: await query.edit_message_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined), parse_mode="HTML")
-            except Exception: pass
+            await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
         else:
-            ud = get_user_data(user.id, context); _update_user_meta(ud, user)
-            try: await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
-            except Exception: pass
+            _update_user_meta(ud, user)
+            await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
             
     elif data == "bmain":
-        try: await query.edit_message_text(ui_profile(user, context), reply_markup=kb_main(user.id), parse_mode="HTML", disable_web_page_preview=True)
-        except Exception: pass
-            
-    elif data == "mgates": await query.edit_message_text("Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Tʏᴘᴇ:", reply_markup=kb_gate_main())
-    elif data == "mauth": await query.edit_message_text("Aᴜᴛʜ Gᴀᴛᴇꜱꜱ:", reply_markup=kb_auth_gates())
-    elif data == "mcharge": await query.edit_message_text("Cʜᴀʀɢᴇ Gᴀᴛᴇꜱꜱ:", reply_markup=kb_charge_gates())
-    elif data == "mmass": await query.edit_message_text("Pʀᴇᴍɪᴜᴍᴍ Gᴀᴛᴇꜱꜱ 👑:", reply_markup=kb_premium_gates())
+        await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
+    elif data == "mgates": 
+        await edit_text("<b>Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_gate_main())
+    elif data == "mauth": 
+        await edit_text("<b>Aᴜᴛʜ Gᴀᴛᴇs</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_auth_gates())
+    elif data == "mcharge": 
+        await edit_text("<b>Cʜᴀʀɢᴇ Gᴀᴛᴇs</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_charge_gates())
+    elif data == "mmass":
+        if not premium:
+            await query.answer("Premium Gates require a premium plan!", show_alert=True)
+            await edit_text("<b>Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇs</b>\n━━━━━━━━━━━━━━━━━\nUpgrade: /plan", reply_markup=kb_upgrade())
+            return
+        await edit_text("<b>Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇs 👑</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_premium_gates())
     elif data == "mprice":
         txt = ("<b>[ 𖥷iТ ] Batman Premium Plans</b>\n━━━━━━━━━━━━━━━━━\n\n"
             "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Cᴏʀᴇ\n<b>Dᴀʏꜱ</b>     ➺ 7\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 10$\n━━━━━━━━━━━━━━━━━\n"
             "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Eʟɪᴛᴇ\n<b>Dᴀʏꜱ</b>     ➺ 15\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 15$\n━━━━━━━━━━━━━━━━━\n"
             "<b>Aᴄᴄᴇꜱꜱ</b>  ➺ Rᴏᴏᴛ\n<b>Dᴀʏꜱ</b>     ➺ 30\n<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n<b>Pʀɪᴄᴇ</b>   ➺ 30$\n━━━━━━━━━━━━━━━━━")
-        await query.edit_message_text(txt, reply_markup=kb_price(), parse_mode="HTML")
+        await edit_text(txt, reply_markup=kb_price())
     elif data == "mrefer":
-        ud = get_user_data(user.id, context); link = get_referral_link(user.id); total_refs = ud.get("total_refs", 0)
+        link = get_referral_link(user.id)
+        total_refs = ud.get("total_refs", 0)
         txt = (f"<b>[ 𖥷iТ ] Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n<b>Pᴇʀ Rᴇꜰ</b>  ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━")
-        await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb_back("bmain"), disable_web_page_preview=True)
-    elif data.startswith("pay"): await query.edit_message_text("Tᴏ Bᴜʏ, Cᴏɴᴛᴀᴄᴛ ᴛ Sᴜᴘᴘᴘᴛᴇ.", reply_markup=kb_payment())
+        await edit_text(txt, reply_markup=kb_back("bmain"))
+    elif data.startswith("pay"): 
+        await edit_text("<b>Pᴀʏᴍᴇɴᴛ</b>\n━━━━━━━━━━━━━━━━━\nTo purchase, contact support.", reply_markup=kb_payment())
     elif data.startswith("i"):
-        gate_map = {"ichk": ("chk", "Stripe Charge"), "ipp": ("pp", "PayPal Charge"), "ish": ("sh", "Shopify Charge"), "ipyu": ("pyu", "PayU Charge"), "ib3": ("b3", "Braintree Auth"), "iau": ("au", "Stripe Auth"), "imss": ("mss", "Stripe Mass"), "impp2": ("mpp2", "PayPal Mass")}
+        gate_map = {
+            "ichk": ("chk", "Stripe Charge"), "ipp": ("pp", "PayPal Charge"), 
+            "ish": ("sh", "Shopify Charge"), "ipyu": ("pyu", "PayU Charge"), 
+            "ib3": ("b3", "Braintree Auth"), "iau": ("au", "Stripe Auth"), 
+            "imss": ("mss", "Stripe Mass"), "impp2": ("mpp2", "PayPal Mass")
+        }
         if data in gate_map:
             g_key, g_name = gate_map[data]
-            await query.edit_message_text(gate_info_text(g_name, g_key, 1), parse_mode="HTML", reply_markup=kb_back("mgates"))
-    elif data.startswith("fb_ok_"): await _fb_approve(query, context, data.split("fb_ok_")[1])
-    elif data.startswith("fb_no_"): await _fb_decline(query, context, data.split("fb_no_")[1])
+            if g_key in PREMIUM_GATES and not premium:
+                await query.answer("This gate is Premium Only!", show_alert=True)
+                return
+            await edit_text(gate_info_text(g_name, g_key, 1), reply_markup=kb_back("mgates"))
+    elif data.startswith("fb_ok_"): 
+        if user.id != OWNER_ID: return
+        await _fb_approve(query, context, data.split("fb_ok_")[1])
+    elif data.startswith("fb_no_"): 
+        if user.id != OWNER_ID: return
+        await _fb_decline(query, context, data.split("fb_no_")[1])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GLOBAL ERROR HANDLER & POST INIT
