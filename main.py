@@ -930,14 +930,16 @@ async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot turned ON for users.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK QUERY HANDLER (SMART PHOTO/TEXT FIX)
+# CALLBACK QUERY HANDLER (BULLETPROOF)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
     data, user = query.data, query.from_user
 
-    # SMART EDITOR: Automatically detects if message is Photo or Text to prevent crashes!
     async def edit_text(text: str, reply_markup=None):
         try:
             if query.message.photo:
@@ -950,8 +952,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Callback edit error: {e}")
 
-    # Force join check for all buttons except check_sub itself
-    if data != "check_sub":
+    # If user is NOT owner, check force sub
+    if user.id != OWNER_ID:
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
             await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
@@ -961,12 +963,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     premium = is_user_premium(ud)
 
     if data == "check_sub":
-        not_joined = await check_force_sub(user.id, context)
-        if not_joined:
-            await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
-        else:
-            _update_user_meta(ud, user)
-            await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
+        if user.id != OWNER_ID:
+            not_joined = await check_force_sub(user.id, context)
+            if not_joined:
+                await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
+                return
+        
+        _update_user_meta(ud, user)
+        await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
             
     elif data == "bmain":
         await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
