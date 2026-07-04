@@ -103,6 +103,7 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
             "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0,
             "total_refs": 0, "total_checks": 0, "approved_checks": 0, "declined_checks": 0,
             "last_gate": "N/A", "last_card": "N/A", "codes_redeemed": 0, "keys_redeemed": 0,
+            "force_sub_ok": False,  # persistent join verification
         }
     return context.bot_data["user_data"][uid]
 
@@ -173,28 +174,57 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE SUBSCRIBE (WITH 5-MIN CACHE FOR ULTRA SPEED)
+# FORCE SUBSCRIBE — ONE-TIME CHECK, PERSISTENT CACHE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_force_sub_cache = {} # uid -> (bool is_joined, timestamp)
+# In-memory session cache: uid -> (bool all_ok, timestamp)
+_force_sub_cache: dict = {}
 
-async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
-    if user_id == OWNER_ID: return []
-    
-    cached = _force_sub_cache.get(user_id)
-    if cached and time.time() - cached[1] < 300:
-        if cached[0]:
+async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE, force_recheck: bool = False) -> list:
+    """
+    Returns list of (name, link) channels the user has NOT joined.
+    Returns [] if the user has joined all channels.
+
+    Logic:
+    1. Owner always passes.
+    2. If already persistently verified (stored in user_data), skip API calls entirely.
+    3. If in-memory cache says OK (within 10 min), skip API calls.
+    4. Otherwise, do the API check:
+       - On exception for a channel, assume user HAS joined (benefit of the doubt).
+         This prevents buttons from dying when the bot isn't admin in the channel.
+    5. If all channels pass, persist the result so it's never checked again.
+    """
+    if user_id == OWNER_ID:
+        return []
+
+    # 1. Persistent verification — once verified, done forever
+    if not force_recheck:
+        ud = get_user_data(user_id, context)
+        if ud.get("force_sub_ok"):
             return []
-            
+
+        # 2. Short-circuit from in-memory cache (10 min)
+        cached = _force_sub_cache.get(user_id)
+        if cached and (time.time() - cached[1]) < 600:
+            if cached[0]:
+                return []
+
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
-            if member.status in ("left", "kicked"): not_joined.append((name, link))
-        except Exception: not_joined.append((name, link))
-    
+            if member.status in ("left", "kicked"):
+                not_joined.append((name, link))
+        except Exception:
+            # Cannot reach the channel API — assume user is joined.
+            # This prevents a bot-not-admin error from blocking all users.
+            pass
+
     if not not_joined:
+        # Mark as permanently verified
         _force_sub_cache[user_id] = (True, time.time())
-        
+        ud = get_user_data(user_id, context)
+        ud["force_sub_ok"] = True
+
     return not_joined
 
 def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
@@ -398,7 +428,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     bin_num  = card_raw[:6]
 
     if not api_url:
-        await update.message.reply_text(f"Gate API not set.", parse_mode="HTML"); return
+        await update.message.reply_text(f"Gate API not configured. Contact support.", parse_mode="HTML"); return
 
     msg        = await update.message.reply_text("[ 𖥷iТ ] ➺ Sᴄᴀɴɴɪɴɢ...")
     start_time = time.time()
@@ -436,7 +466,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
         logger.error(f"Gate [{gate_key}] error: {e}")
         time_taken = f"{time.time() - start_time:.2f}"
-        text = build_check_result(card_raw=card_raw, gate_name=gate_name, raw_response=str(e)[:120], bin_data={}, username=uname, plan=plan, time_taken=time_taken, is_approved=False, is_error=True)
+        text = build_check_result(card_raw=card_raw, gate_name=gate_name, raw_response="Gᴀᴛᴇ Eʀʀᴏʀ", bin_data={}, username=uname, plan=plan, time_taken=time_taken, is_approved=False, is_error=True)
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb_result(premium), disable_web_page_preview=True)
 
 async def cmd_chk(u, c):  await process_gate(u, c, "chk",  "Stripe Charge")
@@ -547,6 +577,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud.setdefault("joined",     datetime.now().strftime("%Y-%m-%d %H:%M"))
     ud.setdefault("name",       user.full_name or user.first_name or "User")
     ud.setdefault("total_refs", 0)
+    ud.setdefault("force_sub_ok", False)
     _update_user_meta(ud, user)
 
     if context.args:
@@ -628,8 +659,8 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("BIN not found."); return
         txt = (f"<b>[ 𖥷iТ ] ➺ BIN Lookup</b>\n━━━━━━━━━━━━━━━━━\n<b>BIN</b>     ➺ <code>{bin_num}</code>\n<b>Scheme</b>  ➺ {str(bd.get('scheme', 'N/A')).upper()}\n<b>Type</b>    ➺ {str(bd.get('type', 'N/A')).upper()}\n<b>Bank</b>    ➺ {bd.get('bank', 'N/A')}\n<b>Country</b> ➺ {bd.get('country_emoji', '')} {str(bd.get('country', 'N/A')).upper()}\n━━━━━━━━━━━━━━━━━")
         await msg.edit_text(txt, parse_mode="HTML")
-    except Exception as e:
-        await msg.edit_text(f"Error: <code>{str(e)[:100]}</code>", parse_mode="HTML")
+    except Exception:
+        await msg.edit_text("BIN lookup failed. Try again later.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FEEDBACK SYSTEM  (/fb)
@@ -778,11 +809,11 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args: await update.message.reply_text("Uꜱᴀɢᴇ: /find @username | /find 123456789"); return
-    query = " ".join(context.args).strip().lstrip("@")
-    all_users, now, matches, ql = context.bot_data.get("user_data", {}), time.time(), [], query.lower()
+    query_text = " ".join(context.args).strip().lstrip("@")
+    all_users, now, matches, ql = context.bot_data.get("user_data", {}), time.time(), [], query_text.lower()
     for uid_str, ud in all_users.items():
         if ql in ud.get("username", "").lower().lstrip("@") or ql in ud.get("name", "").lower(): matches.append((uid_str, ud))
-    if not matches: await update.message.reply_text(f"❌ No users found: <code>{query}</code>", parse_mode="HTML"); return
+    if not matches: await update.message.reply_text(f"❌ No users found: <code>{query_text}</code>", parse_mode="HTML"); return
     blocks = []
     for uid_str, ud in matches[:10]:
         rp, ex = ud.get("plan", "TRIAL").upper(), ud.get("expires", 0)
@@ -917,7 +948,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=int(uid_str), text=msg_text)
             sent += 1
         except Exception: failed += 1
-    await update.message.reply_text(f"✅ <b>Bʀᴏᴏᴀᴅᴄᴀsᴛ Cᴏᴍᴘᴘʟᴇᴛᴇ!</b>\n<b>Sᴇɴᴛ</b>: {sent}\n<b>Fᴀɪʟᴇᴅ</b>: {failed}", parse_mode="HTML")
+    await update.message.reply_text(f"✅ <b>Bʀᴏᴀᴅᴄᴀsᴛ Cᴏᴍᴘʟᴇᴛᴇ!</b>\n<b>Sᴇɴᴛ</b>: {sent}\n<b>Fᴀɪʟᴇᴅ</b>: {failed}", parse_mode="HTML")
 
 async def cmd_killbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -952,33 +983,51 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Callback edit error: {e}")
 
-    # If user is NOT owner, check force sub
-    if user.id != OWNER_ID:
-        not_joined = await check_force_sub(user.id, context)
+    # --- "check_sub" button: force a fresh re-check (only button that touches the API) ---
+    if data == "check_sub":
+        if user.id == OWNER_ID:
+            # Owner always passes — show profile
+            ud = get_user_data(user.id, context)
+            _update_user_meta(ud, user)
+            await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
+            return
+
+        # Clear persistent and in-memory cache so we actually re-check membership
+        ud = get_user_data(user.id, context)
+        ud["force_sub_ok"] = False
+        _force_sub_cache.pop(user.id, None)
+
+        not_joined = await check_force_sub(user.id, context, force_recheck=True)
         if not_joined:
+            await query.answer("You haven't joined all channels yet!", show_alert=True)
             await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
             return
 
-    ud = get_user_data(user.id, context)
-    premium = is_user_premium(ud)
+        _update_user_meta(ud, user)
+        await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
+        return
 
-    if data == "check_sub":
-        if user.id != OWNER_ID:
+    # --- For ALL other buttons: use persistent cache (no live API call) ---
+    # Only show force-sub prompt if persistently NOT verified (never checked or failed last check)
+    if user.id != OWNER_ID:
+        ud_check = get_user_data(user.id, context)
+        if not ud_check.get("force_sub_ok"):
+            # Try a fast check (uses in-memory cache or persistent flag)
             not_joined = await check_force_sub(user.id, context)
             if not_joined:
                 await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
                 return
-        
-        _update_user_meta(ud, user)
+
+    ud = get_user_data(user.id, context)
+    premium = is_user_premium(ud)
+
+    if data == "bmain":
         await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
-            
-    elif data == "bmain":
-        await edit_text(ui_profile(user, context), reply_markup=kb_main(user.id))
-    elif data == "mgates": 
+    elif data == "mgates":
         await edit_text("<b>Sᴇʟᴇᴄᴛ Gᴀᴛᴇ Cᴀᴛᴇɢᴏʀʏ</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_gate_main())
-    elif data == "mauth": 
+    elif data == "mauth":
         await edit_text("<b>Aᴜᴛʜ Gᴀᴛᴇs</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_auth_gates())
-    elif data == "mcharge": 
+    elif data == "mcharge":
         await edit_text("<b>Cʜᴀʀɢᴇ Gᴀᴛᴇs</b>\n━━━━━━━━━━━━━━━━━", reply_markup=kb_charge_gates())
     elif data == "mmass":
         if not premium:
@@ -997,13 +1046,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_refs = ud.get("total_refs", 0)
         txt = (f"<b>[ 𖥷iТ ] Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n<b>Pᴇʀ Rᴇꜰ</b>  ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━")
         await edit_text(txt, reply_markup=kb_back("bmain"))
-    elif data.startswith("pay"): 
+    elif data.startswith("pay"):
         await edit_text("<b>Pᴀʏᴍᴇɴᴛ</b>\n━━━━━━━━━━━━━━━━━\nTo purchase, contact support.", reply_markup=kb_payment())
     elif data.startswith("i"):
         gate_map = {
-            "ichk": ("chk", "Stripe Charge"), "ipp": ("pp", "PayPal Charge"), 
-            "ish": ("sh", "Shopify Charge"), "ipyu": ("pyu", "PayU Charge"), 
-            "ib3": ("b3", "Braintree Auth"), "iau": ("au", "Stripe Auth"), 
+            "ichk": ("chk", "Stripe Charge"), "ipp": ("pp", "PayPal Charge"),
+            "ish": ("sh", "Shopify Charge"), "ipyu": ("pyu", "PayU Charge"),
+            "ib3": ("b3", "Braintree Auth"), "iau": ("au", "Stripe Auth"),
             "imss": ("mss", "Stripe Mass"), "impp2": ("mpp2", "PayPal Mass")
         }
         if data in gate_map:
@@ -1012,10 +1061,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("This gate is Premium Only!", show_alert=True)
                 return
             await edit_text(gate_info_text(g_name, g_key, 1), reply_markup=kb_back("mgates"))
-    elif data.startswith("fb_ok_"): 
+    elif data.startswith("fb_ok_"):
         if user.id != OWNER_ID: return
         await _fb_approve(query, context, data.split("fb_ok_")[1])
-    elif data.startswith("fb_no_"): 
+    elif data.startswith("fb_no_"):
         if user.id != OWNER_ID: return
         await _fb_decline(query, context, data.split("fb_no_")[1])
 
