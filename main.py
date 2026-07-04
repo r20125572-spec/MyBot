@@ -37,7 +37,7 @@ logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# INSTANCE LOCK (PREVENTS DUPLICATE RAILWAY CRASHES)
+# INSTANCE LOCK
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _lock_file_handle = None
 
@@ -180,7 +180,6 @@ _force_sub_cache = {} # uid -> (bool is_joined, timestamp)
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
     if user_id == OWNER_ID: return []
     
-    # 5 Minute Cache Check (Massive speed boost for buttons/commands)
     cached = _force_sub_cache.get(user_id)
     if cached and time.time() - cached[1] < 300:
         if cached[0]:
@@ -931,16 +930,20 @@ async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot turned ON for users.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK QUERY HANDLER (SHIELDED FOR ZERO CRASHES)
+# CALLBACK QUERY HANDLER (SMART PHOTO/TEXT FIX)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data, user = query.data, query.from_user
 
+    # SMART EDITOR: Automatically detects if message is Photo or Text to prevent crashes!
     async def edit_text(text: str, reply_markup=None):
         try:
-            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=reply_markup, disable_web_page_preview=True)
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=reply_markup)
+            else:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=reply_markup, disable_web_page_preview=True)
         except BadRequest as e:
             if "message is not modified" in str(e).lower(): pass
             else: logger.error(f"Callback edit error: {e}")
