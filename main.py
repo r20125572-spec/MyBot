@@ -25,10 +25,10 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info,
 )
-from mass import get_mass_handlers  # <-- ADDED BACK! THIS MAKES MASS COMMANDS WORK
+from mass import get_mass_handlers
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LOGGING
+# LOGGING & CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
@@ -37,7 +37,7 @@ logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# INSTANCE LOCK (PREVENTS RAILWAY DUPLICATE CRASHES)
+# INSTANCE LOCK (PREVENTS DUPLICATE RAILWAY CRASHES)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _lock_file_handle = None
 
@@ -173,16 +173,29 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE SUBSCRIBE
+# FORCE SUBSCRIBE (WITH 5-MIN CACHE FOR ULTRA SPEED)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_force_sub_cache = {} # uid -> (bool is_joined, timestamp)
+
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
     if user_id == OWNER_ID: return []
+    
+    # 5 Minute Cache Check (Massive speed boost for buttons/commands)
+    cached = _force_sub_cache.get(user_id)
+    if cached and time.time() - cached[1] < 300:
+        if cached[0]:
+            return []
+            
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
             if member.status in ("left", "kicked"): not_joined.append((name, link))
         except Exception: not_joined.append((name, link))
+    
+    if not not_joined:
+        _force_sub_cache[user_id] = (True, time.time())
+        
     return not_joined
 
 def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
@@ -432,6 +445,31 @@ async def cmd_pp(u, c):   await process_gate(u, c, "pp",   "PayPal Charge")
 async def cmd_sh(u, c):   await process_gate(u, c, "sh",   "Shopify Charge")
 async def cmd_pyu(u, c):  await process_gate(u, c, "pyu",  "PayU Charge")
 async def cmd_b3(u, c):   await process_gate(u, c, "b3",   "Braintree Auth")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GATE ON/OFF CONTROLS (OWNER ONLY)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _gate_toggle(update, context, gate: str, state: bool):
+    if update.effective_user.id != OWNER_ID: return
+    context.bot_data[f"{gate}_on"] = state
+    await update.message.reply_text(f"Gate [{gate.upper()}] turned {'ON ✅' if state else 'OFF ❌'}.")
+
+async def cmd_onchk(u, c):   await _gate_toggle(u, c, "chk",  True)
+async def cmd_offchk(u, c):  await _gate_toggle(u, c, "chk",  False)
+async def cmd_onpp(u, c):    await _gate_toggle(u, c, "pp",   True)
+async def cmd_offpp(u, c):   await _gate_toggle(u, c, "pp",   False)
+async def cmd_onsh(u, c):    await _gate_toggle(u, c, "sh",   True)
+async def cmd_offsh(u, c):   await _gate_toggle(u, c, "sh",   False)
+async def cmd_onpyu(u, c):   await _gate_toggle(u, c, "pyu",  True)
+async def cmd_offpyu(u, c):  await _gate_toggle(u, c, "pyu",  False)
+async def cmd_onb3(u, c):    await _gate_toggle(u, c, "b3",   True)
+async def cmd_offb3(u, c):   await _gate_toggle(u, c, "b3",   False)
+async def cmd_onau(u, c):    await _gate_toggle(u, c, "au",   True)
+async def cmd_offau(u, c):   await _gate_toggle(u, c, "au",   False)
+async def cmd_onmss(u, c):   await _gate_toggle(u, c, "mss",  True)
+async def cmd_offmss(u, c):  await _gate_toggle(u, c, "mss",  False)
+async def cmd_onmpp2(u, c):  await _gate_toggle(u, c, "mpp2", True)
+async def cmd_offmpp2(u, c): await _gate_toggle(u, c, "mpp2", False)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PREMIUM ACTIVATION
@@ -736,7 +774,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    await update.message.reply_text("<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n🟢 <b>USER:</b>\n/start ➺ Start bot\n/plan ➺ View plans\n/bin ➺ BIN lookup\n/rm ➺ Redeem code\n/ping ➺ Speed check\n/refer ➺ Referral link\n/fb ➺ Submit feedback\n\n\n⚡ <b>FREE CHECKER:</b>\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n👑 <b>PREMIUM ONLY:</b>\n/au ➺ Stripe Mass\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n👑 <b>OWNER:</b>\n/info ➺ Full user info\n/find ➺ Search user\n/allcm ➺ This menu\n/gen ➺ Gen credits\n/key10 /key20 /key30 ➺ Gen keys\n/sub ➺ Grant premium\n/resub ➺ Remove premium\n/addcredits ➺ Add credits\n/seturl ➺ Set gate API URL\n/geturl ➺ View gate URLs\n/broadcast ➺ Message all users\n/killbot /onbot ➺ Maintenance mode\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+    await update.message.reply_text("<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n🟢 <b>USER:</b>\n/start ➺ Start bot\n/plan ➺ View plans\n/bin ➺ BIN lookup\n/rm ➺ Redeem code\n/ping ➺ Speed check\n/refer ➺ Referral link\n/fb ➺ Submit feedback\n\n\n⚡ <b>FREE CHECKER:</b>\n/chk ➺ Stripe Charge\n/pp ➺ PayPal Charge\n/sh ➺ Shopify Charge\n/pyu ➺ PayU Charge\n/b3 ➺ Braintree Auth\n\n👑 <b>PREMIUM ONLY:</b>\n/au ➺ Stripe Mass\n/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n\n👑 <b>OWNER:</b>\n/info ➺ Full user info\n/find ➺ Search user\n/allcm ➺ This menu\n/gen ➺ Gen credits\n/key10 /key20 /key30 ➺ Gen keys\n/sub ➺ Grant premium\n/resub ➺ Remove premium\n/addcredits ➺ Add credits\n/seturl ➺ Set gate API URL\n/geturl ➺ View gate URLs\n/broadcast ➺ Message all users\n/killbot /onbot ➺ Maintenance mode\n/onsh /offsh /onchk /offchk /onpp /offpp (etc) ➺ Toggle Gates\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
 
 async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1005,7 +1043,16 @@ def main():
         app.add_handler(CommandHandler("killbot", cmd_killbot))
         app.add_handler(CommandHandler("onbot", cmd_onbot))
 
-        # MASS HANDLERS INTEGRATION (Fixes /au, /mss, /mpp2)
+        # Gate On/Off Commands
+        for cmd, func in [
+            ("onchk", cmd_onchk), ("offchk", cmd_offchk), ("onpp", cmd_onpp), ("offpp", cmd_offpp),
+            ("onsh", cmd_onsh), ("offsh", cmd_offsh), ("onpyu", cmd_onpyu), ("offpyu", cmd_offpyu),
+            ("onb3", cmd_onb3), ("offb3", cmd_offb3), ("onau", cmd_onau), ("offau", cmd_offau),
+            ("onmss", cmd_onmss), ("offmss", cmd_offmss), ("onmpp2", cmd_onmpp2), ("offmpp2", cmd_offmpp2),
+        ]:
+            app.add_handler(CommandHandler(cmd, func))
+
+        # MASS HANDLERS INTEGRATION
         for handler in get_mass_handlers():
             app.add_handler(handler)
 
@@ -1019,4 +1066,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
