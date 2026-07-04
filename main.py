@@ -26,6 +26,7 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
+from mass import get_mass_handlers  # <--- THIS WAS MISSING AND CAUSED THE CRASH
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING & CONFIG
