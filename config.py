@@ -23,14 +23,14 @@ SUPPORT_LINK     = "https://t.me/cardchkSupport"
 BOT_USERNAME  = "Batmanchk_bot"
 BOT_LINK      = "https://t.me/Batmanchk_bot"
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/baac90d1-06d0-478f-8989-5bef9cbfc9fb.jpg"
-BOT_PHOTO     = "batman.jpg" 
+BOT_PHOTO     = "batman.jpg"
 
 API_TIMEOUT      = 120
 REFERRAL_CREDITS = 150
 LOCK_FILE        = "/tmp/batman_bot.lock"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE JOIN  
+# FORCE JOIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FORCE_CHANNELS = [
     ("Batcardchk",      CHANNEL_LINK),
@@ -45,7 +45,7 @@ GATE_URLS = {
     "pp":   "https://pp-auth-test-production.up.railway.app/pp",
     "sh":   "https://shopify-auth-test-production.up.railway.app/sh",
     "pyu":  "https://payu-auth-test-production.up.railway.app/pyu",
-    "b3":   "",
+    "b3":   "https://avs.blaze.indevs.in/api/b3",
     "au":   "https://stripe-auth-test-production.up.railway.app/st0",
     "mss":  "https://stripe-auth-test-production.up.railway.app/st0",
     "mpp2": "https://pp-auth-test-production.up.railway.app/pp",
@@ -101,7 +101,7 @@ async def get_bin_info(bin_num: str) -> dict:
 def kb_result(is_premium: bool = False) -> InlineKeyboardMarkup:
     if is_premium:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("Batcardchk", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("📢 Batcardchk", url=CHANNEL_LINK)],
         ])
     else:
         return InlineKeyboardMarkup([
