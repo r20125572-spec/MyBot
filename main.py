@@ -26,7 +26,7 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
-from mass import get_mass_handlers  # <--- THIS WAS MISSING AND CAUSED THE CRASH
+from mass import get_mass_handlers
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING & CONFIG
@@ -140,7 +140,6 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     premium    = raw_plan != "TRIAL"
     credits    = "Unlimited" if premium else str(ud.get("credits", 150))
     
-    # Escape user input to prevent HTML crashes
     uname = escape(f"@{user.username}" if user.username else user.first_name or "User")
     total_refs = ud.get("total_refs", 0)
     plan_icon  = get_plan_icon(raw_plan)
@@ -193,8 +192,11 @@ async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> l
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
             if member.status in ("left", "kicked"): not_joined.append((name, link))
-        except Exception: not_joined.append((name, link))
-    
+        except Exception as e:
+            logger.warning(f"Force sub check failed for {name}: {e}. Make sure the bot is admin. Skipping check.")
+            # If bot is not admin, don't block the user from using buttons!
+            pass
+            
     if not not_joined:
         _force_sub_cache[user_id] = (True, time.time())
         
