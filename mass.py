@@ -166,7 +166,9 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             try:
                 member = await context.bot.get_chat_member(f"@{name}", user_id)
                 if member.status in ("left", "kicked"): not_joined.append((name, link))
-            except Exception: not_joined.append((name, link))
+            except Exception:
+                # If bot is not admin, don't block the user
+                pass
         if not_joined:
             rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
             rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
