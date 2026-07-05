@@ -26,7 +26,7 @@ from config import (
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
 )
-from mass import get_mass_handlers
+from mass import get_mass_handlers  # MAKE SURE mass.py EXISTS!
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING & CONFIG
@@ -175,27 +175,24 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE SUBSCRIBE (WITH 5-MIN CACHE FOR ULTRA SPEED)
+# FORCE SUBSCRIBE (WITH 5-MIN CACHE)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_force_sub_cache = {} # uid -> (bool is_joined, timestamp)
+_force_sub_cache = {} 
 
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
     if user_id == OWNER_ID: return []
     
     cached = _force_sub_cache.get(user_id)
     if cached and time.time() - cached[1] < 300:
-        if cached[0]:
-            return []
+        if cached[0]: return []
             
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
             if member.status in ("left", "kicked"): not_joined.append((name, link))
-        except Exception as e:
-            logger.warning(f"Force sub check failed for {name}: {e}. Make sure the bot is admin. Skipping check.")
-            # If bot is not admin, don't block the user from using buttons!
-            pass
+        except Exception:
+            pass 
             
     if not not_joined:
         _force_sub_cache[user_id] = (True, time.time())
@@ -935,17 +932,20 @@ async def cmd_onbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot turned ON for users.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK QUERY HANDLER (SMART PHOTO/TEXT FIX)
+# CALLBACK QUERY HANDLER (NO FORCE SUB CHECK = 100% WORKING BUTTONS)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    
+    # 1. Answer immediately so the button stops loading instantly
     try:
         await query.answer()
     except Exception:
         pass
+        
     data, user = query.data, query.from_user
 
-    # SMART EDITOR: Automatically detects if message is Photo or Text to prevent crashes!
+    # 2. Smart Editor to prevent crashes if message is Photo or Text
     async def edit_text(text: str, reply_markup=None):
         try:
             if query.message.photo:
@@ -958,17 +958,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Callback edit error: {e}")
 
-    # Force join check for all buttons except check_sub itself
-    if data != "check_sub":
-        not_joined = await check_force_sub(user.id, context)
-        if not_joined:
-            await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
-            return
-
+    # 3. NO FORCE SUB CHECK HERE! Let the buttons work instantly!
     ud = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
     if data == "check_sub":
+        # This only happens when they click the verify button
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
             await edit_text(FORCE_SUB_TEXT, reply_markup=kb_force_sub(not_joined))
