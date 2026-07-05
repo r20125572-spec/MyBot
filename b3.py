@@ -1,12 +1,9 @@
-import urllib.request
-import urllib.error
-import json
+import aiohttp
 import asyncio
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
-from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK
-from plans import deduct_credit, is_premium
+from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BRAINTREE GATE CONFIGURATION
@@ -14,19 +11,42 @@ from plans import deduct_credit, is_premium
 B3_API_URL = "https://avs.blaze.indevs.in/api/b3"
 GATE_NAME  = "Bʀᴀɪɴᴛʀᴇᴇ 0$"
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LOCAL USER DATA HELPERS (Matches main.py logic)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
+    uid = str(user_id)
+    if "user_data" not in context.bot_data: context.bot_data["user_data"] = {}
+    if uid not in context.bot_data["user_data"]:
+        context.bot_data["user_data"][uid] = {
+            "name": "User", "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0
+        }
+    return context.bot_data["user_data"][uid]
+
+def is_user_premium(ud: dict) -> bool:
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    if raw_plan == "TRIAL": return False
+    if ud.get("expires", 0) <= time.time():
+        ud["plan"] = "TRIAL"
+        ud["credits"] = ud.get("pre_premium_credits", 150)
+        ud["expires"] = 0
+        return False
+    return True
+
 async def _check_force_sub(user_id: int, context) -> list:
-    if user_id == OWNER_ID:
-        return []
+    if user_id == OWNER_ID: return []
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
-            if member.status in ("left", "kicked"):
-                not_joined.append((name, link))
+            if member.status in ("left", "kicked"): not_joined.append((name, link))
         except Exception:
             pass
     return not_joined
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /b3 COMMAND HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -69,11 +89,12 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Credit check & deduction via plans.py ──
-    premium = is_premium(user.id)
+    # ── Credit check & deduction ──
+    ud = get_user_data(user.id, context)
+    premium = is_user_premium(ud)
 
     if not premium:
-        if not deduct_credit(user.id):
+        if ud.get("credits", 0) <= 0:
             await update.message.reply_text(
                 "<b>[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
                 "You have no credits left.\n"
@@ -85,32 +106,27 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
             return
+        ud["credits"] -= 1
 
     msg        = await update.message.reply_text("⏳ <b>[ 𖥷iТ ] ➺ Pʀᴏᴄᴇꜱꜱɪɴɢ...</b>", parse_mode="HTML")
     start_time = time.time()
     bin_num    = card[:6]
 
     try:
-        loop = asyncio.get_running_loop()
-
-        def do_request():
-            url = f"{B3_API_URL}?cc={card}"
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+        url = f"{B3_API_URL}?cc={card}"
+        timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
 
         # Run API + BIN lookup in parallel
-        api_task = loop.run_in_executor(None, do_request)
-        bin_task = get_bin_info(bin_num)
-        results  = await asyncio.gather(api_task, bin_task, return_exceptions=True)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            api_task = session.get(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            bin_task = get_bin_info(bin_num)
+            
+            resp, bin_data = await asyncio.gather(api_task, bin_task, return_exceptions=True)
 
-        api_data = results[0]
-        bin_data = results[1] if not isinstance(results[1], Exception) else {"error": True}
-
-        if isinstance(api_data, Exception):
-            raise api_data
+            if isinstance(bin_data, Exception): bin_data = {"error": True}
+            if isinstance(resp, Exception): raise resp
+            
+            api_data = await resp.json(content_type=None)
 
         message   = str(api_data.get("message", "")).strip()
         status    = str(api_data.get("status", "")).lower()
@@ -159,31 +175,15 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True
         )
 
-    except urllib.error.HTTPError as e:
-        await msg.edit_text(
-            f"<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"HTTP {e.code}: {e.reason}\n━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
-    except urllib.error.URLError:
-        await msg.edit_text(
-            "<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
-            "Connection error. Check API URL.\n━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
     except asyncio.TimeoutError:
+        if not premium: ud["credits"] = ud.get("credits", 0) + 1
         await msg.edit_text(
             "<b>[ 𖥷iТ ] ➺ Tɪᴍᴇᴏᴜᴛ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
             "API took too long. Try again.\n━━━━━━━━━━━━━━━━━",
             parse_mode="HTML"
         )
-    except json.JSONDecodeError:
-        await msg.edit_text(
-            "<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
-            "API returned invalid response.\n━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
     except Exception as e:
+        if not premium: ud["credits"] = ud.get("credits", 0) + 1
         await msg.edit_text(
             f"<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
             f"<code>{str(e)[:120]}</code>\n━━━━━━━━━━━━━━━━━",
