@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import time
+from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
 from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT
@@ -8,7 +9,8 @@ from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BRAINTREE GATE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B3_API_URL = "https://avs.blaze.indevs.in/api/b3"
+# UPDATED TO YOUR NEW API URL
+B3_API_URL = "https://chk.rcvan.indevs.in/b3"
 GATE_NAME  = "Bʀᴀɪɴᴛʀᴇᴇ 0$"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -128,8 +130,9 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             api_data = await resp.json(content_type=None)
 
-        message   = str(api_data.get("message", "")).strip()
-        status    = str(api_data.get("status", "")).lower()
+        # Safely extract message and status from various API response formats
+        message   = str(api_data.get("message") or api_data.get("response") or api_data.get("msg") or "").strip()
+        status    = str(api_data.get("status") or api_data.get("result") or "").lower()
         msg_lower = message.lower()
 
         is_approved = (
@@ -156,11 +159,14 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_label = "Pʀᴇᴍɪᴜᴍ 👑" if premium else "Tʀɪᴀʟ"
         elapsed    = f"{time.time() - start_time:.2f}"
 
+        # Escape message to prevent HTML parsing errors
+        safe_message = escape(message) if message else "No response"
+
         text = (
             f"<b>[ 𖥷iТ ] ➺ {status_ui}</b>\n"
             f"🔍 ➺ <code>{card}</code>\n"
             f"<b>Gᴀᴛᴇ</b> ➺ {GATE_NAME} 💳\n"
-            f"<b>Rᴀᴡ</b>  ➺ {message if message else 'No response'}\n"
+            f"<b>Rᴀᴡ</b>  ➺ {safe_message}\n"
             f"<b>Iɴꜰᴏ</b> ➺ {bin_txt}\n"
             f"<b>Uꜱᴇʀ</b> ➺ {ud_name} ({plan_label})\n"
             f"<b>Tɪᴍᴇ</b> ➺ {elapsed}s\n"
@@ -186,7 +192,7 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
         await msg.edit_text(
             f"<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<code>{str(e)[:120]}</code>\n━━━━━━━━━━━━━━━━━",
+            f"<code>{escape(str(e)[:120])}</code>\n━━━━━━━━━━━━━━━━━",
             parse_mode="HTML"
         )
 
