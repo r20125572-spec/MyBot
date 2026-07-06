@@ -14,7 +14,7 @@ B3_API_URL = "https://chk.rcvan.indevs.in/b3"
 GATE_NAME  = "Bʀᴀɪɴᴛʀᴇᴇ 0$"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LOCAL USER DATA HELPERS (Matches main.py logic)
+# LOCAL USER DATA HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
     uid = str(user_id)
@@ -74,19 +74,24 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Parse card ──
+    # ── Parse card (FIXED EXTRACTION) ──
     card = None
     if context.args:
         card = context.args[0].strip()
-    elif update.message.reply_to_message and update.message.reply_to_message.text:
-        replied_text = update.message.reply_to_message.text
-        # Extract the card from the <code>...</code> block to prevent reading the "[ 𖥷iТ ]" part!
-        match = re.search(r'<code>(.*?)</code>', replied_text)
+    elif update.message.reply_to_message:
+        replied_msg = update.message.reply_to_message
+        # Get the text or caption from the replied message
+        replied_text = replied_msg.text or replied_msg.caption or ""
+        
+        # Use Regex to find the actual card number inside the text (ignores the "[ 𖥷iТ ]" part)
+        match = re.search(r'(\d{13,19})\s*[|,;\s]\s*(\d{1,2})\s*[|,;\s]\s*(\d{2,4})\s*[|,;\s]\s*(\d{3,4})', replied_text)
         if match:
-            card = match.group(1).strip()
+            card = f"{match.group(1)}|{match.group(2)}|{match.group(3)}|{match.group(4)}"
         else:
-            # Fallback: if it's a normal text message without code blocks
-            card = replied_text.strip().split()[0]
+            # Fallback: look for just a 13-19 digit number if there's no expiry/cvv
+            match = re.search(r'\b(\d{13,19})\b', replied_text)
+            if match:
+                card = match.group(1)
 
     if not card:
         await update.message.reply_text(
