@@ -34,7 +34,8 @@ def load_list_from_file(filename: str, default_list: list) -> list:
             pass
     return default_list
 
-PROXIES = load_list_from_file("proxies.txt", [])
+# CHANGED: proxies now load from px.txt
+PROXIES = load_list_from_file("px.txt", [])
 SITES   = load_list_from_file("sites.txt",   ["https://powerbuild.store"])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -259,8 +260,12 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         await update.message.reply_text("⚠️ Gate API not configured.", parse_mode="HTML")
         return
 
-    rotator      = ProxyRotator(PROXIES)
-    dynamic_sites = SITES if SITES else [site]
+    # Load proxies and sites dynamically on each run
+    dynamic_proxies = load_list_from_file("px.txt", PROXIES)
+    dynamic_sites = load_list_from_file("sites.txt", SITES)
+
+    rotator      = ProxyRotator(dynamic_proxies)
+    sites_to_use = dynamic_sites if dynamic_sites else [site]
 
     msg = await update.message.reply_text(
         f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
@@ -268,6 +273,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Sᴛᴀʀᴛɪɴɢ...\n"
         f"━━━━━━━━━━━━━━\n"
         f"📊 <b>Cᴀʀᴅꜱ</b> ➺ {len(cards)}\n"
+        f"🌐 <b>Sɪᴛᴇs</b> ➺ {len(sites_to_use)}\n"
         f"━━━━━━━━━━━━━━\n"
         f"⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...",
         parse_mode="HTML"
@@ -283,7 +289,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         tasks = [
             check_single_card(
                 session, gate_key, api_url,
-                dynamic_sites[i % len(dynamic_sites)],
+                sites_to_use[i % len(sites_to_use)],
                 card, rotator.next(), semaphore
             )
             for i, card in enumerate(cards)
