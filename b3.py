@@ -9,7 +9,6 @@ from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BRAINTREE GATE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# UPDATED TO YOUR NEW API URL
 B3_API_URL = "https://chk.rcvan.indevs.in/b3"
 GATE_NAME  = "Bʀᴀɪɴᴛʀᴇᴇ 0$"
 
@@ -135,15 +134,23 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status    = str(api_data.get("status") or api_data.get("result") or "").lower()
         msg_lower = message.lower()
 
+        # ── STRICT STATUS DETECTION ──
+        # Check for Approved keywords
         is_approved = (
-            status == "processed"
-            or "nice! new payment method added" in msg_lower
-            or "approved" in msg_lower
-            or "success" in msg_lower
-            or status == "true"
+            "approved" in status or
+            "success" in status or
+            status == "true" or
+            "processed" in status or
+            "nice! new payment method added" in msg_lower or
+            "approved" in msg_lower or
+            "success" in msg_lower
         )
-
-        status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅" if is_approved else "Dᴇᴄʟɪɴᴇᴅ ❌"
+        
+        # If not explicitly approved, it is Declined
+        if is_approved:
+            status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅"
+        else:
+            status_ui = "Dᴇᴄʟɪɴᴇᴅ ❌"
 
         # BIN info formatting
         bin_txt = "N/A"
