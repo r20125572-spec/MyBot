@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import time
+import re
 from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
@@ -78,7 +79,14 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         card = context.args[0].strip()
     elif update.message.reply_to_message and update.message.reply_to_message.text:
-        card = update.message.reply_to_message.text.strip().split()[0]
+        replied_text = update.message.reply_to_message.text
+        # Extract the card from the <code>...</code> block to prevent reading the "[ 𖥷iТ ]" part!
+        match = re.search(r'<code>(.*?)</code>', replied_text)
+        if match:
+            card = match.group(1).strip()
+        else:
+            # Fallback: if it's a normal text message without code blocks
+            card = replied_text.strip().split()[0]
 
     if not card:
         await update.message.reply_text(
@@ -135,7 +143,6 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_lower = message.lower()
 
         # ── STRICT STATUS DETECTION ──
-        # Check for Approved keywords
         is_approved = (
             "approved" in status or
             "success" in status or
@@ -146,7 +153,6 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "success" in msg_lower
         )
         
-        # If not explicitly approved, it is Declined
         if is_approved:
             status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅"
         else:
