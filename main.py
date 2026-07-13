@@ -14,7 +14,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
 )
-from telegram.error import Conflict, BadRequest, NetworkError
+from telegram.error import Conflict, BadRequest, NetworkError, Forbidden
 
 import aiohttp as _aiohttp
 
@@ -28,6 +28,7 @@ from config import (
 )
 from mass import get_mass_handlers
 from b3 import get_b3_handler
+from chk import get_chk_handler
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING & CONFIG
@@ -347,10 +348,20 @@ async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> l
     for uname, link, label in FORCE_JOIN_FULL:
         try:
             member = await context.bot.get_chat_member(f"@{uname}", user_id)
-            if member.status in ("left", "kicked"):
+            if member.status in ("left", "kicked", "restricted"):
                 not_joined.append((uname, link, label))
+        except Forbidden:
+            # Bot is not admin in this chat — skip silently (can't check)
+            pass
+        except BadRequest as e:
+            err = str(e).lower()
+            if any(x in err for x in ("not found", "user_not_participant", "participant", "not a member")):
+                # User has not joined this chat
+                not_joined.append((uname, link, label))
+            # else: chat not found or other config issue — skip silently
         except Exception:
-            pass  # skip if bot can't check (not admin)
+            # Network glitch etc — skip silently, don't block the user
+            pass
 
     if not not_joined:
         _force_sub_cache[user_id] = (True, time.time())
@@ -522,10 +533,11 @@ def kb_auth_gates() -> InlineKeyboardMarkup:
 
 def kb_charge_gates() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE"),  callback_data="ichk"),
-         InlineKeyboardButton(B("PAYPAL"),  callback_data="ipp")],
-        [InlineKeyboardButton(B("SHOPIFY"), callback_data="ish"),
-         InlineKeyboardButton(B("PAYU"),    callback_data="ipyu")],
+        [InlineKeyboardButton(B("STRIPE"),       callback_data="ichk"),
+         InlineKeyboardButton(B("PAYPAL"),       callback_data="ipp")],
+        [InlineKeyboardButton(B("SHOPIFY"),      callback_data="ish"),
+         InlineKeyboardButton(B("PAYU"),         callback_data="ipyu")],
+
         [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
     ])
 
@@ -587,7 +599,8 @@ CMD_PAGES = {
         "       Usage: <code>/sh cc|mm|yy|cvv</code>\n\n"
         "<b>/pyu</b>  ➔ PayU Charge\n"
         "       Cost ➔ 1 Credit\n"
-        "       Usage: <code>/pyu cc|mm|yy|cvv</code>\n"
+        "       Usage: <code>/pyu cc|mm|yy|cvv</code>\n\n"
+
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Example: /chk 4111111111111111|12|2026|123</i>"
     ),
@@ -856,10 +869,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             reply_markup=kb_result(premium),
                             disable_web_page_preview=True)
 
-async def cmd_chk(u, c):  await process_gate(u, c, "chk",  "Stripe Charge")
 async def cmd_pp(u, c):   await process_gate(u, c, "pp",   "PayPal Charge")
 async def cmd_sh(u, c):   await process_gate(u, c, "sh",   "Shopify Charge")
 async def cmd_pyu(u, c):  await process_gate(u, c, "pyu",  "PayU Charge")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GATE ON/OFF (OWNER ONLY)
@@ -868,6 +881,7 @@ async def _gate_toggle(update, context, gate: str, state: bool):
     if update.effective_user.id != OWNER_ID: return
     context.bot_data[f"{gate}_on"] = state
     await update.message.reply_text(f"Gate [{gate.upper()}] turned {'ON ✅' if state else 'OFF ❌'}.")
+
 
 async def cmd_onchk(u, c):   await _gate_toggle(u, c, "chk",  True)
 async def cmd_offchk(u, c):  await _gate_toggle(u, c, "chk",  False)
@@ -1801,6 +1815,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "iau":   ("au",   "Stripe Auth"),
             "imss":  ("mss",  "Stripe Mass"),
             "impp2": ("mpp2", "PayPal Mass"),
+
         }
         if data in gate_map:
             g_key, g_name = gate_map[data]
@@ -1904,7 +1919,7 @@ def main():
         app.add_handler(CommandHandler("fb",     cmd_fb))
 
         # ── Gate Commands ──
-        app.add_handler(CommandHandler("chk",  cmd_chk))
+        app.add_handler(get_chk_handler())
         app.add_handler(CommandHandler("pp",   cmd_pp))
         app.add_handler(CommandHandler("sh",   cmd_sh))
         app.add_handler(CommandHandler("pyu",  cmd_pyu))
@@ -1938,6 +1953,7 @@ def main():
 
         # ── Gate On/Off Commands ──
         for cmd, func in [
+
             ("onchk",  cmd_onchk),  ("offchk",  cmd_offchk),
             ("onpp",   cmd_onpp),   ("offpp",   cmd_offpp),
             ("onsh",   cmd_onsh),   ("offsh",   cmd_offsh),
