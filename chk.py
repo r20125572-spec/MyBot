@@ -293,28 +293,19 @@ async def create_stripe_pm(session, card_data, full_name, email, address_info, p
 
     if "error" in rj:
         err  = rj["error"]
-        code = err.get("code","unknown")
-        msg  = err.get("message","Unknown error")
-        dc   = err.get("decline_code","")
+        code = err.get("code", "unknown")
+        msg  = err.get("message", "Unknown error")
+        dc   = err.get("decline_code", "")
+        # Return the raw Stripe JSON so user can see it's a real Stripe response
+        raw_stripe = json.dumps(rj["error"])
+        label = f"[STRIPE-PRE] {code.upper()}"
+        if dc:
+            label += f" / {dc.upper()}"
+        return None, f"{label} | {raw_stripe}"
 
-        if code == "card_declined":
-            return None, f"DECLINED | {dc.upper() if dc else 'CARD_DECLINED'} - {msg}"
-        elif code == "incorrect_number":      return None, "ERROR | INVALID_CARD_NUMBER"
-        elif code == "invalid_expiry_year":   return None, "ERROR | INVALID_EXPIRY_YEAR"
-        elif code == "invalid_expiry_month":  return None, "ERROR | INVALID_EXPIRY_MONTH"
-        elif code == "invalid_cvc":           return None, "ERROR | INVALID_CVV"
-        elif code == "expired_card":          return None, f"DECLINED | EXPIRED_CARD - {msg}"
-        elif code == "incorrect_cvc":         return None, "ERROR | INCORRECT_CVV"
-        elif code == "processing_error":      return None, "ERROR | PROCESSING_ERROR"
-        elif code == "incorrect_zip":         return None, "DECLINED | ZIP_MISMATCH"
-        else:
-            if "declin" in msg.lower():
-                return None, f"DECLINED | {msg.upper()}"
-            return None, f"ERROR | {code.upper()}: {msg}"
-
-    pm_id = rj.get("id","")
+    pm_id = rj.get("id", "")
     if not pm_id.startswith("pm_"):
-        return None, f"ERROR | TOKENIZATION_FAILED — {json.dumps(rj)[:80]}"
+        return None, f"[STRIPE-PRE] TOKENIZATION_FAILED | {json.dumps(rj)[:120]}"
     return {"id": pm_id}, None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -379,24 +370,19 @@ async def submit_order(session, cart_token, pm, full_name, email, crumb, xsrf, a
             raw = await resp.text()
             return "ERROR", f"INVALID_JSON_RESPONSE: {raw[:100]}"
 
-    # ── Parse every real response type ──
-    ss       = rj.get("submissionStatus","").upper()
-    ft       = rj.get("failureType","")
-    ek       = rj.get("errorKey","")
-    ec       = rj.get("errorCodes",[])
+    # Always keep the full raw JSON — user needs to see it's real
+    raw_json = json.dumps(rj)
+
+    ss       = rj.get("submissionStatus", "").upper()
+    ft       = rj.get("failureType", "")
     order_id = rj.get("id") or rj.get("orderId") or rj.get("orderNumber")
 
     if order_id or ss == "ORDER_CONFIRMED":
-        return "CHARGED", f"ORDER_CONFIRMED ✅ | OrderID: {order_id or 'N/A'}"
-    elif ft:
-        msg = ft
-        if ek:          msg += f" | {ek}"
-        if ec:          msg += f" | {', '.join(ec)}"
-        return "DECLINED", f"DECLINED | {msg}"
-    elif ss:
-        return "DECLINED", f"{ss} | {json.dumps(rj)[:150]}"
+        return "CHARGED", raw_json
+    elif ft or ss:
+        return "DECLINED", raw_json
     else:
-        return "DECLINED", json.dumps(rj)[:200]
+        return "DECLINED", raw_json
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # /chk COMMAND
@@ -502,18 +488,17 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pm, stripe_err = await create_stripe_pm(session, card_data, full_name, email, addr_info, proxy)
 
             if stripe_err:
-                # Real Stripe response — not a site decline yet
-                if "DECLINED" in stripe_err:
-                    status_ui    = "Dᴇᴄʟɪɴᴇᴅ ❌"
-                else:
-                    status_ui    = "Eʀʀᴏʀ ⚠️"
-                raw_response = stripe_err
+                # Stripe declined/errored before reaching the site
+                raw_response = f"[STRIPE] {stripe_err}"
+                status_ui    = "Dᴇᴄʟɪɴᴇᴅ ❌" if "CARD_DECLINED" in stripe_err or "DECLINED" in stripe_err else "Eʀʀᴏʀ ⚠️"
+                gate_src     = "Stripe Pre-Check"
             else:
-                # Step 4: submit order → real site response
+                # Step 4: submit order → raw real site response
                 status, raw_response = await submit_order(
                     session, cart_token, pm, full_name, email,
                     crumb, xsrf, addr_info, grand_total, proxy,
                 )
+                gate_src  = GATE_NAME
                 status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅" if status == "CHARGED" else "Dᴇᴄʟɪɴᴇᴅ ❌"
 
         # BIN lookup
@@ -530,11 +515,14 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         username = user.first_name or "User"
         elapsed  = f"{time.time() - start_time:.2f}"
 
+        # Truncate raw response to 300 chars so it fits in a Telegram message
+        raw_display = str(raw_response)[:300]
+
         text = (
             f"<b>[ 𖥷iТ ] ➺ {status_ui}</b>\n"
             f"🔍 ➺ <code>{card_str}</code>\n"
-            f"<b>Gᴀᴛᴇ</b> ➺ {GATE_NAME}\n"
-            f"<b>Rᴀᴡ</b>  ➺ {escape(str(raw_response))}\n"
+            f"<b>Gᴀᴛᴇ</b> ➺ {gate_src}\n"
+            f"<b>Rᴀᴡ</b>  ➺ <code>{escape(raw_display)}</code>\n"
             f"<b>Iɴꜰᴏ</b> ➺ {bin_txt}\n"
             f"<b>Uꜱᴇʀ</b> ➺ {escape(username)} ({plan_ui})\n"
             f"<b>Tɪᴍᴇ</b> ➺ {elapsed}s\n"
