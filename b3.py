@@ -11,7 +11,7 @@ from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LI
 # BRAINTREE GATE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 B3_API_URL = "https://chk.rcvan.indevs.in/b3"
-GATE_NAME  = "Bʀᴀɪɴᴛʀᴇᴇ 0$"
+GATE_NAME  = "Bʀᴀɪɴᴛʀᴇᴇ 0$ 💳 🟢"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOCAL USER DATA HELPERS
@@ -34,6 +34,13 @@ def is_user_premium(ud: dict) -> bool:
         ud["expires"] = 0
         return False
     return True
+
+def get_styled_plan(raw_plan: str) -> str:
+    plan_upper = raw_plan.upper()
+    if plan_upper == "CORE": return "✨ Cᴏʀᴇ ✨"
+    elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
+    elif plan_upper == "ROOT": return "👑 Rᴏᴏᴛ 👑"
+    else: return "Tʀɪᴀʟ"
 
 async def _check_force_sub(user_id: int, context) -> list:
     if user_id == OWNER_ID: return []
@@ -174,7 +181,8 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # User display
         ud_name    = user.first_name or "User"
-        plan_label = "Pʀᴇᴍɪᴜᴍ 👑" if premium else "Tʀɪᴀʟ"
+        raw_plan   = ud.get('plan', 'TRIAL').upper()
+        plan_ui    = get_styled_plan(raw_plan)
         elapsed    = f"{time.time() - start_time:.2f}"
 
         # Escape message to prevent HTML parsing errors
@@ -183,12 +191,12 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"<b>[ 𖥷iТ ] ➺ {status_ui}</b>\n"
             f"🔍 ➺ <code>{card}</code>\n"
-            f"<b>Gᴀᴛᴇ</b> ➺ {GATE_NAME} 💳\n"
-            f"<b>Rᴀᴡ</b>  ➺ {safe_message}\n"
-            f"<b>Iɴꜰᴏ</b> ➺ {bin_txt}\n"
-            f"<b>Uꜱᴇʀ</b> ➺ {ud_name} ({plan_label})\n"
-            f"<b>Tɪᴍᴇ</b> ➺ {elapsed}s\n"
-            f"<b>Pʀᴏ</b>  ➺ Batman ⚡\n"
+            f"Gᴀᴛᴇ ➺ {GATE_NAME}\n"
+            f"Rᴀᴡ  ➺ {safe_message}\n"
+            f"Iɴꜰᴏ ➺ {bin_txt}\n"
+            f"Uꜱᴇʀ ➺ {ud_name} ({plan_ui})\n"
+            f"Tɪᴍᴇ ➺ {elapsed}s\n"
+            f"Pʀᴏ  ➺ Batman⚡\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"📢 @Batcardchk"
         )
