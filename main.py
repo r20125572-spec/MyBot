@@ -162,7 +162,7 @@ def is_user_premium(ud: dict) -> bool:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # COOLDOWN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SINGLE_CHECK_COOLDOWN = 20
+SINGLE_CHECK_COOLDOWN = 25          # ← 25s wait for trial/free users between checks
 
 def get_cooldown_remaining(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> float:
     store     = context.bot_data.setdefault("cooldown_store", {})
@@ -552,7 +552,7 @@ def kb_upgrade() -> InlineKeyboardMarkup:
 
 def kb_cooldown() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("Plans"), callback_data="mprice")],
+        [InlineKeyboardButton("💎 BUY PREMIUM — No Cooldown", callback_data="mprice")],
     ])
 
 def kb_fb_owner(key: str) -> InlineKeyboardMarkup:
