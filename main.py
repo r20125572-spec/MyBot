@@ -1022,11 +1022,43 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 3:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /add <USER_ID|@user> <PLAN> <DAYS>"); return
-    uid = await resolve_user(context.args[0], context)
+        await update.message.reply_text(
+            f"<b>{E_DEV} Gʀᴀɴᴛ Pʀᴇᴍɪᴜᴍ</b>\n━━━━━━━━━━━━━━━━━\n"
+            f"<b>Uꜱᴀɢᴇ:</b>\n"
+            f"<code>/add @username PLAN DAYS</code>\n"
+            f"<code>/add UserID PLAN DAYS</code>\n\n"
+            f"<b>Pʟᴀɴs:</b>  CORE | ELITE | ROOT\n\n"
+            f"<b>Exᴀᴍᴘʟᴇ:</b>\n"
+            f"<code>/add @john ELITE 30</code>\n"
+            f"<code>/add 123456789 ROOT 7</code>\n"
+            f"━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML"
+        )
+        return
+    raw_target = context.args[0]
+    uid = await resolve_user(raw_target, context)
     if not uid:
-        await update.message.reply_text(f"{E_ERRORS} User not found.", parse_mode="HTML"); return
-    await _grant(uid, context.args[1], int(context.args[2]), update, context)
+        await update.message.reply_text(
+            f"{E_ERRORS} <b>User not found:</b> <code>{raw_target}</code>\n"
+            f"Make sure the user has started the bot first.",
+            parse_mode="HTML"
+        )
+        return
+    plan_arg = context.args[1].upper()
+    if plan_arg not in ("CORE", "ELITE", "ROOT"):
+        await update.message.reply_text(
+            f"{E_ERRORS} Invalid plan. Use: <b>CORE</b>, <b>ELITE</b>, or <b>ROOT</b>",
+            parse_mode="HTML"
+        )
+        return
+    try:
+        days = int(context.args[2])
+        if days <= 0: raise ValueError
+    except ValueError:
+        await update.message.reply_text(f"{E_ERRORS} Days must be a positive number.", parse_mode="HTML")
+        return
+    await _grant(uid, plan_arg, days, update, context)
+
 
 async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1042,6 +1074,102 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"<b>{E_DECLINED} Premium removed for <code>{target}</code>.</b>", parse_mode="HTML"
     )
+
+
+async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a user's active premium. Aliases: /resub /rsub"""
+    if update.effective_user.id != OWNER_ID: return
+
+    target_id = None
+    target_name, target_uname = "Unknown", ""
+
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        ru = update.message.reply_to_message.from_user
+        target_id    = ru.id
+        target_name  = ru.first_name or "Unknown"
+        target_uname = ru.username or ""
+    elif context.args:
+        raw = context.args[0]
+        target_id = await resolve_user(raw, context)
+        if not target_id:
+            await update.message.reply_text(
+                f"{E_ERRORS} <b>User not found:</b> <code>{raw}</code>\n"
+                f"Try: <code>/resub @username</code> or <code>/resub UserID</code>",
+                parse_mode="HTML"
+            )
+            return
+    else:
+        await update.message.reply_text(
+            f"<b>{E_DEV} Rᴇᴍᴏᴠᴇ Pʀᴇᴍɪᴜᴍ</b>\n━━━━━━━━━━━━━━━━━\n"
+            f"<b>Uꜱᴀɢᴇ:</b>\n"
+            f"<code>/resub @username</code>\n"
+            f"<code>/resub UserID</code>\n"
+            f"Or reply to a user's message → <code>/resub</code>\n\n"
+            f"<b>Aʟɪᴀꜱ:</b> /rsub works too\n"
+            f"━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML"
+        )
+        return
+
+    ud       = get_user_data(target_id, context)
+    old_plan = ud.get("plan", "TRIAL").upper()
+    old_exp  = ud.get("expires", 0)
+    now      = time.time()
+
+    if old_plan == "TRIAL" or old_exp <= now:
+        try:
+            chat = await context.bot.get_chat(target_id)
+            target_name  = chat.first_name or "Unknown"
+            target_uname = chat.username or ""
+        except Exception:
+            target_name  = ud.get("name", "Unknown")
+            target_uname = ud.get("username", "")
+        uname_d = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
+        await update.message.reply_text(
+            f"{E_ERRORS} <b>{target_name}</b> ({uname_d}) has no active premium.",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        chat = await context.bot.get_chat(target_id)
+        target_name  = chat.first_name or "Unknown"
+        target_uname = chat.username or ""
+    except Exception:
+        target_name  = ud.get("name", "Unknown")
+        target_uname = ud.get("username", "")
+
+    ud["plan"]    = "TRIAL"
+    ud["expires"] = 0
+
+    uname_d      = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
+    old_plan_str = get_styled_plan(old_plan)
+    rem_was      = int((old_exp - now) // 86400)
+
+    await update.message.reply_text(
+        f"<b>{E_DECLINED} Pʀᴇᴍɪᴜᴍ Rᴇᴍᴏᴠᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
+        f"<b>Uꜱᴇʀ</b>      ➺ {target_name} ({uname_d})\n"
+        f"<b>ID</b>        ➺ <code>{target_id}</code>\n"
+        f"<b>Pʟᴀɴ Wᴀꜱ</b> ➺ {old_plan_str}\n"
+        f"<b>Dᴀʏꜱ Left</b> ➺ {rem_was}d (cancelled)\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"<b>Sᴛᴀᴛᴜꜱ</b>    ➺ Rᴇsᴇᴛ ᴛᴏ Tʀɪᴀʟ",
+        parse_mode="HTML"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=(
+                f"<b>{E_ERRORS} Sᴜʙsᴄʀɪᴘᴛɪᴏɴ Cᴀɴᴄᴇʟʟᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"Your <b>{old_plan_str}</b> premium has been removed by the admin.\n"
+                f"Use /plan to purchase a new subscription.\n"
+                f"━━━━━━━━━━━━━━━━━"
+            ),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1130,8 +1258,10 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/info [user] ➺ Full user info\n"
         "/gen code &lt;val&gt; ➺ Gen credit code\n"
         "/gen key &lt;plan&gt; &lt;days&gt; ➺ Gen premium key\n"
-        "/add &lt;user&gt; &lt;plan&gt; &lt;days&gt; ➺ Grant premium\n"
-        "/rem &lt;user&gt; ➺ Remove premium\n"
+        "/add @user PLAN DAYS ➺ Grant premium\n"
+        "/resub @user|ID ➺ Remove active premium\n"
+        "/rsub @user|ID ➺ Same as /resub\n"
+        "/rem &lt;user&gt; ➺ Remove premium (legacy)\n"
         "/ban &lt;user&gt; ➺ Ban user\n"
         "/unban &lt;user&gt; ➺ Unban user\n"
         "/broadcast &lt;msg&gt; ➺ Broadcast\n"
@@ -1913,6 +2043,8 @@ def main():
         app.add_handler(CommandHandler("gen",         cmd_gen))
         app.add_handler(CommandHandler("add",         cmd_add))
         app.add_handler(CommandHandler("rem",         cmd_rem))
+        app.add_handler(CommandHandler("resub",       cmd_resub))
+        app.add_handler(CommandHandler("rsub",        cmd_resub))
         app.add_handler(CommandHandler("ban",         cmd_ban))
         app.add_handler(CommandHandler("unban",       cmd_unban))
         app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
