@@ -1,4 +1,5 @@
 import os
+import random
 import aiohttp
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -10,7 +11,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -24,7 +25,6 @@ BOT_LINK      = f"https://t.me/{BOT_USERNAME}"
 
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/baac90d1-06d0-478f-8989-5bef9cbfc9fb.jpg"
 BOT_PHOTO     = "batman.jpg"
-BOT_LOCAL_PHOTO = "photo.jpg"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 📢  CHANNEL & GROUP LINKS
@@ -68,6 +68,9 @@ GATE_URLS: dict[str, str] = {
     "mpp2": "https://pp-auth-test-production.up.railway.app/pp",
 }
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🌐  GATE TARGET SITES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_SITES: dict[str, str] = {
     "chk":  "fashionspicex.com",
     "pp":   "example.com",
@@ -79,43 +82,35 @@ GATE_SITES: dict[str, str] = {
     "mpp2": "example.com",
 }
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 👑  PREMIUM-ONLY GATES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PREMIUM_GATES: set[str] = {"au", "mss", "mpp2"}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🎨  CUSTOM EMOJI IDs (mst.py style)
+# 🎨  CUSTOM EMOJI IDS  (from mst.py)
+#     These are Telegram Premium custom emoji stickers.
+#     All users see them — even non-Premium accounts.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Core emojis
-DECLINED_EMOJI_ID   = "4956612582816351459"
-CARD_EMOJI_ID       = "5800709991627232190"
-USER_EMOJI_ID       = "4958689671950369798"
-TIME_EMOJI_ID       = "5382194935057372936"
-DEV_EMOJI_ID        = "6267091732861555879"
-PRO_EMOJI_ID        = "6298678524379137990"
+DECLINED_EMOJI_ID      = "4956612582816351459"
+CARD_EMOJI_ID          = "5800709991627232190"
+USER_EMOJI_ID          = "4958689671950369798"
+TIME_EMOJI_ID          = "5382194935057372936"
+DEV_EMOJI_ID           = "6267091732861555879"
+PRO_EMOJI_ID           = "6298678524379137990"
 
-# Hit log
-HIT_RESP_EMOJI_ID   = "5839116473951328489"
+HIT_RESP_EMOJI_ID      = "5839116473951328489"
 
-# Progress
 PROG_GATE_EMOJI_ID     = "5341715473882955310"
 PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
 PROG_LIVE_EMOJI_ID     = "5427168083074628963"
 PROG_DEAD_EMOJI_ID     = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
 
-# Buttons
-BTN_ALL_EMOJI_ID   = "4956324463525233747"
-BTN_STOP_EMOJI_ID  = "6179444193518162239"
+BTN_ALL_EMOJI_ID       = "4956324463525233747"
+BTN_STOP_EMOJI_ID      = "6179444193518162239"
 
-# Plan emojis
-PLAN_EMOJIS = {
-    "CORE":   "5379869575338812919",
-    "ELITE":  "5836898273666798437",
-    "ROOT":   "4956420911310832630",
-    "CUSTOM": "5445027583588593750",
-}
-
-# Pool of live emojis (random per hit)
 LIVE_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -125,19 +120,40 @@ LIVE_EMOJI_IDS = [
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
 
+PLAN_EMOJIS = {
+    "CORE":   "5379869575338812919",
+    "ELITE":  "5836898273666798437",
+    "ROOT":   "4956420911310832630",
+    "CUSTOM": "5445027583588593750",
+}
+
+SPECIAL_FONT_MAP = {
+    'ᴀ': 'A', 'ʙ': 'B', 'ᴄ': 'C', 'ᴅ': 'D', 'ᴇ': 'E',
+    'ꜰ': 'F', 'ɢ': 'G', 'ʜ': 'H', 'ɪ': 'I', 'ᴊ': 'J',
+    'ᴋ': 'K', 'ʟ': 'L', 'ᴍ': 'M', 'ɴ': 'N', 'ᴏ': 'O',
+    'ᴘ': 'P', 'ǫ': 'Q', 'ʀ': 'R', 'ꜱ': 'S', 'ᴛ': 'T',
+    'ᴜ': 'U', 'ᴠ': 'V', 'ᴡ': 'W', 'x': 'X', 'ʏ': 'Y',
+    'ᴢ': 'Z', 'Ɪ': 'I',
+}
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🎨  EMOJI HELPER FUNCTIONS
+# 🛠  EMOJI HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
-    """Return a Telegram custom emoji tag."""
+    """Render a Telegram custom emoji tag (HTML parse_mode).
+    All users — including non-Premium — see the animated sticker."""
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
+def get_random_live_emoji() -> str:
+    """Return a random live-hit emoji ID."""
+    return random.choice(LIVE_EMOJI_IDS)
+
 def get_plan_emoji_id(plan_name: str) -> str:
-    """Get custom emoji ID for a plan name."""
+    """Return the custom emoji ID for a given plan name string."""
     if not plan_name:
         return PRO_EMOJI_ID
-    normalized = plan_name.upper().strip()
+    normalized = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
     if normalized in PLAN_EMOJIS:
         return PLAN_EMOJIS[normalized]
     for key, eid in PLAN_EMOJIS.items():
@@ -145,31 +161,29 @@ def get_plan_emoji_id(plan_name: str) -> str:
             return eid
     return PRO_EMOJI_ID
 
-def get_random_live_emoji() -> str:
-    """Get a random live emoji ID."""
-    import random
-    return random.choice(LIVE_EMOJI_IDS)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🏷  PRE-RENDERED EMOJI SHORTHANDS
+#     Import these directly in b3.py, chk.py, bot.py, etc.
+#     Use parse_mode="HTML" — do NOT use MarkdownV2.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Quick access emojis
-E_DECLINED   = tg_emoji(DECLINED_EMOJI_ID, "❌")
-E_CARD       = tg_emoji(CARD_EMOJI_ID, "💳")
-E_USER       = tg_emoji(USER_EMOJI_ID, "👤")
-E_TIME       = tg_emoji(TIME_EMOJI_ID, "⏱")
-E_DEV        = tg_emoji(DEV_EMOJI_ID, "⚡")
-E_PRO        = tg_emoji(PRO_EMOJI_ID, "⭐")
-E_HIT_RESP   = tg_emoji(HIT_RESP_EMOJI_ID, "✅")
-E_GATE       = tg_emoji(PROG_GATE_EMOJI_ID, "🛒")
-E_PROGRESS   = tg_emoji(PROG_PROGRESS_EMOJI_ID, "🔄")
-E_LIVE       = tg_emoji(PROG_LIVE_EMOJI_ID, "✅")
-E_DEAD       = tg_emoji(PROG_DEAD_EMOJI_ID, "❌")
-E_ERRORS     = tg_emoji(PROG_ERRORS_EMOJI_ID, "⚠️")
-E_ALL        = tg_emoji(BTN_ALL_EMOJI_ID, "📁")
-E_STOP       = tg_emoji(BTN_STOP_EMOJI_ID, "🛑")
+E_CARD     = tg_emoji(CARD_EMOJI_ID,          "💳")
+E_USER     = tg_emoji(USER_EMOJI_ID,          "👤")
+E_TIME     = tg_emoji(TIME_EMOJI_ID,          "⏱")
+E_DEV      = tg_emoji(DEV_EMOJI_ID,           "⚡")
+E_PRO      = tg_emoji(PRO_EMOJI_ID,           "⭐")
+E_LIVE     = tg_emoji(PROG_LIVE_EMOJI_ID,     "✅")
+E_DECLINED = tg_emoji(PROG_DEAD_EMOJI_ID,     "❌")
+E_ERRORS   = tg_emoji(PROG_ERRORS_EMOJI_ID,   "⚠️")
+E_PROGRESS = tg_emoji(PROG_PROGRESS_EMOJI_ID, "🔄")
+E_GATE     = tg_emoji(PROG_GATE_EMOJI_ID,     "🛒")
+E_HIT_RESP = tg_emoji(HIT_RESP_EMOJI_ID,      "✅")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔍  BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def get_bin_info(bin_num: str) -> dict:
+    """Fetch card BIN details from binlist.net (no API key needed)."""
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=8)
@@ -205,8 +219,8 @@ async def get_bin_info(bin_num: str) -> dict:
 def kb_result(is_premium: bool = False) -> InlineKeyboardMarkup:
     if is_premium:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"{E_ALL} Batcardchk", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("📢 Batcardchk", url=CHANNEL_LINK)],
         ])
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{E_PRO} BUY PREMIUM", callback_data="mprice")],
+        [InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")],
     ])
