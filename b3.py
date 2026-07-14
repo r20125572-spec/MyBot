@@ -134,7 +134,7 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── User data & credit check ──
+    # ── User data & credit / cooldown check ──
     ud      = _get_user_data(user.id, context)
     premium = _is_premium(ud)
 
@@ -147,11 +147,31 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "━━━━━━━━━━━━━━━━━",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")],
-                    [InlineKeyboardButton("🆘 Support", url=SUPPORT_LINK)],
+                    [InlineKeyboardButton("💎 BUY PREMIUM — Unlimited Checks", callback_data="mprice")],
+                    [InlineKeyboardButton("📢 @Batcardchk", url=CHANNEL_LINK)],
                 ])
             )
             return
+
+        # ── 25s cooldown for trial/free users ──
+        B3_COOLDOWN = 25
+        cooldown_store = context.bot_data.setdefault("cooldown_store", {})
+        last_check     = cooldown_store.get(user.id, 0)
+        remaining      = B3_COOLDOWN - (time.time() - last_check)
+        if remaining > 0:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Cᴏᴏʟᴅᴏᴡɴ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"Please wait <b>{remaining:.1f}s</b> before your next check.\n\n"
+                f"{E_PRO} <b>Premium users have no cooldown.</b>\n"
+                "━━━━━━━━━━━━━━━━━",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💎 BUY PREMIUM — No Cooldown", callback_data="mprice")],
+                ])
+            )
+            return
+
+        cooldown_store[user.id] = time.time()
         ud["credits"] -= 1
 
     # ── Processing ──
