@@ -14,7 +14,7 @@ from config import (
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MAX_CARDS       = 500
+MAX_CARDS       = 5000          # ← increased from 500
 SEMAPHORE_LIMIT = 10
 
 GATE_CONFIG = {
@@ -34,9 +34,8 @@ def load_list_from_file(filename: str, default_list: list) -> list:
             pass
     return default_list
 
-# CHANGED: proxies now load from px.txt
 PROXIES = load_list_from_file("px.txt", [])
-SITES   = load_list_from_file("sites.txt",   ["https://powerbuild.store"])
+SITES   = load_list_from_file("sites.txt", ["https://powerbuild.store"])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD PARSING
@@ -251,7 +250,10 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         return
 
     if len(cards) > MAX_CARDS:
-        await update.message.reply_text(f"⚠️ Max {MAX_CARDS} cards per run.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"⚠️ Max <b>{MAX_CARDS:,}</b> cards per run. Your file has <b>{len(cards):,}</b> cards.",
+            parse_mode="HTML"
+        )
         return
 
     api_url = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
@@ -260,19 +262,17 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         await update.message.reply_text("⚠️ Gate API not configured.", parse_mode="HTML")
         return
 
-    # Load proxies and sites dynamically on each run
     dynamic_proxies = load_list_from_file("px.txt", PROXIES)
-    dynamic_sites = load_list_from_file("sites.txt", SITES)
-
-    rotator      = ProxyRotator(dynamic_proxies)
-    sites_to_use = dynamic_sites if dynamic_sites else [site]
+    dynamic_sites   = load_list_from_file("sites.txt", SITES)
+    rotator         = ProxyRotator(dynamic_proxies)
+    sites_to_use    = dynamic_sites if dynamic_sites else [site]
 
     msg = await update.message.reply_text(
         f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
         f"━━━━━━━━━━━━━━\n"
         f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Sᴛᴀʀᴛɪɴɢ...\n"
         f"━━━━━━━━━━━━━━\n"
-        f"📊 <b>Cᴀʀᴅꜱ</b> ➺ {len(cards)}\n"
+        f"📊 <b>Cᴀʀᴅꜱ</b> ➺ {len(cards):,}\n"
         f"🌐 <b>Sɪᴛᴇs</b> ➺ {len(sites_to_use)}\n"
         f"━━━━━━━━━━━━━━\n"
         f"⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...",
@@ -294,13 +294,35 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             )
             for i, card in enumerate(cards)
         ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    parsed = [
-        r if not isinstance(r, Exception)
-        else {"card": "???", "error": str(r)[:60], "response": "ERROR", "status": "false", "card_status": "dead"}
-        for r in results
-    ]
+        # ── Progress updates every 200 cards for large runs ──
+        UPDATE_EVERY = 200
+        parsed       = []
+        done         = 0
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if isinstance(result, Exception):
+                result = {"card": "???", "error": str(result)[:60], "response": "ERROR",
+                          "status": "false", "card_status": "dead"}
+            parsed.append(result)
+            done += 1
+            if done % UPDATE_EVERY == 0:
+                live_so_far = sum(1 for r in parsed if r.get("card_status") == "approved")
+                try:
+                    await msg.edit_text(
+                        f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Rᴜɴɴɪɴɢ...\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"📊 <b>Pʀᴏɢʀᴇss</b> ➺ {done:,}/{len(cards):,}\n"
+                        f"✅ <b>Lɪᴠᴇ</b>     ➺ {live_so_far}\n"
+                        f"⏱ <b>Tɪᴍᴇ</b>    ➺ {time.time() - start_time:.0f}s\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
 
     approved_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "approved"]
     charged_list  = [r for r in parsed if not r.get("error") and r.get("card_status") == "charged"]
@@ -309,7 +331,6 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     error_list    = [r for r in parsed if r.get("error")]
     elapsed       = time.time() - start_time
 
-    # Store results for download buttons
     context.bot_data[f"mass_results_{user_id}_{gate_key}"] = {
         "parsed": parsed, "approved": approved_list, "charged": charged_list,
         "threeds": threeds_list, "dead": dead_list, "error": error_list,
@@ -321,7 +342,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
         f"━━━━━━━━━━━━━━\n"
         f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Fɪɴɪsʜᴇᴅ ✅\n"
-        f"      [𖣸] <b>Cʜᴇᴄᴋᴇᴅ</b> ➺ {len(parsed)}/{len(cards)}\n"
+        f"      [𖣸] <b>Cʜᴇᴄᴋᴇᴅ</b> ➺ {len(parsed):,}/{len(cards):,}\n"
         f"━━━━━━━━━━━━━━\n"
         f"♘ <b>Aᴘᴘʀᴏᴠᴇᴅ</b> ➺ {len(approved_list)} ✅\n"
         f"♞ <b>Cʜᴀʀɢᴇᴅ</b>  ➺ {len(charged_list)} 💎\n"
@@ -367,8 +388,8 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("⚠️ Results expired. Run the check again.", show_alert=True)
         return
 
-    results  = context.bot_data[result_key]
-    action   = query.data
+    results   = context.bot_data[result_key]
+    action    = query.data
     file_name = f"MASS_{user_id}.txt"
 
     if action == "result_all":
@@ -383,10 +404,10 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             resp   = r.get("error") if r.get("error") else r.get("response", "N/A")
             lines.append(f"Card: {card}\nStatus: {status}\nResponse: {resp}\n{'-'*30}")
         file_content = "\n".join(lines)
-        caption  = f"📦 All Results ({len(parsed)} total) — @Batcardchk"
-        file_name = f"ALL_{user_id}.txt"
-        bio = BytesIO(file_content.encode("utf-8"))
-        bio.name = file_name
+        caption      = f"📦 All Results ({len(parsed):,} total) — @Batcardchk"
+        file_name    = f"ALL_{user_id}.txt"
+        bio          = BytesIO(file_content.encode("utf-8"))
+        bio.name     = file_name
         await context.bot.send_document(
             chat_id=query.message.chat_id, document=bio,
             filename=file_name, caption=caption
@@ -395,15 +416,15 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     if action == "result_live":
         cards_out = results.get("approved", [])
-        caption   = f"✅ LIVE Cards ({len(cards_out)} found) — @Batcardchk"
+        caption   = f"✅ LIVE Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"LIVE_{user_id}.txt"
     elif action == "result_3ds":
         cards_out = results.get("threeds", [])
-        caption   = f"🔐 3DS Cards ({len(cards_out)} found) — @Batcardchk"
+        caption   = f"🔐 3DS Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"3DS_{user_id}.txt"
     elif action == "result_charge":
         cards_out = results.get("charged", [])
-        caption   = f"💎 Charged Cards ({len(cards_out)} found) — @Batcardchk"
+        caption   = f"💎 Charged Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"CHARGED_{user_id}.txt"
     else:
         return
@@ -413,8 +434,8 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     file_content = "\n".join(r["card"] for r in cards_out)
-    bio = BytesIO(file_content.encode("utf-8"))
-    bio.name = file_name
+    bio          = BytesIO(file_content.encode("utf-8"))
+    bio.name     = file_name
     await context.bot.send_document(
         chat_id=query.message.chat_id, document=bio,
         filename=file_name, caption=caption
