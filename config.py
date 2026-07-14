@@ -219,8 +219,10 @@ async def get_bin_info(bin_num: str) -> dict:
 def kb_result(is_premium: bool = False) -> InlineKeyboardMarkup:
     if is_premium:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Batcardchk", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("🤖 Open Bot", url=BOT_LINK),
+             InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)],
         ])
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")],
+        [InlineKeyboardButton("💎 BUY PREMIUM — Unlimited Checks", callback_data="mprice")],
+        [InlineKeyboardButton("📢 @Batcardchk", url=CHANNEL_LINK)],
     ])
