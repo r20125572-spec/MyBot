@@ -1121,13 +1121,11 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>{E_LIVE} USER:</b>\n"
-        "/start ➺ Dashboard\n/plan ➺ Plans\n/bin ➺ BIN lookup\n"
-        "/b3 ➺ Braintree\n/chk ➺ Stripe\n/pp ➺ PayPal\n"
-        "/sh ➺ Shopify\n/pyu ➺ PayU\n/au ➺ Stripe Auth\n"
-        "/mss ➺ Stripe Mass\n/mpp2 ➺ PayPal Mass\n"
-        "/refer ➺ Referral\n/rm ➺ Redeem code/key\n/fb ➺ Feedback\n\n"
-        f"<b>{E_DEV} OWNER:</b>\n"
+
+        f"<b>{E_DEV} OWNER ONLY:</b>\n"
+        "/allcm ➺ Show all commands\n"
+        "/allsub ➺ All live premium users\n"
+        "/info [user] ➺ Full user info\n"
         "/gen code &lt;val&gt; ➺ Gen credit code\n"
         "/gen key &lt;plan&gt; &lt;days&gt; ➺ Gen premium key\n"
         "/add &lt;user&gt; &lt;plan&gt; &lt;days&gt; ➺ Grant premium\n"
@@ -1135,12 +1133,82 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ban &lt;user&gt; ➺ Ban user\n"
         "/unban &lt;user&gt; ➺ Unban user\n"
         "/broadcast &lt;msg&gt; ➺ Broadcast\n"
-        "/info [user] ➺ User info\n"
-        "/maintenance on|off ➺ Maintenance\n"
-        "/on&lt;gate&gt; /off&lt;gate&gt; ➺ Toggle gates\n"
+        "/maintenance on|off ➺ Maintenance mode\n"
+        "/onchk /offchk ➺ Toggle Stripe gate\n"
+        "/onpp /offpp ➺ Toggle PayPal gate\n"
+        "/onsh /offsh ➺ Toggle Shopify gate\n"
+        "/onpyu /offpyu ➺ Toggle PayU gate\n"
+        "/onb3 /offb3 ➺ Toggle Braintree gate\n"
+        "/onau /offau ➺ Toggle Stripe Auth\n"
+        "/onmss /offmss ➺ Toggle Stripe Mass\n"
+        "/onmpp2 /offmpp2 ➺ Toggle PayPal Mass\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+
+        f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
+        "/chk ➺ Stripe Charge\n"
+        "/b3 ➺ Braintree Charge\n"
+        "/pp ➺ PayPal Charge\n"
+        "/sh ➺ Shopify Charge\n"
+        "/pyu ➺ PayU Charge\n"
+        "/au ➺ Stripe Auth Mass\n"
+        "/mss ➺ Stripe Mass Check\n"
+        "/mpp2 ➺ PayPal Mass Check\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+
+        f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
+        "/start ➺ Dashboard\n"
+        "/plan ➺ View premium plans\n"
+        "/sub ➺ My subscription info\n"
+        "/bin ➺ BIN lookup\n"
+        "/refer ➺ Referral link\n"
+        "/rm ➺ Redeem code or key\n"
+        "/ping ➺ Bot speed test\n"
+        "/fb ➺ Send feedback\n"
         "━━━━━━━━━━━━━━━━━",
         parse_mode="HTML"
     )
+
+
+async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    now     = time.time()
+    all_u   = context.bot_data.get("user_data", {})
+    premium = [
+        (uid_s, ud) for uid_s, ud in all_u.items()
+        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > now
+    ]
+    if not premium:
+        await update.message.reply_text(
+            f"<b>{E_USER} No active premium users.</b>", parse_mode="HTML"
+        )
+        return
+
+    premium.sort(key=lambda x: x[1].get("expires", 0))
+    lines = [f"<b>{E_PRO} Lɪᴠᴇ Pʀᴇᴍɪᴜᴍ Uꜱᴇʀs ➺ {len(premium)}</b>\n━━━━━━━━━━━━━━━━━"]
+    for idx, (uid_s, ud) in enumerate(premium, 1):
+        uname_d = f"@{ud.get('username','')}" if ud.get("username") else ud.get("name", "?")
+        plan    = ud.get("plan", "TRIAL").upper()
+        expires = ud.get("expires", 0)
+        rem_d   = int((expires - now) // 86400)
+        rem_h   = int(((expires - now) % 86400) // 3600)
+        lines.append(
+            f"<b>{idx}.</b> <code>{uid_s}</code> | {uname_d}\n"
+            f"    ➺ {get_styled_plan(plan)} | <b>{rem_d}d {rem_h}h left</b>"
+        )
+
+    txt = "\n".join(lines)
+    if len(txt) > 4000:
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 4000:
+                await update.message.reply_text(chunk, parse_mode="HTML")
+                chunk = line + "\n"
+            else:
+                chunk += line + "\n"
+        if chunk:
+            await update.message.reply_text(chunk, parse_mode="HTML")
+    else:
+        await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1317,6 +1385,51 @@ async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # USER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user     = update.effective_user
+    ud       = get_user_data(user.id, context)
+    now      = time.time()
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    expires  = ud.get("expires", 0)
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0; expires = 0
+    premium    = raw_plan != "TRIAL" and expires > now
+    uname      = f"@{user.username}" if user.username else user.first_name or "User"
+    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    credits_d  = "Unlimited" if premium else str(ud.get("credits", 150))
+
+    if premium:
+        rem     = expires - now
+        rem_d   = int(rem // 86400)
+        rem_h   = int((rem % 86400) // 3600)
+        exp_str = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+        expire_line = (
+            f"<b>Exᴘɪʀᴇꜱ</b>    ➺ {exp_str}\n"
+            f"<b>Rᴇᴍᴀɪɴɪɴɢ</b>  ➺ <b>{rem_d} days {rem_h} hours</b>"
+        )
+    else:
+        expire_line = "<b>Exᴘɪʀᴇꜱ</b>    ➺ Trial (no expiry)"
+
+    joined = ud.get("joined", "N/A")
+    txt = (
+        f"<b>{E_USER} Mʏ Sᴜʙsᴄʀɪᴘᴛɪᴏɴ</b>\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"<b>Nᴀᴍᴇ</b>      ➺ {escape(uname)}\n"
+        f"<b>ID</b>        ➺ <code>{user.id}</code>\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"<b>Pʟᴀɴ</b>      ➺ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Cʀᴇᴅɪᴛꜱ</b>  ➺ {credits_d}\n"
+        f"{expire_line}\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"<b>Jᴏɪɴᴇᴅ</b>    ➺ {joined}\n"
+        f"━━━━━━━━━━━━━━━━━"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 Upgrade Plan", callback_data="mprice")],
+    ]) if not premium else None
+    await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud   = get_user_data(user.id, context)
@@ -1811,6 +1924,7 @@ def main():
         app.add_handler(CommandHandler("start",   cmd_start))
         app.add_handler(CommandHandler("ping",    cmd_ping))
         app.add_handler(CommandHandler("plan",    cmd_plan))
+        app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
         app.add_handler(CommandHandler("rm",      cmd_rm))
         app.add_handler(CommandHandler("bin",     cmd_bin))
@@ -1832,6 +1946,7 @@ def main():
         app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
         app.add_handler(CommandHandler("info",        cmd_info))
         app.add_handler(CommandHandler("allcm",       cmd_allcm))
+        app.add_handler(CommandHandler("allsub",      cmd_allsub))
         app.add_handler(CommandHandler("maintenance", cmd_maintenance))
         app.add_handler(CommandHandler("onchk",   cmd_onchk))
         app.add_handler(CommandHandler("offchk",  cmd_offchk))
