@@ -18,6 +18,8 @@ from telegram.error import Conflict, BadRequest, NetworkError, Forbidden
 
 import aiohttp as _aiohttp
 
+from mst import get_bin_handler as get_bin_lookup_handler
+
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
     CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
@@ -1562,36 +1564,6 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>{E_ERRORS} Invalid or already used code.</b>", parse_mode="HTML"
         )
 
-async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_not_banned(update, context): return
-    if not await require_membership(update, context): return
-    bin_num = context.args[0].strip()[:6] if context.args else None
-    if not bin_num or not bin_num.isdigit() or len(bin_num) < 6:
-        await update.message.reply_text(
-            f"{E_ERRORS} Uꜱᴀɢᴇ: <code>/bin 411111</code>", parse_mode="HTML"
-        )
-        return
-    msg = await update.message.reply_text(
-        f"{E_PROGRESS} <b>Lᴏᴏᴋɪɴɢ ᴜᴘ...</b>", parse_mode="HTML"
-    )
-    try:
-        bd = await get_bin_info(bin_num)
-        if bd.get("error"):
-            await msg.edit_text(f"{E_ERRORS} BIN not found.", parse_mode="HTML"); return
-        txt = (
-            f"<b>{E_CARD} BIN Lookup</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>BIN</b>     ➺ <code>{bin_num}</code>\n"
-            f"<b>Scheme</b>  ➺ {str(bd.get('scheme', 'N/A')).upper()}\n"
-            f"<b>Type</b>    ➺ {str(bd.get('type', 'N/A')).upper()}\n"
-            f"<b>Bank</b>    ➺ {bd.get('bank', 'N/A')}\n"
-            f"<b>Country</b> ➺ {bd.get('country_emoji', '')} {str(bd.get('country', 'N/A')).upper()}\n"
-            "━━━━━━━━━━━━━━━━━"
-        )
-        await msg.edit_text(txt, parse_mode="HTML")
-    except Exception as e:
-        await msg.edit_text(
-            f"{E_ERRORS} Error: <code>{str(e)[:100]}</code>", parse_mode="HTML"
-        )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FEEDBACK (/fb)
@@ -1927,7 +1899,7 @@ def main():
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
         app.add_handler(CommandHandler("rm",      cmd_rm))
-        app.add_handler(CommandHandler("bin",     cmd_bin))
+        app.add_handler(get_bin_lookup_handler())
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(CommandHandler("pp",      cmd_pp))
         app.add_handler(CommandHandler("sh",      cmd_sh))
