@@ -18,8 +18,6 @@ from telegram.error import Conflict, BadRequest, NetworkError, Forbidden
 
 import aiohttp as _aiohttp
 
-from mst import get_bin_handler as get_bin_lookup_handler
-
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
     CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
@@ -1632,6 +1630,112 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(txt, reply_markup=kb_price(), parse_mode="HTML")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /bin  BIN LOOKUP  (inlined — no external mst module needed)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_COUNTRY_CURRENCY = {
+    "US":"USD","GB":"GBP","EU":"EUR","FR":"EUR","DE":"EUR","IT":"EUR",
+    "ES":"EUR","NL":"EUR","BE":"EUR","AT":"EUR","PT":"EUR","GR":"EUR",
+    "IE":"EUR","FI":"EUR","SK":"EUR","SI":"EUR","LT":"EUR","LV":"EUR",
+    "EE":"EUR","CY":"EUR","MT":"EUR","LU":"EUR","CA":"CAD","AU":"AUD",
+    "JP":"JPY","CN":"CNY","IN":"INR","BR":"BRL","MX":"MXN","KR":"KRW",
+    "RU":"RUB","CH":"CHF","SE":"SEK","NO":"NOK","DK":"DKK","PL":"PLN",
+    "CZ":"CZK","HU":"HUF","TR":"TRY","ZA":"ZAR","SG":"SGD","HK":"HKD",
+    "NZ":"NZD","SA":"SAR","AE":"AED","AR":"ARS","CL":"CLP","CO":"COP",
+    "PH":"PHP","MY":"MYR","TH":"THB","ID":"IDR","PK":"PKR","NG":"NGN",
+    "EG":"EGP","UA":"UAH","RO":"RON","BG":"BGN","HR":"HRK","RS":"RSD",
+    "IL":"ILS","VN":"VND","BD":"BDT","LK":"LKR","KE":"KES",
+}
+
+async def _lookup_bin_inline(bin_number: str) -> dict:
+    import urllib.request, urllib.error, json as _json
+    try:
+        bin_clean = "".join(filter(str.isdigit, str(bin_number)))[:8]
+        if len(bin_clean) < 6:
+            return {"success": False, "error": "Invalid BIN! Must be at least 6 digits."}
+        req = urllib.request.Request(
+            f"https://lookup.binlist.net/{bin_clean[:6]}",
+            headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        def _do():
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return r.status, _json.loads(r.read().decode())
+        status_code, data = await loop.run_in_executor(None, _do)
+        if status_code == 200:
+            c = data.get("country") or {}
+            bk = data.get("bank") or {}
+            return {
+                "success": True, "bin": bin_clean[:6],
+                "scheme": (data.get("scheme") or "N/A").upper(),
+                "type": (data.get("type") or "N/A").upper(),
+                "brand": (data.get("brand") or "N/A").upper(),
+                "country": c.get("name", "N/A"),
+                "country_flag": c.get("emoji", "🌍"),
+                "country_code": c.get("alpha2", "??"),
+                "bank": bk.get("name", "N/A"),
+                "prepaid": data.get("prepaid", False),
+            }
+        return {"success": False, "error": "BIN not found or rate limited."}
+    except Exception:
+        return {"success": False, "error": "Internal error occurred."}
+
+async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    if not context.args:
+        await update.message.reply_text(
+            f"{E_ERRORS} <b>Iɴᴠᴀʟɪᴅ Uꜱᴀɢᴇ</b>\n━━━━━━━━━━━━━━━━━\n"
+            f"📌 Usage: <code>/bin 453201</code>\n"
+            f"📌 Enter 6–8 digit BIN\n━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML",
+        )
+        return
+
+    bin_arg    = context.args[0].strip()
+    status_msg = await update.message.reply_text(
+        f"{E_PROGRESS} <b>Lᴏᴏᴋɪɴɢ ᴜᴘ BIN</b> <code>{bin_arg[:6]}</code>...",
+        parse_mode="HTML",
+    )
+    result   = await _lookup_bin_inline(bin_arg)
+    user     = update.effective_user
+    ud       = _get_user_data(user.id, context)
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    if raw_plan != "TRIAL" and ud.get("expires", 0) <= time.time():
+        raw_plan = "TRIAL"
+    styled   = {"CORE": "Cᴏʀᴇ", "ELITE": "Eʟɪᴛᴇ", "ROOT": "Rᴏᴏᴛ"}.get(raw_plan, "Tʀɪᴀʟ")
+    plan_e   = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+
+    if not result["success"]:
+        text = (
+            f"{E_ERRORS} <b>BIN LOOKUP FAILED</b>\n━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ {escape(result['error'])}\n━━━━━━━━━━━━━━━━━"
+        )
+    else:
+        currency = _COUNTRY_CURRENCY.get(result["country_code"], "N/A")
+        prepaid  = "Yes ⚠️" if result.get("prepaid") else "No"
+        text = (
+            f"{E_CARD} <b>BIN Lookup</b>\n━━━━━━━━━━━━━━━━━\n"
+            f"<b>BIN</b>      ➛ <code>{result['bin']}</code>\n"
+            f"<b>Scheme</b>   ➛ {result['scheme']}\n"
+            f"<b>Brand</b>    ➛ {result['brand']}\n"
+            f"<b>Type</b>     ➛ {result['type']}\n"
+            f"<b>Prepaid</b>  ➛ {prepaid}\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"<b>Bank</b>     ➛ {escape(result['bank'])}\n"
+            f"<b>Country</b>  ➛ {result['country_flag']} {escape(result['country'])}\n"
+            f"<b>Currency</b> ➛ {currency}\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"{E_USER} <b>{escape(user.first_name or 'User')}</b> {plan_e} <b>({styled})</b>\n"
+            f"{E_DEV} <b>Batman</b> {E_PRO}\n━━━━━━━━━━━━━━━━━\n"
+            f"📢 <a href='{CHANNEL_LINK}'>@Batcardchk</a>"
+        )
+    try:
+        await status_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        pass
+
 async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
     if not await require_membership(update, context): return
@@ -2029,7 +2133,7 @@ def main():
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
         app.add_handler(CommandHandler("rm",      cmd_rm))
-        app.add_handler(get_bin_lookup_handler())
+        app.add_handler(CommandHandler("bin",     cmd_bin))
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(CommandHandler("pp",      cmd_pp))
         app.add_handler(CommandHandler("sh",      cmd_sh))
