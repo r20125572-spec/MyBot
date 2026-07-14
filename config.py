@@ -11,7 +11,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8799211002:AAH95tK5_6ovIiz7gRxA0X__xUUF6R3C0ts")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8032773834:AAEWbgMolss5toTzWd5zQe3KTUp3Zy2D5-k")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
