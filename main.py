@@ -2228,8 +2228,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     if isinstance(err, Conflict):
-        logger.critical("CONFLICT: Another bot instance is running! Shutting down.")
-        os.kill(os.getpid(), signal.SIGTERM)
+        # Another session is still alive on Telegram's server.
+        # Wait 30 s and let PTB retry — do NOT kill the process.
+        logger.warning("CONFLICT detected — another session active. Waiting 30 s before retry...")
+        await asyncio.sleep(30)
         return
     if isinstance(err, (NetworkError, Forbidden)):
         logger.warning(f"Network/Forbidden error: {err}")
@@ -2240,12 +2242,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _post_init(app: Application) -> None:
-    """Clear any existing webhook / long-poll session before we start polling.
-    Retries up to 5 times with backoff so transient network hiccups don't crash startup."""
+    """Clear any existing webhook / long-poll session before polling starts.
+    After clearing, sleep 5 s so Telegram can expire the old getUpdates session."""
     for attempt in range(1, 6):
         try:
             await app.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Webhook cleared — starting fresh poll session.")
+            logger.info("Webhook cleared — waiting 5 s for old session to expire...")
+            await asyncio.sleep(5)
             return
         except Exception as exc:
             logger.warning(f"delete_webhook attempt {attempt}/5 failed: {exc}")
@@ -2260,6 +2263,7 @@ def main():
         return
 
     try:
+        # Regular API calls (send_message, etc.)
         _request = HTTPXRequest(
             connection_pool_size=8,
             connect_timeout=30.0,
@@ -2267,10 +2271,19 @@ def main():
             write_timeout=30.0,
             pool_timeout=30.0,
         )
+        # Long-poll getUpdates needs a much longer read_timeout
+        _get_updates_request = HTTPXRequest(
+            connection_pool_size=4,
+            connect_timeout=30.0,
+            read_timeout=65.0,   # PTB polls for 30 s + 35 s buffer
+            write_timeout=30.0,
+            pool_timeout=30.0,
+        )
         app = (
             Application.builder()
             .token(BOT_TOKEN)
             .request(_request)
+            .get_updates_request(_get_updates_request)
             .post_init(_post_init)
             .build()
         )
