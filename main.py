@@ -10,7 +10,7 @@ import json
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -1989,12 +1989,11 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     )
     posted = False
     try:
-        from config import CHANNEL_USERNAME as _CHAN
         if file_type == "photo":
-            await context.bot.send_photo(chat_id=f"@{_CHAN}", photo=file_id,
+            await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=file_id,
                                          caption=channel_caption, parse_mode="HTML")
         else:
-            await context.bot.send_video(chat_id=f"@{_CHAN}", video=file_id,
+            await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=file_id,
                                          caption=channel_caption, parse_mode="HTML")
         posted = True
     except Exception as e:
