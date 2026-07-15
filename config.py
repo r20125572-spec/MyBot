@@ -1,8 +1,7 @@
 import os
-import json
 import random
 import aiohttp
-from telegram import TelegramObject
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ╔══════════════════════════════════════════════════════╗
 # ║              BATMAN BOT — CONFIG FILE                ║
@@ -12,7 +11,7 @@ from telegram import TelegramObject
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8600797754:AAGBWYx4r129ejPF8j38kEK8j_nzYRPa1Zo")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8032773834:AAEWbgMolss5toTzWd5zQe3KTUp3Zy2D5-k")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -89,8 +88,8 @@ GATE_SITES: dict[str, str] = {
 PREMIUM_GATES: set[str] = {"au", "mss", "mpp2"}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🎨  CUSTOM EMOJI IDS  (mst.py style)
-#     Telegram Premium custom emoji stickers.
+# 🎨  CUSTOM EMOJI IDS  (from mst.py)
+#     These are Telegram Premium custom emoji stickers.
 #     All users see them — even non-Premium accounts.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -147,7 +146,7 @@ def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 def get_random_live_emoji() -> str:
-    """Return a random live-hit emoji ID (string, not rendered tag)."""
+    """Return a random live-hit emoji ID."""
     return random.choice(LIVE_EMOJI_IDS)
 
 def get_plan_emoji_id(plan_name: str) -> str:
@@ -164,8 +163,8 @@ def get_plan_emoji_id(plan_name: str) -> str:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🏷  PRE-RENDERED EMOJI SHORTHANDS
-#     Import these in b3.py, chk.py, main.py, etc.
-#     Always use parse_mode="HTML" — NOT MarkdownV2.
+#     Import these directly in b3.py, chk.py, bot.py, etc.
+#     Use parse_mode="HTML" — do NOT use MarkdownV2.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 E_CARD     = tg_emoji(CARD_EMOJI_ID,          "💳")
@@ -181,46 +180,8 @@ E_GATE     = tg_emoji(PROG_GATE_EMOJI_ID,     "🛒")
 E_HIT_RESP = tg_emoji(HIT_RESP_EMOJI_ID,      "✅")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⌨️  RAW MARKUP — coloured buttons (mst.py style)
-#
-#   Telegram Bot API supports:
-#     "style": "primary"   → blue button
-#     "style": "danger"    → red button
-#     "icon_custom_emoji_id" → animated sticker on button
-#
-#   python-telegram-bot calls .to_dict() on reply_markup,
-#   so this thin wrapper passes raw API JSON straight through.
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class RawMarkup(TelegramObject):
-    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
-    __slots__ = ("_data",)
-
-    def __init__(self, inline_keyboard: list):
-        super().__init__()
-        self._data = {"inline_keyboard": inline_keyboard}
-
-    def to_dict(self, api_kwargs=None) -> dict:
-        return self._data
-
-    def to_json(self) -> str:
-        return json.dumps(self._data)
-
-
-def _btn(text: str, *, cb: str = None, url: str = None,
-         style: str = None, icon: str = None) -> dict:
-    """Build one raw Telegram API button dict."""
-    d: dict = {"text": text}
-    if cb:    d["callback_data"]        = cb
-    if url:   d["url"]                  = url
-    if style: d["style"]                = style
-    if icon:  d["icon_custom_emoji_id"] = icon
-    return d
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔍  BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 async def get_bin_info(bin_num: str) -> dict:
     """Fetch card BIN details from binlist.net (no API key needed)."""
     try:
@@ -235,7 +196,7 @@ async def get_bin_info(bin_num: str) -> dict:
                     return {"error": True}
                 data    = await resp.json(content_type=None)
                 country = data.get("country") or {}
-                bank    = data.get("bank")    or {}
+                bank    = data.get("bank") or {}
                 alpha2  = (country.get("alpha2") or "").upper()
                 emoji   = (
                     "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in alpha2)
@@ -253,22 +214,15 @@ async def get_bin_info(bin_num: str) -> dict:
         return {"error": True}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⌨️  SHARED RESULT KEYBOARD  — coloured (mst.py style)
-#
-#   Used by b3.py, chk.py, and any other checker module.
-#   Trial users  → blue "BUY PREMIUM" + grey channel link
-#   Premium users → blue "Open Bot" + blue "Channel"
+# ⌨️  SHARED RESULT KEYBOARD
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def kb_result(is_premium: bool = False) -> RawMarkup:
+def kb_result(is_premium: bool = False) -> InlineKeyboardMarkup:
     if is_premium:
-        return RawMarkup([
-            [
-                _btn("🤖 Open Bot", url=BOT_LINK,     style="primary"),
-                _btn("📢 Channel",  url=CHANNEL_LINK, style="primary"),
-            ],
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🤖 Open Bot", url=BOT_LINK),
+             InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)],
         ])
-    return RawMarkup([
-        [_btn("💎 BUY PREMIUM — Unlimited Checks", cb="mprice", style="primary")],
-        [_btn("📢 @Batcardchk", url=CHANNEL_LINK)],
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 BUY PREMIUM — Unlimited Checks", callback_data="mprice")],
+        [InlineKeyboardButton("📢 @Batcardchk", url=CHANNEL_LINK)],
     ])
