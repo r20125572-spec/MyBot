@@ -10,7 +10,7 @@ import json
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update
+from telegram import Update, TelegramObject
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -125,15 +125,18 @@ def B(text: str) -> str:
 # python-telegram-bot passes reply_markup by calling .to_dict(),
 # so this thin wrapper carries the raw API JSON straight through.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-class RawMarkup:
-    """Coloured inline keyboard wrapper compatible with python-telegram-bot."""
+class RawMarkup(TelegramObject):
+    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
+    __slots__ = ("_data",)
+
     def __init__(self, inline_keyboard: list):
+        super().__init__()
         self._data = {"inline_keyboard": inline_keyboard}
 
-    def to_dict(self):
+    def to_dict(self, api_kwargs=None) -> dict:
         return self._data
 
-    def to_json(self):
+    def to_json(self) -> str:
         return json.dumps(self._data)
 
 
