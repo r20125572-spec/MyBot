@@ -16,6 +16,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes,
 )
 from telegram.error import Conflict, BadRequest, NetworkError, Forbidden
+from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
 
@@ -2239,13 +2240,18 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _post_init(app: Application) -> None:
-    """Called after the bot is built but before polling starts.
-    Deletes any active webhook / long-poll session so we never get a Conflict."""
-    try:
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook cleared — starting fresh poll session.")
-    except Exception as exc:
-        logger.warning(f"delete_webhook on startup failed (non-fatal): {exc}")
+    """Clear any existing webhook / long-poll session before we start polling.
+    Retries up to 5 times with backoff so transient network hiccups don't crash startup."""
+    for attempt in range(1, 6):
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook cleared — starting fresh poll session.")
+            return
+        except Exception as exc:
+            logger.warning(f"delete_webhook attempt {attempt}/5 failed: {exc}")
+            if attempt < 5:
+                await asyncio.sleep(attempt * 2)
+    logger.warning("Could not clear webhook after 5 attempts — continuing anyway.")
 
 
 def main():
@@ -2254,9 +2260,17 @@ def main():
         return
 
     try:
+        _request = HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=30.0,
+        )
         app = (
             Application.builder()
             .token(BOT_TOKEN)
+            .request(_request)
             .post_init(_post_init)
             .build()
         )
