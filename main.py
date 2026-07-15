@@ -6,15 +6,17 @@ import asyncio
 import signal
 import os
 import fcntl
+import json
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, TelegramObject
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
 )
 from telegram.error import Conflict, BadRequest, NetworkError, Forbidden
+from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
 
@@ -27,11 +29,16 @@ from config import (
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
-    # ── Custom emoji helpers ──
     tg_emoji, get_plan_emoji_id, get_random_live_emoji,
     E_CARD, E_USER, E_TIME, E_DEV, E_PRO,
     E_LIVE, E_DECLINED, E_ERRORS, E_PROGRESS, E_GATE,
     PLAN_EMOJIS, PRO_EMOJI_ID,
+    # Button emoji IDs from mst.py
+    BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID,
+    PROG_GATE_EMOJI_ID, PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID,
+    PROG_ERRORS_EMOJI_ID, PROG_PROGRESS_EMOJI_ID,
+    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
+    DEV_EMOJI_ID, DECLINED_EMOJI_ID,
 )
 from mass import get_mass_handlers
 from b3 import get_b3_handler
@@ -73,8 +80,27 @@ for _uname, _link in _config_fc:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _lock_file_handle = None
 
+def _stale_lock() -> bool:
+    """Return True if the lock file exists but the recorded PID is dead."""
+    try:
+        with open(LOCK_FILE, "r") as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)          # signal 0 = just check existence
+        return False             # process is alive → not stale
+    except (FileNotFoundError, ValueError):
+        return True              # no file or bad content → treat as stale
+    except ProcessLookupError:
+        return True              # PID doesn't exist → stale
+    except PermissionError:
+        return False             # PID exists, different owner → treat as live
+
 def acquire_instance_lock() -> bool:
     global _lock_file_handle
+    if _stale_lock():
+        try:
+            os.unlink(LOCK_FILE)
+        except FileNotFoundError:
+            pass
     try:
         _lock_file_handle = open(LOCK_FILE, "w")
         fcntl.flock(_lock_file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -112,14 +138,48 @@ def B(text: str) -> str:
     return "".join(bold_map.get(ch, ch) for ch in text)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RAW MARKUP — coloured buttons (mst.py style)
+#
+# Telegram Bot API supports "style" (primary=blue, danger=red)
+# and "icon_custom_emoji_id" on inline keyboard buttons.
+# python-telegram-bot passes reply_markup by calling .to_dict(),
+# so this thin wrapper carries the raw API JSON straight through.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class RawMarkup(TelegramObject):
+    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
+    __slots__ = ("_data",)
+
+    def __init__(self, inline_keyboard: list):
+        super().__init__()
+        self._data = {"inline_keyboard": inline_keyboard}
+
+    def to_dict(self, api_kwargs=None) -> dict:
+        return self._data
+
+    def to_json(self) -> str:
+        return json.dumps(self._data)
+
+
+def _btn(text: str, *, cb: str = None, url: str = None,
+         style: str = None, icon: str = None) -> dict:
+    """Build a single raw button dict (mst.py style)."""
+    d: dict = {"text": text}
+    if cb:   d["callback_data"] = cb
+    if url:  d["url"]           = url
+    if style: d["style"]        = style
+    if icon:  d["icon_custom_emoji_id"] = icon
+    return d
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_styled_plan(raw_plan: str) -> str:
     p = raw_plan.upper()
-    if p == "CORE":  return "Cᴏʀᴇ"
-    if p == "ELITE": return "Eʟɪᴛᴇ"
-    if p == "ROOT":  return "Rᴏᴏᴛ"
-    return "Tʀɪᴀʟ"
+    if p == "CORE":  return B("Core")
+    if p == "ELITE": return B("Elite")
+    if p == "ROOT":  return B("Root")
+    return B("Trial")
 
 def get_plan_icon(raw_plan: str) -> str:
     return "👑" if raw_plan.upper() in ("CORE", "ELITE", "ROOT") else ""
@@ -162,7 +222,7 @@ def is_user_premium(ud: dict) -> bool:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # COOLDOWN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SINGLE_CHECK_COOLDOWN = 25          # ← 25s wait for trial/free users between checks
+SINGLE_CHECK_COOLDOWN = 25
 
 def get_cooldown_remaining(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> float:
     store     = context.bot_data.setdefault("cooldown_store", {})
@@ -200,7 +260,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     last_active  = ud.get("last_active", "N/A")
     total_refs   = ud.get("total_refs", 0)
     total_checks = ud.get("total_checks", 0)
-    ban_status   = f"{E_ERRORS} Banned" if ud.get("banned", False) else f"{E_LIVE} Active"
+    ban_status   = f"{E_ERRORS} {B('Banned')}" if ud.get("banned", False) else f"{E_LIVE} {B('Active')}"
 
     if premium and expires > now:
         exp_date    = datetime.fromtimestamp(expires).strftime("%Y-%m-%d")
@@ -253,14 +313,17 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     last_card     = ud.get("last_card", "N/A")
     codes_red     = ud.get("codes_redeemed", 0)
     keys_red      = ud.get("keys_redeemed", 0)
-    ban_status    = f"{E_ERRORS} Banned" if ud.get("banned", False) else f"{E_LIVE} Active"
+    ban_status    = f"{E_ERRORS} {B('Banned')}" if ud.get("banned", False) else f"{E_LIVE} {B('Active')}"
     approval_rate = f"{(approved / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
 
     if premium and expires > now:
         exp_date     = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
         rem_d        = int((expires - now) / 86400)
         rem_h        = int(((expires - now) % 86400) / 3600)
-        expire_line  = f"✰ <b>𝐄𝐱𝐩𝐢𝐫𝐞𝐬</b>   ➔ {exp_date}\n✰ <b>𝐓𝐢𝐦𝐞 𝐋𝐞𝐟𝐭</b>  ➔ {rem_d}d {rem_h}h"
+        expire_line  = (
+            f"✰ <b>𝐄𝐱𝐩𝐢𝐫𝐞𝐬</b>   ➔ {exp_date}\n"
+            f"✰ <b>𝐓𝐢𝐦𝐞 𝐋𝐞𝐟𝐭</b>  ➔ {rem_d}d {rem_h}h"
+        )
         last_receipt = ud.get("last_receipt")
         if last_receipt:
             expire_line += f"\n✰ <b>𝐑𝐞𝐜𝐞𝐢𝐩𝐭</b>   ➔ <code>{last_receipt}</code>"
@@ -297,9 +360,9 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
 def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     return (
         f"━━━━━━━━━━━━━━━━━\n<b>{gate_name}</b>\n━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>Cᴏsᴛ</b>    ➺ {cost} Credit(s) per check\n\n"
-        f"<b>Uꜱᴀɢᴇ:</b>\n<code>/{cmd} cc|mm|yy|cvv</code>\n\n"
-        f"<b>Exᴀᴍᴘʟᴇ:</b>\n<code>/{cmd} 4111111111111111|12|2026|123</code>\n\n"
+        f"<b>Cost</b>    ➳ {cost} Credit(s) per check\n\n"
+        f"<b>Usage:</b>\n<code>/{cmd} cc|mm|yy|cvv</code>\n\n"
+        f"<b>Example:</b>\n<code>/{cmd} 4111111111111111|12|2026|123</code>\n\n"
         "━━━━━━━━━━━━━━━━━"
     )
 
@@ -363,7 +426,7 @@ def _force_join_text(not_joined: list) -> str:
     total  = len(FORCE_JOIN_FULL)
     joined = total - len(not_joined)
     lines  = [
-        f"⭅ <b>𝗝𝗢𝗜𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗</b> ⭆",
+        "⭅ <b>𝗝𝗢𝗜𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗</b> ⭆",
         "━━━━━━━━━━━━━━━━━━━━",
         "To use this bot you must join <b>all</b> our",
         "channels and groups listed below.",
@@ -380,12 +443,12 @@ def _force_join_text(not_joined: list) -> str:
     ]
     return "\n".join(lines)
 
-def kb_force_sub(not_joined: list) -> InlineKeyboardMarkup:
+def kb_force_sub(not_joined: list) -> RawMarkup:
     rows = []
     for uname, link, label in not_joined:
-        rows.append([InlineKeyboardButton(f"{label}  ➺  @{uname}", url=link)])
-    rows.append([InlineKeyboardButton("✅  I Joined All — Verify Now", callback_data="check_sub")])
-    return InlineKeyboardMarkup(rows)
+        rows.append([_btn(f"{label}  ➳  @{uname}", url=link, style="primary")])
+    rows.append([_btn("✅  I Joined All — Verify Now", cb="check_sub", style="primary")])
+    return RawMarkup(rows)
 
 async def send_force_join_photo(msg, not_joined: list):
     caption  = _force_join_text(not_joined)
@@ -420,10 +483,10 @@ async def require_not_banned(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if ud.get("banned", False):
         try:
             await update.message.reply_text(
-                f"<b>{E_ERRORS} Bᴀɴɴᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
                 "You have been banned from using this bot.\n"
                 "Contact support if you think this is a mistake.\n"
-                "━━━━━━━━━━━━━━━━━",
+                "──────────",
                 parse_mode="HTML"
             )
         except Exception:
@@ -432,25 +495,34 @@ async def require_not_banned(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return True
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CARD CHECK RESULT  (single gate)
+# CARD CHECK RESULT  — mst.py _build_hit_dm() style
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def build_check_result(card_raw: str, gate_name: str, raw_response: str,
                        bin_data: dict, username: str, plan: str,
                        time_taken: str, is_approved: bool,
                        is_timeout: bool = False, is_error: bool = False) -> str:
+
     if is_timeout:
-        status_emoji = E_ERRORS
-        status_label = "Tɪᴍᴇᴏᴜᴛ"
+        status_line = (
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Timeout '
+            f'{tg_emoji(DECLINED_EMOJI_ID, "⏱")}</b>'
+        )
     elif is_error:
-        status_emoji = E_ERRORS
-        status_label = "Eʀʀᴏʀ"
+        status_line = (
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
+            f'{tg_emoji(DECLINED_EMOJI_ID, "⚠️")}</b>'
+        )
     elif is_approved:
-        live_eid     = get_random_live_emoji()
-        status_emoji = tg_emoji(live_eid, "✅")
-        status_label = "Aᴘᴘʀᴏᴠᴇᴅ"
+        live_eid    = get_random_live_emoji()
+        status_line = (
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
+            f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>'
+        )
     else:
-        status_emoji = E_DECLINED
-        status_label = "Dᴇᴄʟɪɴᴇᴅ"
+        status_line = (
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Declined '
+            f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">❌</tg-emoji></b>'
+        )
 
     plan_emoji_id = get_plan_emoji_id(plan)
     plan_emoji    = tg_emoji(plan_emoji_id, "⭐")
@@ -458,107 +530,123 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
 
     bin_txt = "N/A"
     if bin_data and not bin_data.get("error"):
-        scheme  = str(bin_data.get("scheme",  "N/A")).upper()
-        bank    = bin_data.get("bank",    "N/A")
+        scheme  = str(bin_data.get("scheme", "N/A")).upper()
+        bank    = bin_data.get("bank", "N/A")
         country = str(bin_data.get("country", "N/A")).upper()
         flag    = bin_data.get("country_emoji", "")
         bin_txt = f"{scheme} - {bank} - {flag} {country}".strip("- ")
 
-    uname_display = f"{escape(username)} {plan_emoji} ({plan_label})"
+    uname_display = escape(username)
 
-    lines = [
-        f"<b>{status_emoji} {status_label}</b>",
-        "━━━━━━━━━━━━━━━━━",
-        f"{E_CARD} <code>{card_raw}</code>",
-        f"<b>Gᴀᴛᴇ</b> ➺ {gate_name}",
-        f"<b>Rᴀᴡ</b>  ➺ {escape(raw_response)}",
-        f"<b>Iɴꜰᴏ</b> ➺ {bin_txt}",
-        "━━━━━━━━━━━━━━━━━",
-        f"{E_TIME} <b>{time_taken}s</b>",
-        f"{E_USER} {uname_display}",
-        f"{E_DEV} Batman {E_PRO}",
-        "━━━━━━━━━━━━━━━━━",
-        f"📢 <a href='{CHANNEL_LINK}'>@Batcardchk</a>",
-    ]
-    return "\n".join(lines)
+    return (
+        f'{status_line}\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{card_raw}</code></b>\n'
+        f'<b>Gate ➳ {gate_name}</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b>Resp ➳ {escape(raw_response)}</b>\n'
+        f'<b>Info ➳ {bin_txt}</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_taken}s</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {uname_display} '
+        f'{plan_emoji} ({plan_label})</b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ '
+        f'<a href="{DEV_LINK}">Batman</a> '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+    )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# KEYBOARDS
+# KEYBOARDS  — mst.py coloured button style
+#   style="primary"  → blue button
+#   style="danger"   → red button
+#   (no style)       → default grey
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def kb_main(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("GATES"),          callback_data="mgates"),
-         InlineKeyboardButton(B("PRICING"),        callback_data="mprice")],
-        [InlineKeyboardButton(B("CONNECT") + " ↗", url=CHANNEL_LINK),
-         InlineKeyboardButton("👤 " + B("PROFILE"), callback_data="mprofile")],
-        [InlineKeyboardButton("📋 " + B("CMD"),    callback_data="cmd_pg_1")],
-        [InlineKeyboardButton(B("SUPPORT") + " ↗", url=SUPPORT_LINK)],
+def kb_main(user_id: int) -> RawMarkup:
+    return RawMarkup([
+        [_btn(B("GATES"),           cb="mgates",   style="primary"),
+         _btn(B("PRICING"),         cb="mprice",   style="primary")],
+        [_btn("📢 " + B("CONNECT"), url=CHANNEL_LINK, style="primary"),
+         _btn("👤 " + B("PROFILE"), cb="mprofile", style="primary")],
+        [_btn("📋 " + B("COMMANDS"), cb="cmd_pg_1", style="primary")],
+        [_btn("🆘 " + B("SUPPORT"), url=SUPPORT_LINK)],
     ])
 
-def kb_back(cb: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 " + B("BACK"), callback_data=cb)]])
+def kb_back(cb: str) -> RawMarkup:
+    return RawMarkup([[_btn("🔙 " + B("BACK"), cb=cb)]])
 
-def kb_price() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("10$ - CORE"),  callback_data="pay10"),
-         InlineKeyboardButton(B("15$ - ELITE"), callback_data="pay15"),
-         InlineKeyboardButton(B("30$ - ROOT"),  callback_data="pay30")],
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
+def kb_price() -> RawMarkup:
+    return RawMarkup([
+        [_btn("⭐ " + B("10$ — CORE"),  cb="pay10", style="primary"),
+         _btn("⭐ " + B("15$ — ELITE"), cb="pay15", style="primary"),
+         _btn("⭐ " + B("30$ — ROOT"),  cb="pay30", style="primary")],
+        [_btn("🆘 " + B("SUPPORT"),     url=SUPPORT_LINK, style="primary")],
+        [_btn("🔙 " + B("BACK"),        cb="bmain")],
     ])
 
-def kb_payment() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mprice")],
+def kb_payment() -> RawMarkup:
+    return RawMarkup([
+        [_btn("🆘 " + B("CONTACT SUPPORT"), url=SUPPORT_LINK, style="primary")],
+        [_btn("🔙 " + B("BACK"), cb="mprice")],
     ])
 
-def kb_gate_main() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("AUTH"),    callback_data="mauth"),
-         InlineKeyboardButton(B("CHARGE"),  callback_data="mcharge"),
-         InlineKeyboardButton("👑 " + B("PREMIUM"), callback_data="mmass")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="bmain")],
+def kb_gate_main() -> RawMarkup:
+    return RawMarkup([
+        [_btn("🔐 " + B("AUTH"),    cb="mauth",   style="primary"),
+         _btn("💳 " + B("CHARGE"),  cb="mcharge", style="primary"),
+         _btn("👑 " + B("PREMIUM"), cb="mmass",   style="primary")],
+        [_btn("🔙 " + B("BACK"),    cb="bmain")],
     ])
 
-def kb_auth_gates() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("BRAINTREE"), callback_data="ib3")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+def kb_auth_gates() -> RawMarkup:
+    return RawMarkup([
+        [_btn("🔐 " + B("BRAINTREE AUTH"), cb="ib3", style="primary")],
+        [_btn("🔙 " + B("BACK"),           cb="mgates")],
     ])
 
-def kb_charge_gates() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE"),  callback_data="ichk"),
-         InlineKeyboardButton(B("PAYPAL"),  callback_data="ipp")],
-        [InlineKeyboardButton(B("SHOPIFY"), callback_data="ish"),
-         InlineKeyboardButton(B("PAYU"),    callback_data="ipyu")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+def kb_charge_gates() -> RawMarkup:
+    return RawMarkup([
+        [_btn("💳 " + B("STRIPE"),  cb="ichk", style="primary"),
+         _btn("🅿️ " + B("PAYPAL"),  cb="ipp",  style="primary")],
+        [_btn("🛍 " + B("SHOPIFY"), cb="ish",  style="primary"),
+         _btn("💲 " + B("PAYU"),    cb="ipyu", style="primary")],
+        [_btn("🔙 " + B("BACK"),    cb="mgates")],
     ])
 
-def kb_premium_gates() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(B("STRIPE AUTH")  + " 👑", callback_data="iau")],
-        [InlineKeyboardButton(B("STRIPE MASS")  + " 👑", callback_data="imss")],
-        [InlineKeyboardButton(B("PAYPAL MASS")  + " 👑", callback_data="impp2")],
-        [InlineKeyboardButton("🔙 " + B("BACK"), callback_data="mgates")],
+def kb_premium_gates() -> RawMarkup:
+    return RawMarkup([
+        [_btn("⚡ " + B("STRIPE AUTH") + " 👑",  cb="iau",   style="primary")],
+        [_btn("⚡ " + B("STRIPE MASS") + " 👑",  cb="imss",  style="primary")],
+        [_btn("⚡ " + B("PAYPAL MASS") + " 👑",  cb="impp2", style="primary")],
+        [_btn("🔙 " + B("BACK"),                  cb="mgates")],
     ])
 
-def kb_upgrade() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 " + B("BUY PREMIUM"), callback_data="mprice")],
-        [InlineKeyboardButton(B("SUPPORT") + " ➺", url=SUPPORT_LINK)],
+def kb_upgrade() -> RawMarkup:
+    return RawMarkup([
+        [_btn("💎 " + B("BUY PREMIUM"), cb="mprice",     style="primary")],
+        [_btn("🆘 " + B("SUPPORT"),     url=SUPPORT_LINK)],
     ])
 
-def kb_cooldown() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 BUY PREMIUM — No Cooldown", callback_data="mprice")],
+def kb_cooldown() -> RawMarkup:
+    return RawMarkup([
+        [_btn("💎 " + B("BUY PREMIUM") + " — No Cooldown", cb="mprice", style="primary")],
     ])
 
-def kb_fb_owner(key: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"fb_ok_{key}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"fb_no_{key}"),
+def kb_result_raw(is_premium: bool = False) -> RawMarkup:
+    if is_premium:
+        return RawMarkup([
+            [_btn("🤖 " + B("Open Bot"), url=BOT_LINK,      style="primary"),
+             _btn("📢 " + B("Channel"),  url=CHANNEL_LINK,  style="primary")],
+        ])
+    return RawMarkup([
+        [_btn("💎 " + B("BUY PREMIUM") + " — Unlimited Checks", cb="mprice", style="primary")],
+        [_btn("📢 @Batcardchk", url=CHANNEL_LINK)],
+    ])
+
+def kb_fb_owner(key: str) -> RawMarkup:
+    return RawMarkup([[
+        _btn("✅ Approve", cb=f"fb_ok_{key}", style="primary"),
+        _btn("❌ Decline", cb=f"fb_no_{key}", style="danger"),
     ]])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -571,28 +659,28 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>Available Modules</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>[+] {E_CARD} Charge Module</b>  (4)\n"
-        f"<b>[+] {E_LIVE} Auth Module</b>    (1)\n"
+        f"<b>[+] 💳 Charge Module</b>  (4)\n"
+        f"<b>[+] 🔐 Auth Module</b>    (1)\n"
         f"<b>[+] 👑 Mass Module</b>    (3)  <i>Premium</i>\n"
         f"<b>[+] 🛠 Tools</b>          (5)\n"
-        f"<b>[+] {E_USER} Account</b>        (3)\n"
+        f"<b>[+] 👤 Account</b>        (3)\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Use ▶ Next to explore each module</i>"
     ),
     2: (
         "⭅ <b>💳 𝗖𝗛𝗔𝗥𝗚𝗘 𝗠𝗢𝗗𝗨𝗟𝗘</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/chk</b>  ➔ Stripe Charge\n"
-        "       Cost ➔ 1 Credit\n"
+        "<b>/chk</b>  ➳ Stripe Charge\n"
+        "       Cost ➳ 1 Credit\n"
         "       Usage: <code>/chk cc|mm|yy|cvv</code>\n\n"
-        "<b>/pp</b>   ➔ PayPal Charge\n"
-        "       Cost ➔ 1 Credit\n"
+        "<b>/pp</b>   ➳ PayPal Charge\n"
+        "       Cost ➳ 1 Credit\n"
         "       Usage: <code>/pp cc|mm|yy|cvv</code>\n\n"
-        "<b>/sh</b>   ➔ Shopify Charge\n"
-        "       Cost ➔ 1 Credit\n"
+        "<b>/sh</b>   ➳ Shopify Charge\n"
+        "       Cost ➳ 1 Credit\n"
         "       Usage: <code>/sh cc|mm|yy|cvv</code>\n\n"
-        "<b>/pyu</b>  ➔ PayU Charge\n"
-        "       Cost ➔ 1 Credit\n"
+        "<b>/pyu</b>  ➳ PayU Charge\n"
+        "       Cost ➳ 1 Credit\n"
         "       Usage: <code>/pyu cc|mm|yy|cvv</code>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Example: /chk 4111111111111111|12|2026|123</i>"
@@ -600,8 +688,8 @@ CMD_PAGES = {
     3: (
         "⭅ <b>🔐 𝗔𝗨𝗧𝗛 𝗠𝗢𝗗𝗨𝗟𝗘</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/b3</b>   ➔ Braintree Auth\n"
-        "       Cost ➔ 1 Credit\n"
+        "<b>/b3</b>   ➳ Braintree Auth\n"
+        "       Cost ➳ 1 Credit\n"
         "       Usage: <code>/b3 cc|mm|yy|cvv</code>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>What is Auth?</b>\n"
@@ -615,14 +703,14 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔒 <b>Premium Plan Required</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/au</b>   ➔ Stripe Auth Mass 👑\n"
-        "       Cost ➔ Unlimited (Premium)\n"
+        "<b>/au</b>   ➳ Stripe Auth Mass 👑\n"
+        "       Cost ➳ Unlimited (Premium)\n"
         "       Usage: <code>/au cc|mm|yy|cvv</code>\n\n"
-        "<b>/mss</b>  ➔ Stripe Mass Checker 👑\n"
-        "       Cost ➔ Unlimited (Premium)\n"
+        "<b>/mss</b>  ➳ Stripe Mass Checker 👑\n"
+        "       Cost ➳ Unlimited (Premium)\n"
         "       Usage: <code>/mss cc|mm|yy|cvv</code>\n\n"
-        "<b>/mpp2</b> ➔ PayPal Mass Checker 👑\n"
-        "       Cost ➔ Unlimited (Premium)\n"
+        "<b>/mpp2</b> ➳ PayPal Mass Checker 👑\n"
+        "       Cost ➳ Unlimited (Premium)\n"
         "       Usage: <code>/mpp2 cc|mm|yy|cvv</code>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Upgrade via /plan to unlock these gates</i>"
@@ -630,24 +718,24 @@ CMD_PAGES = {
     5: (
         "⭅ <b>🛠 𝗧𝗢𝗢𝗟𝗦</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/bin</b>   ➔ BIN Lookup\n"
+        "<b>/bin</b>   ➳ BIN Lookup\n"
         "        Usage: <code>/bin 411111</code>\n\n"
-        "<b>/ping</b>  ➔ Bot Speed Test\n"
+        "<b>/ping</b>  ➳ Bot Speed Test\n"
         "        Usage: <code>/ping</code>\n\n"
-        "<b>/rm</b>    ➔ Redeem Code / Key\n"
+        "<b>/rm</b>    ➳ Redeem Code / Key\n"
         "        Usage: <code>/rm CODE</code>\n\n"
-        "<b>/fb</b>    ➔ Submit Feedback\n"
+        "<b>/fb</b>    ➳ Submit Feedback\n"
         "        Usage: <code>/fb</code> (reply to photo/video)\n\n"
-        "<b>/refer</b> ➔ Refer & Earn\n"
+        "<b>/refer</b> ➳ Refer & Earn\n"
         "        Usage: <code>/refer</code>\n"
         "━━━━━━━━━━━━━━━━━━━━"
     ),
     6: (
         "⭅ <b>👤 𝗔𝗖𝗖𝗢𝗨𝗡𝗧</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/start</b> ➔ Open Dashboard\n\n"
-        "<b>/plan</b>  ➔ View Premium Plans\n\n"
-        "<b>/refer</b> ➔ Referral Program\n"
+        "<b>/start</b> ➳ Open Dashboard\n\n"
+        "<b>/plan</b>  ➳ View Premium Plans\n\n"
+        "<b>/refer</b> ➳ Referral Program\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>{E_PRO} How Credits Work</b>\n"
         "• Trial users start with 150 credits\n"
@@ -658,16 +746,16 @@ CMD_PAGES = {
     ),
 }
 
-def kb_cmd_nav(page: int) -> InlineKeyboardMarkup:
+def kb_cmd_nav(page: int) -> RawMarkup:
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton("◀ " + B("PREV"), callback_data=f"cmd_pg_{page - 1}"))
-    nav_row.append(InlineKeyboardButton(f"📄 {page}/{CMD_TOTAL_PAGES}", callback_data="cmd_pg_noop"))
+        nav_row.append(_btn("◀ " + B("PREV"), cb=f"cmd_pg_{page - 1}", style="primary"))
+    nav_row.append(_btn(f"📄 {page}/{CMD_TOTAL_PAGES}", cb="cmd_pg_noop"))
     if page < CMD_TOTAL_PAGES:
-        nav_row.append(InlineKeyboardButton(B("NEXT") + " ▶", callback_data=f"cmd_pg_{page + 1}"))
-    return InlineKeyboardMarkup([
+        nav_row.append(_btn(B("NEXT") + " ▶", cb=f"cmd_pg_{page + 1}", style="primary"))
+    return RawMarkup([
         nav_row,
-        [InlineKeyboardButton("✖ " + B("CLOSE"), callback_data="bmain")],
+        [_btn("✖ " + B("CLOSE"), cb="bmain", style="danger")],
     ])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -687,11 +775,11 @@ async def process_referral(new_user_id: int, referrer_id: int,
         await context.bot.send_message(
             chat_id=referrer_id,
             text=(
-                f"<b>{E_LIVE} Rᴇꜰᴇʀʀᴀʟ Bᴏɴᴜꜱ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"<b>{E_LIVE} {B('Referral Bonus')}</b>\n──────────\n"
                 f"Someone joined via your link!\n"
-                f"<b>Cʀᴇᴅɪᴛꜱ Aᴅᴅᴇᴅ</b>    ➺ +{REFERRAL_CREDITS}\n"
-                f"<b>Tᴏᴛᴀʟ Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {referrer_ud['total_refs']}\n"
-                "━━━━━━━━━━━━━━━━━"
+                f"<b>Credits Added</b>   ➳ +{REFERRAL_CREDITS}\n"
+                f"<b>Total Referrals</b> ➳ {referrer_ud['total_refs']}\n"
+                "──────────"
             ),
             parse_mode="HTML",
         )
@@ -720,7 +808,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not await require_not_banned(update, context): return
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
         await update.message.reply_text(
-            f"<b>{E_ERRORS} Mᴀɪɴᴛᴇɴᴀɴᴄᴇ</b>\nBot is under maintenance.", parse_mode="HTML"
+            f"<b>{E_ERRORS} {B('Maintenance')}</b>\nBot is under maintenance.", parse_mode="HTML"
         )
         return
     if not context.bot_data.get(f"{gate_key}_on", True):
@@ -737,7 +825,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     if gate_key in PREMIUM_GATES and not premium:
         await update.message.reply_text(
-            f"<b>{E_PRO} Pʀᴇᴍɪᴜᴍ Oɴʟʏ</b>\n━━━━━━━━━━━━━━━━━\nUse /plan to upgrade.",
+            f"<b>{E_PRO} {B('Premium Only')}</b>\n──────────\nUse /plan to upgrade.",
             parse_mode="HTML", reply_markup=kb_upgrade()
         )
         return
@@ -750,7 +838,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     if not card_raw:
         await update.message.reply_text(
-            f"<b>Uꜱᴀɢᴇ:</b> <code>/{gate_key} cc|mm|yy|cvv</code>", parse_mode="HTML"
+            f"<b>Usage:</b> <code>/{gate_key} cc|mm|yy|cvv</code>", parse_mode="HTML"
         )
         return
 
@@ -758,10 +846,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         credits = ud.get("credits", 0)
         if credits <= 0:
             await update.message.reply_text(
-                f"<b>{E_DECLINED} Nᴏ Cʀᴇᴅɪᴛꜱ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"<b>{E_DECLINED} {B('No Credits')}</b>\n──────────\n"
                 "You have <b>0 credits</b> remaining.\n\n"
                 f"{E_PRO} Upgrade to <b>Premium</b> for unlimited checks.\n"
-                "━━━━━━━━━━━━━━━━━",
+                "──────────",
                 reply_markup=kb_upgrade(), parse_mode="HTML"
             )
             return
@@ -769,10 +857,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         remaining = get_cooldown_remaining(user.id, context)
         if remaining > 0:
             await update.message.reply_text(
-                f"<b>{E_ERRORS} Cᴏᴏʟᴅᴏᴡɴ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"<b>{E_ERRORS} {B('Cooldown')}</b>\n──────────\n"
                 f"Please wait <b>{remaining:.1f}s</b> before your next check.\n\n"
                 f"{E_PRO} <b>Premium removes all cooldowns.</b>\n"
-                "━━━━━━━━━━━━━━━━━",
+                "──────────",
                 reply_markup=kb_cooldown(), parse_mode="HTML"
             )
             return
@@ -791,7 +879,8 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     msg        = await update.message.reply_text(
-        f"{E_PROGRESS} <b>Sᴄᴀɴɴɪɴɢ...</b>", parse_mode="HTML"
+        f"<b><tg-emoji emoji-id=\"{PROG_PROGRESS_EMOJI_ID}\">🔄</tg-emoji> "
+        f"Scanning...</b>", parse_mode="HTML"
     )
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
@@ -832,7 +921,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             time_taken=time_taken, is_approved=is_approved,
         )
         await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(premium),
+                            reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
     except asyncio.TimeoutError:
@@ -840,12 +929,12 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         time_taken = f"{time.time() - start_time:.2f}"
         text = build_check_result(
             card_raw=card_raw, gate_name=gate_name,
-            raw_response="Rᴇǫᴜᴇꜱᴛ Tɪᴍᴇᴏᴜᴛ", bin_data={},
+            raw_response="Request Timeout", bin_data={},
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_timeout=True,
         )
         await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(premium),
+                            reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
     except Exception as e:
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
@@ -858,12 +947,12 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             is_approved=False, is_error=True,
         )
         await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(premium),
+                            reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
-async def cmd_pp(u, c):  await process_gate(u, c, "pp",  "PayPal Charge")
-async def cmd_sh(u, c):  await process_gate(u, c, "sh",  "Shopify Charge")
-async def cmd_pyu(u, c): await process_gate(u, c, "pyu", "PayU Charge")
+async def cmd_pp(u, c):  await process_gate(u, c, "pp",  "PayPal Charge | 0$")
+async def cmd_sh(u, c):  await process_gate(u, c, "sh",  "Shopify Charge | 0$")
+async def cmd_pyu(u, c): await process_gate(u, c, "pyu", "PayU Charge | 0$")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GATE ON/OFF  (owner only)
@@ -924,14 +1013,14 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     styled       = get_styled_plan(plan)
 
     txt = (
-        f"<b>{E_LIVE} Aᴄᴄᴇꜱꜱ Aᴄᴛɪᴠᴀᴛᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Uꜱᴇʀ</b>     ➺ {display_name}\n"
-        f"<b>Aᴄᴄᴇꜱꜱ</b>  ➺ {styled} {plan_emoji}\n"
-        f"<b>Dᴀʏꜱ</b>    ➺ {days}\n"
-        f"<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n"
-        f"<b>Exᴘɪʀᴇꜱ</b> ➺ {exp_date}\n"
-        f"<b>Rᴇᴄᴇɪᴘᴛ</b> ➺ <code>{receipt}</code>\n"
-        f"━━━━━━━━━━━━━━━━━\nSave this receipt ID.\n{E_DEV} Batman {E_PRO}"
+        f"<b>{E_LIVE} {B('Access Activated')}</b>\n──────────\n"
+        f"<b>User</b>     ➳ {display_name}\n"
+        f"<b>Access</b>   ➳ {styled} {plan_emoji}\n"
+        f"<b>Days</b>     ➳ {days}\n"
+        f"<b>Credits</b>  ➳ Unlimited\n"
+        f"<b>Expires</b>  ➳ {exp_date}\n"
+        f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
+        f"──────────\nSave this receipt ID.\n{E_DEV} Batman {E_PRO}"
     )
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
@@ -967,11 +1056,11 @@ async def _grant(uid: int, plan: str, days: int,
 
     plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
     await update.message.reply_text(
-        f"<b>{E_LIVE} Pʀᴇᴍɪᴜᴍ Gʀᴀɴᴛᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Uꜱᴇʀ</b>    ➺ {display_name} (@{display_uname or 'N/A'})\n"
-        f"<b>Aᴄᴄᴇꜱꜱ</b> ➺ {get_styled_plan(plan)} {plan_emoji}\n"
-        f"<b>Dᴀʏꜱ</b>   ➺ {days}\n"
-        "━━━━━━━━━━━━━━━━━",
+        f"<b>{E_LIVE} {B('Premium Granted')}</b>\n──────────\n"
+        f"<b>User</b>   ➳ {display_name} (@{display_uname or 'N/A'})\n"
+        f"<b>Access</b> ➳ {get_styled_plan(plan)} {plan_emoji}\n"
+        f"<b>Days</b>   ➳ {days}\n"
+        "──────────",
         parse_mode="HTML"
     )
     await send_activation_msg(uid, plan, days, context)
@@ -983,55 +1072,160 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
-            "Uꜱᴀɢᴇ:\n/gen code <value>\n/gen key <plan> <days>"
+            f"<b>{E_DEV} {B('Generate Code / Key')}</b>\n──────────\n"
+            f"<b>Credit Code:</b>\n"
+            f"<code>/gen code &lt;credits&gt;</code>\n"
+            f"<code>/gen code &lt;credits&gt; &lt;count&gt;</code>\n\n"
+            f"<b>Premium Key:</b>\n"
+            f"<code>/gen key &lt;PLAN&gt; &lt;days&gt;</code>\n"
+            f"<code>/gen key &lt;PLAN&gt; &lt;days&gt; &lt;count&gt;</code>\n\n"
+            f"<b>Plans:</b>  CORE | ELITE | ROOT\n\n"
+            f"<b>Examples:</b>\n"
+            f"<code>/gen code 50</code>\n"
+            f"<code>/gen code 100 5</code>\n"
+            f"<code>/gen key ELITE 30</code>\n"
+            f"<code>/gen key ROOT 7 3</code>\n"
+            f"──────────\n"
+            f"Users redeem with: <code>/rm CODE</code>",
+            parse_mode="HTML"
         )
         return
+
     kind = context.args[0].lower()
+
     if kind == "code":
-        try:    value = int(context.args[1])
-        except: await update.message.reply_text("Value must be a number."); return
-        code = gen_code()
-        context.bot_data.setdefault("codes", {})[code] = {"value": value, "used": False}
-        await update.message.reply_text(
-            f"<b>{E_LIVE} Code Generated</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Code</b>   ➺ <code>{code}</code>\n"
-            f"<b>Value</b>  ➺ {value} credits\n"
-            "━━━━━━━━━━━━━━━━━",
-            parse_mode="HTML"
-        )
+        try:
+            value = int(context.args[1])
+            if value <= 0: raise ValueError
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Credits value must be a positive number.</b>", parse_mode="HTML"
+            )
+            return
+        count = 1
+        if len(context.args) >= 3:
+            try:
+                count = int(context.args[2])
+                if count <= 0 or count > 50: raise ValueError
+            except ValueError:
+                await update.message.reply_text(
+                    f"<b>{E_ERRORS} Count must be 1–50.</b>", parse_mode="HTML"
+                )
+                return
+
+        codes_store = context.bot_data.setdefault("codes", {})
+        generated   = []
+        for _ in range(count):
+            code = gen_code()
+            codes_store[code] = {"value": value, "used": False}
+            generated.append(code)
+
+        if count == 1:
+            await update.message.reply_text(
+                f"<b>{E_LIVE} {B('Code Generated')}</b>\n──────────\n"
+                f"<b>Code</b>    ➳ <code>{generated[0]}</code>\n"
+                f"<b>Credits</b> ➳ +{value}\n"
+                f"──────────\n"
+                f"Redeem: <code>/rm {generated[0]}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            lines = [
+                f"<b>{E_LIVE} {B('Codes Generated')}</b>",
+                "──────────",
+                f"<b>Credits each</b> ➳ +{value}",
+                f"<b>Count</b>        ➳ {count}",
+                "──────────",
+            ]
+            for i, c in enumerate(generated, 1):
+                lines.append(f"<b>{i}.</b> <code>{c}</code>")
+            lines += ["──────────", "Redeem with: <code>/rm CODE</code>"]
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
     elif kind == "key":
         if len(context.args) < 3:
-            await update.message.reply_text("Uꜱᴀɢᴇ: /gen key <PLAN> <DAYS>"); return
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Usage:</b> <code>/gen key PLAN DAYS [count]</code>",
+                parse_mode="HTML"
+            )
+            return
         plan_arg = context.args[1].upper()
-        try:    days = int(context.args[2])
-        except: await update.message.reply_text("Days must be a number."); return
-        key = gen_code(12)
-        context.bot_data.setdefault("keys", {})[key] = {"plan": plan_arg, "days": days, "used": False}
+        if plan_arg not in ("CORE", "ELITE", "ROOT"):
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Invalid plan.</b> Use: <b>CORE</b>, <b>ELITE</b>, or <b>ROOT</b>",
+                parse_mode="HTML"
+            )
+            return
+        try:
+            days = int(context.args[2])
+            if days <= 0: raise ValueError
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Days must be a positive number.</b>", parse_mode="HTML"
+            )
+            return
+        count = 1
+        if len(context.args) >= 4:
+            try:
+                count = int(context.args[3])
+                if count <= 0 or count > 50: raise ValueError
+            except ValueError:
+                await update.message.reply_text(
+                    f"<b>{E_ERRORS} Count must be 1–50.</b>", parse_mode="HTML"
+                )
+                return
+
+        keys_store = context.bot_data.setdefault("keys", {})
         plan_emoji = tg_emoji(get_plan_emoji_id(plan_arg), "⭐")
+        generated  = []
+        for _ in range(count):
+            key = gen_code(12)
+            keys_store[key] = {"plan": plan_arg, "days": days, "used": False}
+            generated.append(key)
+
+        if count == 1:
+            await update.message.reply_text(
+                f"<b>{E_LIVE} {B('Key Generated')}</b>\n──────────\n"
+                f"<b>Key</b>    ➳ <code>{generated[0]}</code>\n"
+                f"<b>Plan</b>   ➳ {get_styled_plan(plan_arg)} {plan_emoji}\n"
+                f"<b>Days</b>   ➳ {days}\n"
+                f"──────────\n"
+                f"Redeem: <code>/rm {generated[0]}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            lines = [
+                f"<b>{E_LIVE} {B('Keys Generated')}</b>",
+                "──────────",
+                f"<b>Plan</b>  ➳ {get_styled_plan(plan_arg)} {plan_emoji}",
+                f"<b>Days</b>  ➳ {days}",
+                f"<b>Count</b> ➳ {count}",
+                "──────────",
+            ]
+            for i, k in enumerate(generated, 1):
+                lines.append(f"<b>{i}.</b> <code>{k}</code>")
+            lines += ["──────────", "Redeem with: <code>/rm KEY</code>"]
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    else:
         await update.message.reply_text(
-            f"<b>{E_LIVE} Key Generated</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Key</b>   ➺ <code>{key}</code>\n"
-            f"<b>Plan</b>  ➺ {get_styled_plan(plan_arg)} {plan_emoji}\n"
-            f"<b>Days</b>  ➺ {days}\n"
-            "━━━━━━━━━━━━━━━━━",
+            f"<b>{E_ERRORS} Unknown type.</b> Use: <b>code</b> or <b>key</b>",
             parse_mode="HTML"
         )
-    else:
-        await update.message.reply_text("Unknown type. Use: code or key")
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 3:
         await update.message.reply_text(
-            f"<b>{E_DEV} Gʀᴀɴᴛ Pʀᴇᴍɪᴜᴍ</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Uꜱᴀɢᴇ:</b>\n"
+            f"<b>{E_DEV} {B('Grant Premium')}</b>\n──────────\n"
+            f"<b>Usage:</b>\n"
             f"<code>/add @username PLAN DAYS</code>\n"
             f"<code>/add UserID PLAN DAYS</code>\n\n"
-            f"<b>Pʟᴀɴs:</b>  CORE | ELITE | ROOT\n\n"
-            f"<b>Exᴀᴍᴘʟᴇ:</b>\n"
+            f"<b>Plans:</b>  CORE | ELITE | ROOT\n\n"
+            f"<b>Example:</b>\n"
             f"<code>/add @john ELITE 30</code>\n"
             f"<code>/add 123456789 ROOT 7</code>\n"
-            f"━━━━━━━━━━━━━━━━━",
+            f"──────────",
             parse_mode="HTML"
         )
         return
@@ -1068,7 +1262,10 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args:
         target = await resolve_user(context.args[0], context)
     if not target:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /rem @user|ID or reply → /rem"); return
+        await update.message.reply_text(
+            f"<b>Usage:</b> /rem @user|ID or reply → /rem", parse_mode="HTML"
+        )
+        return
     ud = get_user_data(target, context)
     ud["plan"] = "TRIAL"; ud["expires"] = 0
     await update.message.reply_text(
@@ -1077,7 +1274,6 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Remove a user's active premium. Aliases: /resub /rsub"""
     if update.effective_user.id != OWNER_ID: return
 
     target_id = None
@@ -1093,20 +1289,19 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = await resolve_user(raw, context)
         if not target_id:
             await update.message.reply_text(
-                f"{E_ERRORS} <b>User not found:</b> <code>{raw}</code>\n"
-                f"Try: <code>/resub @username</code> or <code>/resub UserID</code>",
+                f"{E_ERRORS} <b>User not found:</b> <code>{raw}</code>",
                 parse_mode="HTML"
             )
             return
     else:
         await update.message.reply_text(
-            f"<b>{E_DEV} Rᴇᴍᴏᴠᴇ Pʀᴇᴍɪᴜᴍ</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Uꜱᴀɢᴇ:</b>\n"
+            f"<b>{E_DEV} {B('Remove Premium')}</b>\n──────────\n"
+            f"<b>Usage:</b>\n"
             f"<code>/resub @username</code>\n"
             f"<code>/resub UserID</code>\n"
             f"Or reply to a user's message → <code>/resub</code>\n\n"
-            f"<b>Aʟɪᴀꜱ:</b> /rsub works too\n"
-            f"━━━━━━━━━━━━━━━━━",
+            f"<b>Alias:</b> /rsub works too\n"
+            f"──────────",
             parse_mode="HTML"
         )
         return
@@ -1147,13 +1342,13 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rem_was      = int((old_exp - now) // 86400)
 
     await update.message.reply_text(
-        f"<b>{E_DECLINED} Pʀᴇᴍɪᴜᴍ Rᴇᴍᴏᴠᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Uꜱᴇʀ</b>      ➺ {target_name} ({uname_d})\n"
-        f"<b>ID</b>        ➺ <code>{target_id}</code>\n"
-        f"<b>Pʟᴀɴ Wᴀꜱ</b> ➺ {old_plan_str}\n"
-        f"<b>Dᴀʏꜱ Left</b> ➺ {rem_was}d (cancelled)\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"<b>Sᴛᴀᴛᴜꜱ</b>    ➺ Rᴇsᴇᴛ ᴛᴏ Tʀɪᴀʟ",
+        f"<b>{E_DECLINED} {B('Premium Removed')}</b>\n──────────\n"
+        f"<b>User</b>       ➳ {target_name} ({uname_d})\n"
+        f"<b>ID</b>         ➳ <code>{target_id}</code>\n"
+        f"<b>Plan Was</b>   ➳ {old_plan_str}\n"
+        f"<b>Days Left</b>  ➳ {rem_was}d (cancelled)\n"
+        f"──────────\n"
+        f"<b>Status</b>     ➳ Reset to {B('Trial')}",
         parse_mode="HTML"
     )
 
@@ -1161,10 +1356,10 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=target_id,
             text=(
-                f"<b>{E_ERRORS} Sᴜʙsᴄʀɪᴘᴛɪᴏɴ Cᴀɴᴄᴇʟʟᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"<b>{E_ERRORS} {B('Subscription Cancelled')}</b>\n──────────\n"
                 f"Your <b>{old_plan_str}</b> premium has been removed by the admin.\n"
                 f"Use /plan to purchase a new subscription.\n"
-                f"━━━━━━━━━━━━━━━━━"
+                f"──────────"
             ),
             parse_mode="HTML"
         )
@@ -1174,7 +1369,10 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not context.args:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /broadcast <message>"); return
+        await update.message.reply_text(
+            f"<b>Usage:</b> /broadcast &lt;message&gt;", parse_mode="HTML"
+        )
+        return
     msg_text  = " ".join(context.args)
     all_users = context.bot_data.get("user_data", {})
     sent = failed = 0
@@ -1189,9 +1387,9 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
         await asyncio.sleep(0.05)
     await update.message.reply_text(
-        f"<b>{E_LIVE} Broadcast Done</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Sent</b>   ➺ {sent}\n<b>Failed</b> ➺ {failed}\n"
-        "━━━━━━━━━━━━━━━━━",
+        f"<b>{E_LIVE} {B('Broadcast Done')}</b>\n──────────\n"
+        f"<b>Sent</b>   ➳ {sent}\n<b>Failed</b> ➳ {failed}\n"
+        "──────────",
         parse_mode="HTML"
     )
 
@@ -1203,7 +1401,10 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args:
         uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /ban @user|ID or reply → /ban"); return
+        await update.message.reply_text(
+            f"<b>Usage:</b> /ban @user|ID or reply → /ban", parse_mode="HTML"
+        )
+        return
     if uid == OWNER_ID:
         await update.message.reply_text(f"{E_ERRORS} Cannot ban the owner.", parse_mode="HTML"); return
     get_user_data(uid, context)["banned"] = True
@@ -1214,10 +1415,10 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=uid,
             text=(
-                f"<b>{E_ERRORS} Bᴀɴɴᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
+                f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
                 "You have been banned from using this bot.\n"
                 "Contact support if you think this is a mistake.\n"
-                "━━━━━━━━━━━━━━━━━"
+                "──────────"
             ),
             parse_mode="HTML"
         )
@@ -1231,7 +1432,10 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args:
         uid = await resolve_user(context.args[0], context)
     if not uid:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /unban @user|ID or reply → /unban"); return
+        await update.message.reply_text(
+            f"<b>Usage:</b> /unban @user|ID or reply → /unban", parse_mode="HTML"
+        )
+        return
     get_user_data(uid, context)["banned"] = False
     await update.message.reply_text(
         f"<b>{E_LIVE} User <code>{uid}</code> has been unbanned.</b>", parse_mode="HTML"
@@ -1240,8 +1444,8 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=uid,
             text=(
-                f"<b>{E_LIVE} Uɴʙᴀɴɴᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-                "You can now use the bot again.\n━━━━━━━━━━━━━━━━━"
+                f"<b>{E_LIVE} {B('Unbanned')}</b>\n──────────\n"
+                "You can now use the bot again.\n──────────"
             ),
             parse_mode="HTML"
         )
@@ -1251,55 +1455,43 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n"
-
         f"<b>{E_DEV} OWNER ONLY:</b>\n"
-        "/allcm ➺ Show all commands\n"
-        "/allsub ➺ All live premium users\n"
-        "/info [user] ➺ Full user info\n"
-        "/gen code &lt;val&gt; ➺ Gen credit code\n"
-        "/gen key &lt;plan&gt; &lt;days&gt; ➺ Gen premium key\n"
-        "/add @user PLAN DAYS ➺ Grant premium\n"
-        "/resub @user|ID ➺ Remove active premium\n"
-        "/rsub @user|ID ➺ Same as /resub\n"
-        "/rem &lt;user&gt; ➺ Remove premium (legacy)\n"
-        "/ban &lt;user&gt; ➺ Ban user\n"
-        "/unban &lt;user&gt; ➺ Unban user\n"
-        "/broadcast &lt;msg&gt; ➺ Broadcast\n"
-        "/maintenance on|off ➺ Maintenance mode\n"
-        "/onchk /offchk ➺ Toggle Stripe gate\n"
-        "/onpp /offpp ➺ Toggle PayPal gate\n"
-        "/onsh /offsh ➺ Toggle Shopify gate\n"
-        "/onpyu /offpyu ➺ Toggle PayU gate\n"
-        "/onb3 /offb3 ➺ Toggle Braintree gate\n"
-        "/onau /offau ➺ Toggle Stripe Auth\n"
-        "/onmss /offmss ➺ Toggle Stripe Mass\n"
-        "/onmpp2 /offmpp2 ➺ Toggle PayPal Mass\n"
+        "/allcm ➳ Show all commands\n"
+        "/allsub ➳ All live premium users\n"
+        "/info [user] ➳ Full user info\n"
+        "/gen code &lt;val&gt; [count] ➳ Gen credit code(s)\n"
+        "/gen key &lt;plan&gt; &lt;days&gt; [count] ➳ Gen premium key(s)\n"
+        "/add @user PLAN DAYS ➳ Grant premium\n"
+        "/resub @user|ID ➳ Remove active premium\n"
+        "/rsub @user|ID ➳ Same as /resub\n"
+        "/rem &lt;user&gt; ➳ Remove premium (legacy)\n"
+        "/ban &lt;user&gt; ➳ Ban user\n"
+        "/unban &lt;user&gt; ➳ Unban user\n"
+        "/broadcast &lt;msg&gt; ➳ Broadcast\n"
+        "/maintenance on|off ➳ Maintenance mode\n"
+        "/onchk /offchk ➳ Toggle Stripe gate\n"
+        "/onpp /offpp ➳ Toggle PayPal gate\n"
+        "/onsh /offsh ➳ Toggle Shopify gate\n"
+        "/onpyu /offpyu ➳ Toggle PayU gate\n"
+        "/onb3 /offb3 ➳ Toggle Braintree gate\n"
+        "/onau /offau ➳ Toggle Stripe Auth\n"
+        "/onmss /offmss ➳ Toggle Stripe Mass\n"
+        "/onmpp2 /offmpp2 ➳ Toggle PayPal Mass\n"
         "━━━━━━━━━━━━━━━━━\n\n"
-
         f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
-        "/chk ➺ Stripe Charge\n"
-        "/b3 ➺ Braintree Charge\n"
-        "/pp ➺ PayPal Charge\n"
-        "/sh ➺ Shopify Charge\n"
-        "/pyu ➺ PayU Charge\n"
-        "/au ➺ Stripe Auth Mass\n"
-        "/mss ➺ Stripe Mass Check\n"
-        "/mpp2 ➺ PayPal Mass Check\n"
+        "/chk ➳ Stripe Charge\n/b3 ➳ Braintree Charge\n"
+        "/pp ➳ PayPal Charge\n/sh ➳ Shopify Charge\n"
+        "/pyu ➳ PayU Charge\n/au ➳ Stripe Auth Mass\n"
+        "/mss ➳ Stripe Mass Check\n/mpp2 ➳ PayPal Mass Check\n"
         "━━━━━━━━━━━━━━━━━\n\n"
-
         f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
-        "/start ➺ Dashboard\n"
-        "/plan ➺ View premium plans\n"
-        "/sub ➺ My subscription info\n"
-        "/bin ➺ BIN lookup\n"
-        "/refer ➺ Referral link\n"
-        "/rm ➺ Redeem code or key\n"
-        "/ping ➺ Bot speed test\n"
-        "/fb ➺ Send feedback\n"
+        "/start ➳ Dashboard\n/plan ➳ Premium plans\n"
+        "/sub ➳ My subscription\n/bin ➳ BIN lookup\n"
+        "/refer ➳ Referral link\n/rm ➳ Redeem code or key\n"
+        "/ping ➳ Bot speed test\n/fb ➳ Send feedback\n"
         "━━━━━━━━━━━━━━━━━",
         parse_mode="HTML"
     )
-
 
 async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -1316,7 +1508,7 @@ async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     premium.sort(key=lambda x: x[1].get("expires", 0))
-    lines = [f"<b>{E_PRO} Lɪᴠᴇ Pʀᴇᴍɪᴜᴍ Uꜱᴇʀs ➺ {len(premium)}</b>\n━━━━━━━━━━━━━━━━━"]
+    lines = [f"<b>{E_PRO} {B('Live Premium Users')} ➳ {len(premium)}</b>\n──────────"]
     for idx, (uid_s, ud) in enumerate(premium, 1):
         uname_d = f"@{ud.get('username','')}" if ud.get("username") else ud.get("name", "?")
         plan    = ud.get("plan", "TRIAL").upper()
@@ -1325,7 +1517,7 @@ async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rem_h   = int(((expires - now) % 86400) // 3600)
         lines.append(
             f"<b>{idx}.</b> <code>{uid_s}</code> | {uname_d}\n"
-            f"    ➺ {get_styled_plan(plan)} | <b>{rem_d}d {rem_h}h left</b>"
+            f"    ➳ {get_styled_plan(plan)} | <b>{rem_d}d {rem_h}h left</b>"
         )
 
     txt = "\n".join(lines)
@@ -1361,12 +1553,12 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trial_count   = total - premium_count
 
         header = (
-            f"<b>{E_USER} All Users</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Total</b>   ➺ {total}\n"
-            f"<b>Premium</b> ➺ {premium_count}\n"
-            f"<b>Trial</b>   ➺ {trial_count}\n"
-            f"<b>Banned</b>  ➺ {banned_count}\n"
-            "━━━━━━━━━━━━━━━━━\n"
+            f"<b>{E_USER} All Users</b>\n──────────\n"
+            f"<b>Total</b>   ➳ {total}\n"
+            f"<b>Premium</b> ➳ {premium_count}\n"
+            f"<b>Trial</b>   ➳ {trial_count}\n"
+            f"<b>Banned</b>  ➳ {banned_count}\n"
+            "──────────\n"
         )
         lines = []
         for uid_str, ud in list(all_users.items())[:30]:
@@ -1413,7 +1605,8 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not target_id:
         await update.message.reply_text(
-            "Uꜱᴀɢᴇ:\n/info — all users\n/info @username\n/info 123456789\nOr reply → /info"
+            f"<b>Usage:</b>\n/info — all users\n/info @username\n/info 123456789\nOr reply → /info",
+            parse_mode="HTML"
         )
         return
 
@@ -1434,60 +1627,60 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     credits_d = "Unlimited" if premium else str(udata.get("credits", 150))
     banned   = udata.get("banned", False)
 
-    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
-    full_name  = f"{target_name} {target_last_name}".strip()
-    uname_d    = f"@{target_username}" if target_username else "None"
-    total_refs, total_checks = udata.get("total_refs", 0), udata.get("total_checks", 0)
+    plan_emoji  = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    full_name   = f"{target_name} {target_last_name}".strip()
+    uname_d     = f"@{target_username}" if target_username else "None"
+    total_refs  = udata.get("total_refs", 0)
+    total_checks = udata.get("total_checks", 0)
     approved_checks = udata.get("approved_checks", 0)
     declined_checks = udata.get("declined_checks", 0)
     approval_rate   = f"{(approved_checks / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
-
-    ban_icon = f"{E_ERRORS} Banned" if banned else f"{E_LIVE} Active"
+    ban_icon        = f"{E_ERRORS} {B('Banned')}" if banned else f"{E_LIVE} {B('Active')}"
 
     txt = (
-        f"<b>{E_USER} Uꜱᴇʀ Iɴꜰᴏ</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Nᴀᴍᴇ</b>       ➺ {full_name}\n"
-        f"<b>Uꜱᴇʀɴᴀᴍᴇ</b>  ➺ {uname_d}\n"
-        f"<b>ID</b>         ➺ <code>{target_id}</code>\n"
-        f"<b>Sᴛᴀᴛᴜꜱ</b>    ➺ {ban_icon}\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        f"<b>Pʟᴀɴ</b>       ➺ {get_styled_plan(raw_plan)} {plan_emoji}\n"
-        f"<b>Cʀᴇᴅɪᴛꜱ</b>   ➺ {credits_d}\n"
+        f"<b>{E_USER} {B('User Info')}</b>\n──────────\n"
+        f"<b>Name</b>       ➳ {full_name}\n"
+        f"<b>Username</b>   ➳ {uname_d}\n"
+        f"<b>ID</b>         ➳ <code>{target_id}</code>\n"
+        f"<b>Status</b>     ➳ {ban_icon}\n"
+        "──────────\n"
+        f"<b>Plan</b>       ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>    ➳ {credits_d}\n"
     )
     if premium and expires > now:
         rem = expires - now
         txt += (
-            f"<b>Exᴘɪʀᴇꜱ</b>   ➺ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
-            f"<b>Rᴇᴍᴀɪɴɪɴɢ</b> ➺ {int(rem // 86400)}d {int((rem % 86400) // 3600)}h\n"
+            f"<b>Expires</b>    ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+            f"<b>Remaining</b>  ➳ {int(rem // 86400)}d {int((rem % 86400) // 3600)}h\n"
         )
     last_receipt = udata.get("last_receipt")
-    if last_receipt: txt += f"<b>Rᴇᴄᴇɪᴘᴛ</b>   ➺ <code>{last_receipt}</code>\n"
+    if last_receipt: txt += f"<b>Receipt</b>    ➳ <code>{last_receipt}</code>\n"
     txt += (
-        "━━━━━━━━━━━━━━━━━\n"
-        f"<b>Jᴏɪɴᴇᴅ</b>      ➺ {udata.get('joined', 'N/A')}\n"
-        f"<b>Lᴀsᴛ Aᴄᴛɪᴠᴇ</b> ➺ {udata.get('last_active', 'N/A')}\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        f"<b>Tᴏᴛᴀʟ Cʜᴇᴄᴋꜱ</b> ➺ {total_checks}\n"
-        f"<b>Aᴘᴘʀᴏᴠᴇᴅ</b>     ➺ {approved_checks}\n"
-        f"<b>Dᴇᴄʟɪɴᴇᴅ</b>     ➺ {declined_checks}\n"
-        f"<b>Rᴀᴛᴇ</b>         ➺ {approval_rate}\n"
-        f"<b>Lᴀsᴛ Gᴀᴛᴇ</b>   ➺ {udata.get('last_gate', 'N/A')}\n"
-        f"<b>Lᴀsᴛ BIN</b>    ➺ <code>{udata.get('last_card', 'N/A')}</code>\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        f"<b>Rᴇꜰᴇʀʀᴀʟꜱ</b>   ➺ {total_refs}\n"
-        f"<b>Cᴏᴅᴇꜱ</b>        ➺ {udata.get('codes_redeemed', 0)} redeemed\n"
-        f"<b>Kᴇʏꜱ</b>         ➺ {udata.get('keys_redeemed', 0)} redeemed\n"
-        "━━━━━━━━━━━━━━━━━"
+        "──────────\n"
+        f"<b>Joined</b>      ➳ {udata.get('joined', 'N/A')}\n"
+        f"<b>Last Active</b> ➳ {udata.get('last_active', 'N/A')}\n"
+        "──────────\n"
+        f"<b>Total Checks</b> ➳ {total_checks}\n"
+        f"<b>Approved</b>     ➳ {approved_checks}\n"
+        f"<b>Declined</b>     ➳ {declined_checks}\n"
+        f"<b>Rate</b>         ➳ {approval_rate}\n"
+        f"<b>Last Gate</b>    ➳ {udata.get('last_gate', 'N/A')}\n"
+        f"<b>Last BIN</b>     ➳ <code>{udata.get('last_card', 'N/A')}</code>\n"
+        "──────────\n"
+        f"<b>Referrals</b>    ➳ {total_refs}\n"
+        f"<b>Codes</b>        ➳ {udata.get('codes_redeemed', 0)} redeemed\n"
+        f"<b>Keys</b>         ➳ {udata.get('keys_redeemed', 0)} redeemed\n"
+        "──────────"
     )
-    action_kb = InlineKeyboardMarkup([
+    action_kb = RawMarkup([
         [
-            InlineKeyboardButton(
-                f"{E_ERRORS} Ban" if not banned else f"{E_LIVE} Unban",
-                callback_data=f"owner_ban_{target_id}" if not banned else f"owner_unban_{target_id}"
-            ),
-            InlineKeyboardButton(f"{E_DECLINED} Remove Premium", callback_data=f"owner_resub_{target_id}"),
+            _btn(f"{E_ERRORS} Ban"    if not banned else f"{E_LIVE} Unban",
+                 cb=f"owner_ban_{target_id}" if not banned else f"owner_unban_{target_id}",
+                 style="danger" if not banned else "primary"),
+            _btn(f"{E_DECLINED} Remove Premium",
+                 cb=f"owner_resub_{target_id}", style="danger"),
         ],
-        [InlineKeyboardButton("🔙 Back", callback_data="owner_info_back")],
+        [_btn("🔙 Back", cb="owner_info_back")],
     ])
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=action_kb)
 
@@ -1496,20 +1689,21 @@ async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         state = context.bot_data.get("maintenance", False)
         await update.message.reply_text(
-            f"Maintenance is currently: {'ON' if state else 'OFF'}\n"
-            "Use: /maintenance on|off"
+            f"Maintenance is currently: <b>{'ON' if state else 'OFF'}</b>\n"
+            "Use: /maintenance on|off",
+            parse_mode="HTML"
         )
         return
     arg = context.args[0].lower()
     if arg in ("on", "1", "true"):
         context.bot_data["maintenance"] = True
         await update.message.reply_text(
-            f"<b>{E_ERRORS} Maintenance mode ON.</b> Users cannot use commands.", parse_mode="HTML"
+            f"<b>{E_ERRORS} {B('Maintenance Mode ON.')}</b> Users cannot use commands.", parse_mode="HTML"
         )
     elif arg in ("off", "0", "false"):
         context.bot_data["maintenance"] = False
         await update.message.reply_text(
-            f"<b>{E_LIVE} Maintenance mode OFF.</b> Bot is live.", parse_mode="HTML"
+            f"<b>{E_LIVE} {B('Maintenance Mode OFF.')}</b> Bot is live.", parse_mode="HTML"
         )
     else:
         await update.message.reply_text("Use: /maintenance on|off")
@@ -1536,28 +1730,27 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rem_h   = int((rem % 86400) // 3600)
         exp_str = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
         expire_line = (
-            f"<b>Exᴘɪʀᴇꜱ</b>    ➺ {exp_str}\n"
-            f"<b>Rᴇᴍᴀɪɴɪɴɢ</b>  ➺ <b>{rem_d} days {rem_h} hours</b>"
+            f"<b>Expires</b>    ➳ {exp_str}\n"
+            f"<b>Remaining</b>  ➳ <b>{rem_d} days {rem_h} hours</b>"
         )
     else:
-        expire_line = "<b>Exᴘɪʀᴇꜱ</b>    ➺ Trial (no expiry)"
+        expire_line = "<b>Expires</b>    ➳ Trial (no expiry)"
 
-    joined = ud.get("joined", "N/A")
     txt = (
-        f"<b>{E_USER} Mʏ Sᴜʙsᴄʀɪᴘᴛɪᴏɴ</b>\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"<b>Nᴀᴍᴇ</b>      ➺ {escape(uname)}\n"
-        f"<b>ID</b>        ➺ <code>{user.id}</code>\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"<b>Pʟᴀɴ</b>      ➺ {get_styled_plan(raw_plan)} {plan_emoji}\n"
-        f"<b>Cʀᴇᴅɪᴛꜱ</b>  ➺ {credits_d}\n"
+        f"<b>{E_USER} {B('My Subscription')}</b>\n"
+        f"──────────\n"
+        f"<b>Name</b>      ➳ {escape(uname)}\n"
+        f"<b>ID</b>        ➳ <code>{user.id}</code>\n"
+        f"──────────\n"
+        f"<b>Plan</b>      ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>   ➳ {credits_d}\n"
         f"{expire_line}\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"<b>Jᴏɪɴᴇᴅ</b>    ➺ {joined}\n"
-        f"━━━━━━━━━━━━━━━━━"
+        f"──────────\n"
+        f"<b>Joined</b>    ➳ {ud.get('joined', 'N/A')}\n"
+        f"──────────"
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 Upgrade Plan", callback_data="mprice")],
+    kb = RawMarkup([
+        [_btn("💎 " + B("Upgrade Plan"), cb="mprice", style="primary")],
     ]) if not premium else None
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
 
@@ -1580,8 +1773,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ud.get("banned", False) and user.id != OWNER_ID:
         await update.message.reply_text(
-            f"<b>{E_ERRORS} Bᴀɴɴᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-            "You have been banned from using this bot.\n━━━━━━━━━━━━━━━━━",
+            f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
+            "You have been banned from using this bot.\n──────────",
             parse_mode="HTML"
         )
         return
@@ -1597,11 +1790,16 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
     if not await require_membership(update, context): return
     t   = time.time()
-    msg = await update.message.reply_text(f"{E_PROGRESS} <b>Pɪɴɢɪɴɢ...</b>", parse_mode="HTML")
+    msg = await update.message.reply_text(
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Pinging...</b>',
+        parse_mode="HTML"
+    )
     ms  = int((time.time() - t) * 1000)
     await msg.edit_text(
-        f"<b>{E_LIVE} Pᴏɴɢ</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"{E_TIME} <b>{ms}ms</b>\n━━━━━━━━━━━━━━━━━",
+        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> {B("Pong")}</b>\n'
+        f'──────────\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {ms}ms</b>\n'
+        f'──────────',
         parse_mode="HTML"
     )
 
@@ -1614,21 +1812,21 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     root_e  = tg_emoji(PLAN_EMOJIS["ROOT"],  "⭐")
 
     txt = (
-        f"<b>{core_e} Cᴏʀᴇ Plan</b>\n━━━━━━━━━━━━━━━━━\n"
-        "<b>Dᴀʏꜱ</b>     ➺ 7\n"
-        "<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n"
-        "<b>Pʀɪᴄᴇ</b>   ➺ 10$\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        f"<b>{elite_e} Eʟɪᴛᴇ Plan</b>\n━━━━━━━━━━━━━━━━━\n"
-        "<b>Dᴀʏꜱ</b>     ➺ 15\n"
-        "<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n"
-        "<b>Pʀɪᴄᴇ</b>   ➺ 15$\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        f"<b>{root_e} Rᴏᴏᴛ Plan</b>\n━━━━━━━━━━━━━━━━━\n"
-        "<b>Dᴀʏꜱ</b>     ➺ 30\n"
-        "<b>Cʀᴇᴅɪᴛꜱ</b> ➺ Unlimited\n"
-        "<b>Pʀɪᴄᴇ</b>   ➺ 30$\n"
-        "━━━━━━━━━━━━━━━━━"
+        f"<b>{core_e} {B('Core')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 7\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 10$\n"
+        "──────────\n"
+        f"<b>{elite_e} {B('Elite')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 15\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 15$\n"
+        "──────────\n"
+        f"<b>{root_e} {B('Root')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 30\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 30$\n"
+        "──────────"
     )
     await update.message.reply_text(txt, reply_markup=kb_price(), parse_mode="HTML")
 
@@ -1640,11 +1838,11 @@ async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link       = get_referral_link(user.id)
     total_refs = ud.get("total_refs", 0)
     txt = (
-        f"<b>{E_USER} Rᴇꜰᴇʀʀᴀʟ</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Lɪɴᴋ</b>    ➺ <code>{link}</code>\n━━━━━━━━━━━━━━━━━\n"
-        f"<b>Rᴇꜰᴇʀʀᴀʟꜱ</b> ➺ {total_refs}\n"
-        f"<b>Eᴀʀɴᴇᴅ</b>   ➺ {total_refs * REFERRAL_CREDITS} credits\n"
-        f"<b>Pᴇʀ Rᴇꜰ</b>  ➺ +{REFERRAL_CREDITS} credits\n━━━━━━━━━━━━━━━━━\n"
+        f"<b>{E_USER} {B('Referral')}</b>\n──────────\n"
+        f"<b>Link</b>      ➳ <code>{link}</code>\n──────────\n"
+        f"<b>Referrals</b> ➳ {total_refs}\n"
+        f"<b>Earned</b>    ➳ {total_refs * REFERRAL_CREDITS} credits\n"
+        f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
         "Share your link to earn free credits!"
     )
     await update.message.reply_text(
@@ -1657,42 +1855,75 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
     if not await require_membership(update, context): return
     if not context.args:
-        await update.message.reply_text("Uꜱᴀɢᴇ: /rm <code>CODE</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            f"<b>{E_CARD} {B('Redeem Code / Key')}</b>\n──────────\n"
+            f"<b>Usage:</b> <code>/rm CODE</code>\n\n"
+            f"Redeem a <b>credit code</b> to top up your balance,\n"
+            f"or a <b>premium key</b> to activate a plan.\n"
+            f"──────────",
+            parse_mode="HTML"
+        )
         return
-    code  = context.args[0].upper()
+    code  = context.args[0].upper().strip()
     uid   = update.effective_user.id
     ud    = get_user_data(uid, context)
     codes = context.bot_data.get("codes", {})
     keys  = context.bot_data.get("keys",  {})
-    if code in codes and not codes[code]["used"]:
+
+    if code in codes:
+        if codes[code]["used"]:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Code Already Used</b>\n──────────\n"
+                f"This code has already been redeemed.\n──────────",
+                parse_mode="HTML"
+            )
+            return
+        value              = codes[code]["value"]
         codes[code]["used"] = True
-        ud["credits"]        = ud.get("credits", 0) + codes[code]["value"]
+        ud["credits"]       = ud.get("credits", 0) + value
         ud["codes_redeemed"] = ud.get("codes_redeemed", 0) + 1
         await update.message.reply_text(
-            f"<b>{E_LIVE} Code Redeemed</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Credits Added</b> ➺ +{codes[code]['value']}\n"
-            f"<b>Balance</b>       ➺ {ud['credits']}\n"
-            "━━━━━━━━━━━━━━━━━",
+            f"<b>{E_LIVE} {B('Code Redeemed')}</b>\n──────────\n"
+            f"<b>Code</b>           ➳ <code>{code}</code>\n"
+            f"<b>Credits Added</b>  ➳ +{value}\n"
+            f"<b>New Balance</b>    ➳ {ud['credits']}\n"
+            "──────────",
             parse_mode="HTML"
         )
-    elif code in keys and not keys[code]["used"]:
+        return
+
+    if code in keys:
+        if keys[code]["used"]:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Key Already Used</b>\n──────────\n"
+                f"This key has already been redeemed.\n──────────",
+                parse_mode="HTML"
+            )
+            return
         keys[code]["used"] = True
         p, d = keys[code]["plan"], keys[code]["days"]
         ud["keys_redeemed"] = ud.get("keys_redeemed", 0) + 1
-        receipt = await send_activation_msg(uid, p, d, context)
+        receipt    = await send_activation_msg(uid, p, d, context)
         plan_emoji = tg_emoji(get_plan_emoji_id(p), "⭐")
         await update.message.reply_text(
-            f"<b>{E_LIVE} Key Redeemed</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Access</b>  ➺ {get_styled_plan(p)} {plan_emoji}\n"
-            f"<b>Days</b>    ➺ {d}\n"
-            f"<b>Receipt</b> ➺ <code>{receipt}</code>\n"
-            "━━━━━━━━━━━━━━━━━",
+            f"<b>{E_LIVE} {B('Key Redeemed')}</b>\n──────────\n"
+            f"<b>Key</b>     ➳ <code>{code}</code>\n"
+            f"<b>Access</b>  ➳ {get_styled_plan(p)} {plan_emoji}\n"
+            f"<b>Days</b>    ➳ {d}\n"
+            f"<b>Receipt</b> ➳ <code>{receipt}</code>\n"
+            "──────────\n"
+            "Your plan is now active! Use /sub to check.",
             parse_mode="HTML"
         )
-    else:
-        await update.message.reply_text(
-            f"<b>{E_ERRORS} Invalid or already used code.</b>", parse_mode="HTML"
-        )
+        return
+
+    await update.message.reply_text(
+        f"<b>{E_ERRORS} {B('Invalid Code')}</b>\n──────────\n"
+        "This code or key is invalid.\n"
+        "Make sure you typed it correctly (case-insensitive).\n"
+        "──────────",
+        parse_mode="HTML"
+    )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1734,18 +1965,18 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "note": user_note, "date": submitted,
         }
         await msg.reply_text(
-            f"<b>{E_LIVE} Fᴇᴇᴅʙᴀᴄᴋ Sᴜʙᴍɪᴛᴛᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-            "Your feedback is under review.\n━━━━━━━━━━━━━━━━━",
+            f"<b>{E_LIVE} {B('Feedback Submitted')}</b>\n──────────\n"
+            "Your feedback is under review.\n──────────",
             parse_mode="HTML"
         )
 
         owner_caption = (
-            f"<b>{E_DEV} Nᴇᴡ Fᴇᴇᴅʙᴀᴄᴋ</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Uꜱᴇʀ</b> ➺ {uname}\n<b>ID</b>   ➺ {user.id}\n"
-            f"<b>Dᴀᴛᴇ</b> ➺ {submitted}\n<b>Tʏᴘᴇ</b> ➺ {file_type.capitalize()}\n"
+            f"<b>{E_DEV} {B('New Feedback')}</b>\n──────────\n"
+            f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {user.id}\n"
+            f"<b>Date</b> ➳ {submitted}\n<b>Type</b> ➳ {file_type.capitalize()}\n"
         )
-        if user_note: owner_caption += f"<b>Nᴏᴛᴇ</b> ➺ {user_note[:200]}\n"
-        owner_caption += "━━━━━━━━━━━━━━━━━\nApprove to post to channel?"
+        if user_note: owner_caption += f"<b>Note</b> ➳ {user_note[:200]}\n"
+        owner_caption += "──────────\nApprove to post to channel?"
 
         try:
             if file_type == "photo":
@@ -1761,10 +1992,10 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await msg.reply_text(
-        f"<b>📸 Fᴇᴇᴅʙᴀᴄᴋ</b>\n━━━━━━━━━━━━━━━━━\n"
+        f"<b>📸 {B('Feedback')}</b>\n──────────\n"
         "Reply to a photo/video with <code>/fb</code>\n"
         "OR send photo/video with <code>/fb</code> as caption.\n"
-        "━━━━━━━━━━━━━━━━━",
+        "──────────",
         parse_mode="HTML"
     )
 
@@ -1773,11 +2004,11 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     if not fb: await query.answer("Already handled.", show_alert=True); return
     uname, uid, submitted = fb["username"], fb["user_id"], fb["date"]
     file_id, file_type, user_note = fb["file_id"], fb["file_type"], fb.get("note", "")
-    channel_caption = "━━━━━━━━━━━━━━━━━\n"
-    if user_note: channel_caption += f"{user_note}\n━━━━━━━━━━━━━━━━━\n"
+    channel_caption = "──────────\n"
+    if user_note: channel_caption += f"{user_note}\n──────────\n"
     channel_caption += (
-        f"<b>Uꜱᴇʀ</b> ➺ {uname}\n<b>ID</b>   ➺ {uid}\n"
-        f"<b>Dᴀᴛᴇ</b> ➺ {submitted}\n━━━━━━━━━━━━━━━━━"
+        f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {uid}\n"
+        f"<b>Date</b> ➳ {submitted}\n──────────"
     )
     posted = False
     try:
@@ -1793,7 +2024,7 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     context.bot_data["fb_pending"].pop(key, None)
     try:
         await query.message.edit_caption(
-            caption=f"<b>{E_LIVE} Fᴇᴇᴅʙᴀᴄᴋ {'Posted ✅' if posted else 'Post Failed ⚠️'}</b>\n━━━━━━━━━━━━━━━━━",
+            caption=f"<b>{E_LIVE} {B('Feedback')} {'Posted ✅' if posted else 'Post Failed ⚠️'}</b>\n──────────",
             reply_markup=None, parse_mode="HTML"
         )
     except Exception: pass
@@ -1801,8 +2032,8 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
         await context.bot.send_message(
             chat_id=uid,
             text=(
-                f"<b>{E_LIVE} Fᴇᴇᴅʙᴀᴄᴋ Aᴄᴄᴇᴘᴛᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
-                f"Posted to channel!\n📢 {CHANNEL_LINK}\n━━━━━━━━━━━━━━━━━"
+                f"<b>{E_LIVE} {B('Feedback Accepted')}</b>\n──────────\n"
+                f"Posted to channel!\n📢 {CHANNEL_LINK}\n──────────"
             ),
             parse_mode="HTML"
         )
@@ -1815,14 +2046,14 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     context.bot_data["fb_pending"].pop(key, None)
     try:
         await query.message.edit_caption(
-            caption=f"<b>{E_DECLINED} Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ</b>\n━━━━━━━━━━━━━━━━━",
+            caption=f"<b>{E_DECLINED} {B('Feedback Declined')}</b>\n──────────",
             reply_markup=None, parse_mode="HTML"
         )
     except Exception: pass
     try:
         await context.bot.send_message(
             chat_id=uid,
-            text=f"<b>{E_DECLINED} Fᴇᴇᴅʙᴀᴄᴋ Dᴇᴄʟɪɴᴇᴅ</b>\n━━━━━━━━━━━━━━━━━",
+            text=f"<b>{E_DECLINED} {B('Feedback Declined')}</b>\n──────────",
             parse_mode="HTML"
         )
     except Exception: pass
@@ -1837,7 +2068,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    # ── Force-sub verify ──
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
@@ -1854,7 +2084,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Navigation ──
     if data == "bmain":
         await query.message.edit_text(
             ui_profile(user, context), parse_mode="HTML",
@@ -1869,21 +2098,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "mgates":
         await query.message.edit_text(
-            f"<b>{E_GATE} Gᴀᴛᴇꜱ</b>\n━━━━━━━━━━━━━━━━━\nChoose a gate category:",
+            f"<b>{E_GATE} {B('Gates')}</b>\n──────────\nChoose a gate category:",
             parse_mode="HTML", reply_markup=kb_gate_main()
         )
         return
     if data == "mauth":
         await query.message.edit_text(
-            f"<b>{E_LIVE} Aᴜᴛʜ Gᴀᴛᴇꜱ</b>\n━━━━━━━━━━━━━━━━━\n"
-            "Auth gates verify without charging.\n━━━━━━━━━━━━━━━━━",
+            f"<b>🔐 {B('Auth Gates')}</b>\n──────────\n"
+            "Auth gates verify without charging.\n──────────",
             parse_mode="HTML", reply_markup=kb_auth_gates()
         )
         return
     if data == "mcharge":
         await query.message.edit_text(
-            f"<b>{E_CARD} Cʜᴀʀɢᴇ Gᴀᴛᴇꜱ</b>\n━━━━━━━━━━━━━━━━━\n"
-            "Charge gates perform a real $0 charge.\n━━━━━━━━━━━━━━━━━",
+            f"<b>💳 {B('Charge Gates')}</b>\n──────────\n"
+            "Charge gates perform a real $0 charge.\n──────────",
             parse_mode="HTML", reply_markup=kb_charge_gates()
         )
         return
@@ -1891,14 +2120,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud = get_user_data(user.id, context)
         if not is_user_premium(ud):
             await query.message.edit_text(
-                f"<b>{E_PRO} Pʀᴇᴍɪᴜᴍ Oɴʟʏ</b>\n━━━━━━━━━━━━━━━━━\n"
-                "Mass checkers require a premium plan.\n━━━━━━━━━━━━━━━━━",
+                f"<b>{E_PRO} {B('Premium Only')}</b>\n──────────\n"
+                "Mass checkers require a premium plan.\n──────────",
                 parse_mode="HTML", reply_markup=kb_upgrade()
             )
             return
         await query.message.edit_text(
-            f"<b>👑 Mᴀꜱꜱ Gᴀᴛᴇꜱ</b>\n━━━━━━━━━━━━━━━━━\n"
-            "Premium mass checkers:\n━━━━━━━━━━━━━━━━━",
+            f"<b>👑 {B('Mass Gates')}</b>\n──────────\n"
+            "Premium mass checkers:\n──────────",
             parse_mode="HTML", reply_markup=kb_premium_gates()
         )
         return
@@ -1907,24 +2136,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elite_e = tg_emoji(PLAN_EMOJIS["ELITE"], "⭐")
         root_e  = tg_emoji(PLAN_EMOJIS["ROOT"],  "⭐")
         txt = (
-            f"<b>{core_e} Cᴏʀᴇ</b> ➺ 7 days | 10$\n"
-            f"<b>{elite_e} Eʟɪᴛᴇ</b> ➺ 15 days | 15$\n"
-            f"<b>{root_e} Rᴏᴏᴛ</b> ➺ 30 days | 30$\n"
-            "━━━━━━━━━━━━━━━━━\nAll plans: Unlimited credits"
+            f"<b>{core_e} {B('Core')}</b>  ➳ 7 days | 10$\n"
+            f"<b>{elite_e} {B('Elite')}</b> ➳ 15 days | 15$\n"
+            f"<b>{root_e} {B('Root')}</b>   ➳ 30 days | 30$\n"
+            "──────────\nAll plans: Unlimited credits"
         )
         await query.message.edit_text(txt, parse_mode="HTML", reply_markup=kb_price())
         return
 
-    # ── Gate info callbacks ──
     gate_info_map = {
-        "ib3":   ("Bʀᴀɪɴᴛʀᴇᴇ Auth 0$", "b3",  1),
-        "ichk":  ("Sᴛʀɪᴘᴇ Charge 0$",   "chk", 1),
-        "ipp":   ("Pᴀʏᴘᴀʟ Charge 0$",   "pp",  1),
-        "ish":   ("Sʜᴏᴘɪꜰʏ Charge 0$",  "sh",  1),
-        "ipyu":  ("Pᴀʏᴜ Charge 0$",      "pyu", 1),
-        "iau":   ("Sᴛʀɪᴘᴇ Auth 0$",      "au",  0),
-        "imss":  ("Sᴛʀɪᴘᴇ Mass",         "mss", 0),
-        "impp2": ("Pᴀʏᴘᴀʟ Mass",         "mpp2",0),
+        "ib3":   ("Braintree Auth | 0$", "b3",  1),
+        "ichk":  ("Stripe Charge | 0$",  "chk", 1),
+        "ipp":   ("PayPal Charge | 0$",  "pp",  1),
+        "ish":   ("Shopify Charge | 0$", "sh",  1),
+        "ipyu":  ("PayU Charge | 0$",    "pyu", 1),
+        "iau":   ("Stripe Auth | 0$",    "au",  0),
+        "imss":  ("Stripe Mass",         "mss", 0),
+        "impp2": ("PayPal Mass",         "mpp2",0),
     }
     if data in gate_info_map:
         gn, cmd, cost = gate_info_map[data]
@@ -1935,27 +2163,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Payment info ──
     pay_map = {
-        "pay10": ("Cᴏʀᴇ",  10, 7,  "CORE"),
-        "pay15": ("Eʟɪᴛᴇ", 15, 15, "ELITE"),
-        "pay30": ("Rᴏᴏᴛ",  30, 30, "ROOT"),
+        "pay10": ("Core",  10, 7,  "CORE"),
+        "pay15": ("Elite", 15, 15, "ELITE"),
+        "pay30": ("Root",  30, 30, "ROOT"),
     }
     if data in pay_map:
         plan_n, price, days, plan_key = pay_map[data]
         plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
         await query.message.edit_text(
-            f"<b>{plan_emoji} {plan_n} Plan</b>\n━━━━━━━━━━━━━━━━━\n"
-            f"<b>Price</b>  ➺ ${price}\n"
-            f"<b>Days</b>   ➺ {days}\n"
-            f"<b>Credits</b> ➺ Unlimited\n"
-            "━━━━━━━━━━━━━━━━━\n"
+            f"<b>{plan_emoji} {B(plan_n)} Plan</b>\n──────────\n"
+            f"<b>Price</b>   ➳ ${price}\n"
+            f"<b>Days</b>    ➳ {days}\n"
+            f"<b>Credits</b> ➳ Unlimited\n"
+            "──────────\n"
             "Contact support to purchase:",
             parse_mode="HTML", reply_markup=kb_payment()
         )
         return
 
-    # ── CMD pagination ──
     if data.startswith("cmd_pg_"):
         if data == "cmd_pg_noop":
             return
@@ -1970,7 +2196,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Owner inline actions ──
     if user.id == OWNER_ID:
         if data.startswith("owner_ban_"):
             uid = int(data.split("_")[-1])
@@ -2003,8 +2228,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     if isinstance(err, Conflict):
-        logger.critical("CONFLICT: Another bot instance is running! Shutting down.")
-        os.kill(os.getpid(), signal.SIGTERM)
+        # Another session is still alive on Telegram's server.
+        # Wait 30 s and let PTB retry — do NOT kill the process.
+        logger.warning("CONFLICT detected — another session active. Waiting 30 s before retry...")
+        await asyncio.sleep(30)
         return
     if isinstance(err, (NetworkError, Forbidden)):
         logger.warning(f"Network/Forbidden error: {err}")
@@ -2014,15 +2241,53 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _post_init(app: Application) -> None:
+    """Clear any existing webhook / long-poll session before polling starts.
+    After clearing, sleep 5 s so Telegram can expire the old getUpdates session."""
+    for attempt in range(1, 6):
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook cleared — waiting 5 s for old session to expire...")
+            await asyncio.sleep(5)
+            return
+        except Exception as exc:
+            logger.warning(f"delete_webhook attempt {attempt}/5 failed: {exc}")
+            if attempt < 5:
+                await asyncio.sleep(attempt * 2)
+    logger.warning("Could not clear webhook after 5 attempts — continuing anyway.")
+
+
 def main():
     if not acquire_instance_lock():
         logger.critical("Another instance is already running. Exiting.")
         return
 
     try:
-        app = Application.builder().token(BOT_TOKEN).build()
+        # Regular API calls (send_message, etc.)
+        _request = HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=30.0,
+        )
+        # Long-poll getUpdates needs a much longer read_timeout
+        _get_updates_request = HTTPXRequest(
+            connection_pool_size=4,
+            connect_timeout=30.0,
+            read_timeout=65.0,   # PTB polls for 30 s + 35 s buffer
+            write_timeout=30.0,
+            pool_timeout=30.0,
+        )
+        app = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .request(_request)
+            .get_updates_request(_get_updates_request)
+            .post_init(_post_init)
+            .build()
+        )
 
-        # ── User commands ──
         app.add_handler(CommandHandler("start",   cmd_start))
         app.add_handler(CommandHandler("ping",    cmd_ping))
         app.add_handler(CommandHandler("plan",    cmd_plan))
@@ -2039,7 +2304,6 @@ def main():
         for h in get_mass_handlers():
             app.add_handler(h)
 
-        # ── Owner commands ──
         app.add_handler(CommandHandler("gen",         cmd_gen))
         app.add_handler(CommandHandler("add",         cmd_add))
         app.add_handler(CommandHandler("rem",         cmd_rem))
@@ -2069,7 +2333,6 @@ def main():
         app.add_handler(CommandHandler("onmpp2",  cmd_onmpp2))
         app.add_handler(CommandHandler("offmpp2", cmd_offmpp2))
 
-        # ── Callbacks ──
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
 
