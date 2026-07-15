@@ -79,8 +79,27 @@ for _uname, _link in _config_fc:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _lock_file_handle = None
 
+def _stale_lock() -> bool:
+    """Return True if the lock file exists but the recorded PID is dead."""
+    try:
+        with open(LOCK_FILE, "r") as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)          # signal 0 = just check existence
+        return False             # process is alive → not stale
+    except (FileNotFoundError, ValueError):
+        return True              # no file or bad content → treat as stale
+    except ProcessLookupError:
+        return True              # PID doesn't exist → stale
+    except PermissionError:
+        return False             # PID exists, different owner → treat as live
+
 def acquire_instance_lock() -> bool:
     global _lock_file_handle
+    if _stale_lock():
+        try:
+            os.unlink(LOCK_FILE)
+        except FileNotFoundError:
+            pass
     try:
         _lock_file_handle = open(LOCK_FILE, "w")
         fcntl.flock(_lock_file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2219,13 +2238,28 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _post_init(app: Application) -> None:
+    """Called after the bot is built but before polling starts.
+    Deletes any active webhook / long-poll session so we never get a Conflict."""
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook cleared — starting fresh poll session.")
+    except Exception as exc:
+        logger.warning(f"delete_webhook on startup failed (non-fatal): {exc}")
+
+
 def main():
     if not acquire_instance_lock():
         logger.critical("Another instance is already running. Exiting.")
         return
 
     try:
-        app = Application.builder().token(BOT_TOKEN).build()
+        app = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .post_init(_post_init)
+            .build()
+        )
 
         app.add_handler(CommandHandler("start",   cmd_start))
         app.add_handler(CommandHandler("ping",    cmd_ping))
