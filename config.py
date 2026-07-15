@@ -11,7 +11,7 @@ import aiohttp
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8848759446:AAERdNnYp0cTZ6stj5yMSfVHqnDyGO61w_k")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8799211002:AAH95tK5_6ovIiz7gRxA0X__xUUF6R3C0ts")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
