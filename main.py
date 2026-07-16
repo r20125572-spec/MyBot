@@ -366,9 +366,10 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SEND PHOTO HELPER
+# FORCE-SUB CACHE & HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+_force_sub_cache: dict = {}
 
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
     if user_id == OWNER_ID:
