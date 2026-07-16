@@ -25,7 +25,7 @@ from mst import get_bin_handler as get_bin_lookup_handler
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
     CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
-    BOT_LINK, BOT_USERNAME, BOT_PHOTO_URL, BOT_PHOTO,
+    BOT_LINK, BOT_USERNAME,
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
@@ -53,7 +53,6 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
-BOT_LOCAL_PHOTO = BOT_PHOTO   # "batman.jpg" — place this file beside main.py
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FORCE-JOIN LIST
@@ -369,38 +368,7 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SEND PHOTO HELPER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _ensure_photo() -> None:
-    """No-op: batman.jpg is deployed alongside the bot in the repository.
-    Railway includes all repo files in the Docker image automatically."""
-    if not os.path.exists(BOT_LOCAL_PHOTO):
-        logger.warning(f"Photo file not found: {BOT_LOCAL_PHOTO} — will fall back to URL")
 
-
-async def send_with_photo(msg, caption: str, reply_markup=None, parse_mode="HTML"):
-    _ensure_photo()
-    try:
-        if os.path.exists(BOT_LOCAL_PHOTO):
-            with open(BOT_LOCAL_PHOTO, "rb") as f:
-                return await msg.reply_photo(
-                    photo=f, caption=caption,
-                    parse_mode=parse_mode, reply_markup=reply_markup,
-                )
-        if BOT_PHOTO_URL:
-            return await msg.reply_photo(
-                photo=BOT_PHOTO_URL, caption=caption,
-                parse_mode=parse_mode, reply_markup=reply_markup,
-            )
-    except Exception:
-        pass
-    return await msg.reply_text(
-        caption, parse_mode=parse_mode,
-        reply_markup=reply_markup, disable_web_page_preview=True,
-    )
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FORCE SUBSCRIBE
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_force_sub_cache: dict[int, tuple[bool, float]] = {}
 
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
     if user_id == OWNER_ID:
@@ -458,26 +426,11 @@ def kb_force_sub(not_joined: list) -> RawMarkup:
     rows.append([_btn("✅  I Joined All — Verify Now", cb="check_sub", style="primary")])
     return RawMarkup(rows)
 
-async def send_force_join_photo(msg, not_joined: list):
-    _ensure_photo()
-    caption  = _force_join_text(not_joined)
-    keyboard = kb_force_sub(not_joined)
-    try:
-        if os.path.exists(BOT_LOCAL_PHOTO):
-            with open(BOT_LOCAL_PHOTO, "rb") as f:
-                await msg.reply_photo(photo=f, caption=caption, parse_mode="HTML", reply_markup=keyboard)
-            return
-        if BOT_PHOTO_URL:
-            await msg.reply_photo(photo=BOT_PHOTO_URL, caption=caption, parse_mode="HTML", reply_markup=keyboard)
-            return
-    except Exception:
-        pass
-    await msg.reply_text(caption, reply_markup=keyboard, parse_mode="HTML", disable_web_page_preview=True)
 
 async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     not_joined = await check_force_sub(update.effective_user.id, context)
     if not_joined:
-        await send_force_join_photo(update.message, not_joined)
+        await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
         return False
     return True
 
@@ -1997,10 +1950,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     not_joined = await check_force_sub(user.id, context)
     if not_joined:
-        await send_force_join_photo(update.message, not_joined)
+        await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
         return
 
-    await send_with_photo(update.message, ui_profile(user, context), reply_markup=kb_main(user.id))
+    await update.message.reply_text(ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(user.id, disable_web_page_preview=True))
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
