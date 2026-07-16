@@ -53,7 +53,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
-BOT_LOCAL_PHOTO = "photo.jpg"
+BOT_LOCAL_PHOTO = BOT_PHOTO   # "batman.jpg" — place this file beside main.py
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FORCE-JOIN LIST
@@ -1273,6 +1273,121 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OWNER: /find <username|@username|ID>
+#   Searches all bot users for a match and shows full
+#   profile — plan, credits, bans, checks, join date.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            f"<b>{E_DEV} {B('Find User')}</b>\n──────────\n"
+            f"<b>Usage:</b>\n"
+            f"<code>/find @username</code>\n"
+            f"<code>/find username</code>\n"
+            f"<code>/find UserID</code>\n"
+            f"──────────\n"
+            f"Searches all registered bot users.",
+            parse_mode="HTML"
+        )
+        return
+
+    raw = context.args[0]
+    now = time.time()
+
+    # ── 1. Try numeric ID or @username via Telegram API ─────────────────
+    uid = await resolve_user(raw, context)
+
+    # ── 2. If not found, do a local username substring search ───────────
+    if not uid:
+        needle = raw.lstrip("@").lower()
+        all_users = context.bot_data.get("user_data", {})
+        matches = []
+        for uid_str, ud in all_users.items():
+            stored = ud.get("username", "").lower().lstrip("@")
+            name   = ud.get("name", "").lower()
+            if stored and needle in stored:
+                matches.append((int(uid_str), ud))
+            elif needle in name:
+                matches.append((int(uid_str), ud))
+
+        if not matches:
+            await update.message.reply_text(
+                f"{E_ERRORS} <b>No user found for:</b> <code>{raw}</code>\n"
+                f"Make sure the user has started the bot first.",
+                parse_mode="HTML"
+            )
+            return
+
+        if len(matches) > 1:
+            lines = [f"<b>{E_USER} {B('Multiple Matches')}</b>\n──────────"]
+            for mid, mud in matches[:10]:
+                ustr = f"@{mud.get('username','')}" if mud.get("username") else str(mid)
+                plan = mud.get("plan", "TRIAL").upper()
+                lines.append(f"• {mud.get('name','?')} — {ustr} — {get_styled_plan(plan)}")
+            lines.append("──────────\nRefine your search to narrow down.")
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        uid = matches[0][0]
+
+    # ── 3. Pull profile ──────────────────────────────────────────────────
+    ud_t = get_user_data(uid, context)
+    try:
+        chat = await context.bot.get_chat(uid)
+        ud_t["name"]     = chat.first_name or ud_t.get("name", "Unknown")
+        ud_t["username"] = chat.username   or ud_t.get("username", "")
+    except Exception:
+        pass
+
+    raw_plan = ud_t.get("plan", "TRIAL").upper()
+    expires  = ud_t.get("expires", 0)
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; expires = 0
+    premium    = raw_plan != "TRIAL" and expires > now
+    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    uname_d    = f"@{ud_t.get('username','')}" if ud_t.get("username") else f"ID <code>{uid}</code>"
+    ban_str    = f"{E_ERRORS} {B('Banned')}" if ud_t.get("banned") else f"{E_LIVE} {B('Active')}"
+
+    if premium:
+        rem = expires - now
+        expire_line = (
+            f"<b>Expires</b>    ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+            f"<b>Remaining</b>  ➳ <b>{int(rem//86400)}d {int((rem%86400)//3600)}h</b>"
+        )
+    else:
+        expire_line = f"<b>Expires</b>    ➳ Trial (no expiry)"
+
+    txt = (
+        f"<b>{E_USER} {B('User Found')}</b>\n──────────\n"
+        f"<b>Name</b>      ➳ {ud_t.get('name','Unknown')}\n"
+        f"<b>Username</b>  ➳ {uname_d}\n"
+        f"<b>ID</b>        ➳ <code>{uid}</code>\n"
+        f"<b>Status</b>    ➳ {ban_str}\n"
+        f"──────────\n"
+        f"<b>Plan</b>      ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>   ➳ {ud_t.get('credits', 150)}\n"
+        f"{expire_line}\n"
+        f"──────────\n"
+        f"<b>Joined</b>    ➳ {ud_t.get('joined', 'N/A')}\n"
+        f"<b>Last Active</b> ➳ {ud_t.get('last_active', 'N/A')}\n"
+        f"<b>Total Checks</b> ➳ {ud_t.get('total_checks', 0)}\n"
+        f"<b>Total Refs</b>   ➳ {ud_t.get('total_refs', 0)}\n"
+        f"──────────"
+    )
+    kb = RawMarkup([
+        [
+            _btn(f"{E_DECLINED} Ban",    cb=f"owner_ban_{uid}",   style="danger"),
+            _btn(f"{E_LIVE} Unban",      cb=f"owner_unban_{uid}", style="primary"),
+        ],
+        [_btn(f"💎 Grant Plan via /sub {uid}", cb=f"find_sub_{uid}", style="primary")],
+    ])
+    await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+
+
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
 
@@ -1459,9 +1574,11 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/allcm ➳ Show all commands\n"
         "/allsub ➳ All live premium users\n"
         "/info [user] ➳ Full user info\n"
+        "/find @user|ID ➳ Search any user + full profile\n"
         "/gen code &lt;val&gt; [count] ➳ Gen credit code(s)\n"
         "/gen key &lt;plan&gt; &lt;days&gt; [count] ➳ Gen premium key(s)\n"
         "/add @user PLAN DAYS ➳ Grant premium\n"
+        "/sub @user|ID ➳ View user sub + grant plan buttons\n"
         "/resub @user|ID ➳ Remove active premium\n"
         "/rsub @user|ID ➳ Same as /resub\n"
         "/rem &lt;user&gt; ➳ Remove premium (legacy)\n"
@@ -1486,7 +1603,7 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
         "/start ➳ Dashboard\n/plan ➳ Premium plans\n"
-        "/sub ➳ My subscription\n/bin ➳ BIN lookup\n"
+        "/sub ➳ My subscription\n/sub @user|ID ➳ [Owner] View & grant plan\n/bin ➳ BIN lookup\n"
         "/refer ➳ Referral link\n/rm ➳ Redeem code or key\n"
         "/ping ➳ Bot speed test\n/fb ➳ Send feedback\n"
         "━━━━━━━━━━━━━━━━━",
@@ -1712,9 +1829,99 @@ async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # USER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user     = update.effective_user
+    user = update.effective_user
+    now  = time.time()
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # OWNER: /sub @user | /sub ID | reply → /sub
+    #   Shows target user's plan + inline buttons to grant
+    #   CORE / ELITE / ROOT with preset days instantly.
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    has_target = bool(context.args) or (
+        update.message.reply_to_message and
+        update.message.reply_to_message.from_user
+    )
+    if user.id == OWNER_ID and has_target:
+        # ── Resolve target ──────────────────────────────────
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            ru = update.message.reply_to_message.from_user
+            target_id    = ru.id
+            target_name  = ru.first_name or "Unknown"
+            target_uname = ru.username or ""
+        else:
+            raw = context.args[0]
+            target_id = await resolve_user(raw, context)
+            if not target_id:
+                await update.message.reply_text(
+                    f"{E_ERRORS} <b>User not found:</b> <code>{raw}</code>\n"
+                    f"Make sure the user has started the bot first.",
+                    parse_mode="HTML"
+                )
+                return
+            target_name, target_uname = "Unknown", ""
+            try:
+                chat = await context.bot.get_chat(target_id)
+                target_name  = chat.first_name or "Unknown"
+                target_uname = chat.username or ""
+            except Exception:
+                ud_t = get_user_data(target_id, context)
+                target_name  = ud_t.get("name", "Unknown")
+                target_uname = ud_t.get("username", "")
+
+        # ── Current plan info ───────────────────────────────
+        ud_t     = get_user_data(target_id, context)
+        raw_plan = ud_t.get("plan", "TRIAL").upper()
+        expires  = ud_t.get("expires", 0)
+        if raw_plan != "TRIAL" and expires <= now:
+            raw_plan = "TRIAL"; expires = 0
+        premium    = raw_plan != "TRIAL" and expires > now
+        plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+        uname_d    = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
+
+        if premium:
+            rem = expires - now
+            expire_line = (
+                f"<b>Expires</b>   ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+                f"<b>Remaining</b> ➳ <b>{int(rem//86400)}d {int((rem%86400)//3600)}h</b>"
+            )
+        else:
+            expire_line = "<b>Expires</b>   ➳ Trial (no expiry)"
+
+        txt = (
+            f"<b>{E_USER} {B('User Subscription')}</b>\n──────────\n"
+            f"<b>Name</b>     ➳ {target_name}\n"
+            f"<b>Username</b> ➳ {uname_d}\n"
+            f"<b>ID</b>       ➳ <code>{target_id}</code>\n"
+            f"──────────\n"
+            f"<b>Plan</b>     ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+            f"{expire_line}\n"
+            f"──────────\n"
+            f"<b>Grant a Plan:</b>"
+        )
+        kb = RawMarkup([
+            [
+                _btn("⭐ CORE · 7d",   cb=f"ogs_CORE_7_{target_id}",
+                     style="primary", icon=PROG_LIVE_EMOJI_ID),
+                _btn("💎 ELITE · 15d", cb=f"ogs_ELITE_15_{target_id}",
+                     style="primary", icon=PROG_LIVE_EMOJI_ID),
+                _btn("👑 ROOT · 30d",  cb=f"ogs_ROOT_30_{target_id}",
+                     style="primary", icon=PROG_LIVE_EMOJI_ID),
+            ],
+            [
+                _btn("⭐ CORE · 15d",  cb=f"ogs_CORE_15_{target_id}",  style="primary"),
+                _btn("💎 ELITE · 30d", cb=f"ogs_ELITE_30_{target_id}", style="primary"),
+                _btn("👑 ROOT · 60d",  cb=f"ogs_ROOT_60_{target_id}",  style="primary"),
+            ],
+            [_btn(f"{E_DECLINED} Remove Plan", cb=f"owner_resub_{target_id}",
+                  style="danger", icon=PROG_DEAD_EMOJI_ID)],
+        ])
+        await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+        return
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # REGULAR USER (and owner without args): own subscription
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ud       = get_user_data(user.id, context)
-    now      = time.time()
     raw_plan = ud.get("plan", "TRIAL").upper()
     expires  = ud.get("expires", 0)
     if raw_plan != "TRIAL" and expires <= now:
@@ -2197,6 +2404,37 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user.id == OWNER_ID:
+        # ── /sub grant plan buttons: ogs_PLAN_DAYS_UID ──────────────
+        if data.startswith("ogs_"):
+            parts    = data.split("_")           # ["ogs","PLAN","DAYS","UID"]
+            plan_key = parts[1]                  # CORE / ELITE / ROOT
+            days     = int(parts[2])
+            uid      = int(parts[3])
+            ud_t     = get_user_data(uid, context)
+            ud_t["plan"]    = plan_key
+            ud_t["expires"] = time.time() + days * 86400
+            plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
+            target_name = ud_t.get("name", f"User {uid}")
+            exp_str = datetime.fromtimestamp(ud_t["expires"]).strftime("%Y-%m-%d %H:%M")
+            try:
+                await send_activation_msg(uid, plan_key, days, context)
+            except Exception:
+                pass
+            await query.answer(f"✅ {plan_key} {days}d granted!", show_alert=True)
+            try:
+                await query.message.edit_text(
+                    f"<b>{E_LIVE} {B('Plan Granted')}</b>\n──────────\n"
+                    f"<b>User</b>    ➳ {target_name} (<code>{uid}</code>)\n"
+                    f"<b>Plan</b>    ➳ {get_styled_plan(plan_key)} {plan_emoji}\n"
+                    f"<b>Days</b>    ➳ {days}\n"
+                    f"<b>Expires</b> ➳ {exp_str}\n"
+                    f"──────────",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            return
+        # ── owner_ban / owner_unban / owner_resub ───────────────────
         if data.startswith("owner_ban_"):
             uid = int(data.split("_")[-1])
             get_user_data(uid, context)["banned"] = True
@@ -2212,6 +2450,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ud  = get_user_data(uid, context)
             ud["plan"] = "TRIAL"; ud["expires"] = 0
             await query.answer(f"Premium removed for {uid}", show_alert=True)
+            return
+        if data.startswith("find_sub_"):
+            uid = int(data.split("_")[-1])
+            await query.answer(
+                f"Use: /sub {uid}  to grant a plan.", show_alert=True
+            )
             return
         if data == "owner_info_back":
             return
@@ -2242,8 +2486,25 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _post_init(app: Application) -> None:
-    """Clear any existing webhook / long-poll session before polling starts.
-    After clearing, sleep 5 s so Telegram can expire the old getUpdates session."""
+    """
+    1. Auto-detect the real bot username from Telegram and patch config so
+       referral links always point to the correct bot, regardless of what
+       BOT_USERNAME is set to in config.py.
+    2. Clear any existing webhook / long-poll session before polling starts.
+       Sleep 5 s so Telegram can expire the old getUpdates session.
+    """
+    # ── Auto-detect real bot username ──────────────────────────────────────
+    try:
+        import config as _cfg
+        me = await app.bot.get_me()
+        if me.username:
+            _cfg.BOT_USERNAME = me.username
+            _cfg.BOT_LINK     = f"https://t.me/{me.username}"
+            logger.info(f"Bot identity confirmed: @{me.username} — referral link updated.")
+    except Exception as exc:
+        logger.warning(f"Could not fetch bot info: {exc}")
+
+    # ── Clear stale webhook / long-poll session ────────────────────────────
     for attempt in range(1, 6):
         try:
             await app.bot.delete_webhook(drop_pending_updates=True)
@@ -2307,6 +2568,7 @@ def main():
         app.add_handler(CommandHandler("gen",         cmd_gen))
         app.add_handler(CommandHandler("add",         cmd_add))
         app.add_handler(CommandHandler("rem",         cmd_rem))
+        app.add_handler(CommandHandler("find",        cmd_find))
         app.add_handler(CommandHandler("resub",       cmd_resub))
         app.add_handler(CommandHandler("rsub",        cmd_resub))
         app.add_handler(CommandHandler("ban",         cmd_ban))
