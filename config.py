@@ -21,7 +21,7 @@ OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 VERSION  = "V4.3"
 DEV_LINK = "https://t.me/Batmancardchk"
 
-BOT_USERNAME  = "Goutam29_bot"
+BOT_USERNAME  = "batcardchk29_bot"
 BOT_LINK      = f"https://t.me/{BOT_USERNAME}"
 
 BOT_PHOTO_URL = "https://z-cdn-media.chatglm.cn/files/baac90d1-06d0-478f-8989-5bef9cbfc9fb.jpg"
