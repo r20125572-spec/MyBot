@@ -1953,7 +1953,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
         return
 
-    await update.message.reply_text(ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(user.id, disable_web_page_preview=True))
+    await update.message.reply_text(ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(user.id), disable_web_page_preview=True)
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
