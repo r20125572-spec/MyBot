@@ -25,7 +25,7 @@ from mst import get_bin_handler as get_bin_lookup_handler
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
     CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
-    BOT_LINK, BOT_USERNAME, BOT_PHOTO_URL, BOT_PHOTO, BOT_PHOTO_B64,
+    BOT_LINK, BOT_USERNAME, BOT_PHOTO_URL, BOT_PHOTO,
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
@@ -370,19 +370,10 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
 # SEND PHOTO HELPER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _ensure_photo() -> None:
-    """Extract batman.jpg from embedded base64 if the file is missing.
-    Called once at startup — guarantees the photo works on Railway/cloud
-    even without uploading the file separately to the repository."""
-    if os.path.exists(BOT_LOCAL_PHOTO):
-        return
-    try:
-        import base64 as _b64
-        data = _b64.b64decode(BOT_PHOTO_B64.encode())
-        with open(BOT_LOCAL_PHOTO, "wb") as fh:
-            fh.write(data)
-        logger.info(f"batman.jpg extracted from embedded data ({len(data)} bytes)")
-    except Exception as exc:
-        logger.warning(f"Could not extract embedded photo: {exc}")
+    """No-op: batman.jpg is deployed alongside the bot in the repository.
+    Railway includes all repo files in the Docker image automatically."""
+    if not os.path.exists(BOT_LOCAL_PHOTO):
+        logger.warning(f"Photo file not found: {BOT_LOCAL_PHOTO} — will fall back to URL")
 
 
 async def send_with_photo(msg, caption: str, reply_markup=None, parse_mode="HTML"):
