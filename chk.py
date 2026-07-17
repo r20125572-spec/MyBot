@@ -217,21 +217,22 @@ async def step3_submit(session, cart_token, pm, full_name, email, crumb, xsrf, a
     }
 
     async with session.post(f"{BASE_URL}/api/2/commerce/orders", headers=headers, json=payload, proxy=proxy, timeout=30) as resp:
-        try: rj = await resp.json(content_type=None)
-        except: return "ERROR", "Invalid JSON response from API"
+        try: 
+            rj = await resp.json(content_type=None)
+        except: 
+            return "ERROR", "Invalid JSON response from API"
 
-    raw = json.dumps(rj)
+    # ── EXACT REAL RESPONSE PARSING ──
+    raw_json_str = json.dumps(rj) # Convert the exact API response to a string to show in the bot
     ss = rj.get("submissionStatus", "").upper()
+    ft = rj.get("failureType", "")
 
     if ss == "ORDER_CONFIRMED":
-        status = "CHARGED"
+        return "CHARGED", raw_json_str
+    elif ft:
+        return "DECLINED", raw_json_str
     else:
-        ft = rj.get("failureType", "")
-        if ft: status = f"DECLINED | {ft}"
-        elif "declined" in raw.lower() or "card_declined" in raw.lower(): status = "DECLINED"
-        else: status = ss if ss else "UNKNOWN"
-
-    return status, raw
+        return "DECLINED", raw_json_str
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # /chk COMMAND HANDLER
@@ -356,10 +357,6 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e: 
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
         await msg.edit_text(f"<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n<code>{escape(str(e)[:120])}</code>\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EXPORT HANDLER (THIS FIXES THE IMPORT ERROR)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def get_chk_handler():
     return CommandHandler("chk", cmd_chk)
