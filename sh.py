@@ -22,6 +22,13 @@ from config import (
 GOSHOPI_URL = "https://goshopi.up.railway.app/shopii"
 FALLBACK_SITE = "aloracosmetics.myshopify.com"
 
+# Emoji IDs used in verdict status lines
+_CHARGED_EMOJI_ID = "5427168083074628963"   # 💎 charged
+_LIVE_EMOJI_ID    = "5427168083074628963"   # ✅ live (reuse charged green)
+_TDS_EMOJI_ID     = "5427168083074628963"   # ✅ 3DS (counted as live)
+_DEAD_EMOJI_ID    = DECLINED_EMOJI_ID        # ❌ dead / declined
+_ERROR_EMOJI_ID   = DECLINED_EMOJI_ID        # ⚠️ error / retry
+
 
 def load_sites() -> list:
     """Load target Shopify sites from sites.txt (full URLs or bare domains)."""
@@ -64,21 +71,83 @@ def _readable_resp(data: dict) -> str:
     return raw[:200] if len(raw) > 200 else raw
 
 
-def classify(resp_text: str) -> str:
-    """Classify a card result based on real API response keywords."""
-    low = resp_text.lower()
-    approved_kw = ["approved", "captured", "success", "charged", "true", "live", "payment_intent"]
-    declined_kw = ["declined", "decline", "failed", "invalid", "error", "insufficient",
-                   "stolen", "lost", "blocked", "do_not_honor", "generic_decline", "false",
-                   "card_declined", "no_such_card", "expired_card", "incorrect_cvc",
-                   "pickup_card", "security_violation", "transaction_not_allowed"]
-    for kw in approved_kw:
-        if kw in low:
-            return "APPROVED"
-    for kw in declined_kw:
-        if kw in low:
-            return "DECLINED"
-    return "UNKNOWN"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CLASSIFICATION  — copied from msh.py, shared keyword lists
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RETRY_ERRORS = [
+    'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
+    'product not found', 'hcaptcha detected', 'tax ammount empty',
+    'del ammount empty', 'product id is empty', 'py id empty',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na', 'DELIVERY_ZONE_NOT_FOUND',
+    'site error! status: 429', 'site requires login!', 'failed to get token',
+    'no valid products', 'not shopify!', 'site not supported for now!', 'VALIDATION_CUSTOM',
+    'connection error', 'connection error!', 'error processing card',
+    '504', 'server error', 'client error', 'failed', 'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
+    'token not found', 'invalid_response', 'resolve', 'item', 'curl error',
+    'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED', 'could not resolve host',
+    'connect tunnel failed', 'timeout', 'proxy error',
+    'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
+    'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
+    'step 8 failed', 'step 9 failed', 'step 10 failed',
+    'SESSION_ERROR', 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
+    'DELIVERY_ZONE_NOT_FOUND', 'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
+    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
+    'no available products found', 'could not extract receiptid',
+    'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
+    'could not extract signedhandles', 'receiptid missing',
+    'response missing receiptid', 'INVENTORY_FAILURE',
+    'products.json', 'returned status 429', 'returned status 500',
+    'returned status 502', 'returned status 503', 'returned status 504',
+    'store incompatible', 'extract signedHandles', 'missing receiptId',
+    'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
+]
+
+DECLINED_RESPONSES = [
+    'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
+    'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
+    'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD',
+    'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
+    'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
+    'TRANSACTION_NOT_ALLOWED',
+]
+
+
+def classify_response(message: str) -> str:
+    """
+    Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR.
+    Mirrors the classification used in msh.py exactly.
+    """
+    mu = message.upper()
+    ml = message.lower()
+
+    # Charged / order paid
+    if "ORDER_PAID" in mu or "CHARGED" in mu:
+        return "CHARGED"
+
+    # 3DS — counted under Live
+    if "3DS_REQUIRED" in mu:
+        return "TDS"
+
+    # Strong live signals
+    if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
+            or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
+        return "LIVE"
+
+    # Dead signals
+    if "GENERIC_ERROR" in mu:
+        return "DEAD"
+
+    if any(d.upper() in mu for d in DECLINED_RESPONSES):
+        return "DEAD"
+
+    # Site / proxy / infra errors — treat as retry/error (refund credit)
+    if any(r.lower() in ml for r in RETRY_ERRORS):
+        return "RETRY"
+
+    return "ERROR"
 
 
 async def call_shopii(session: aiohttp.ClientSession, card: str, site: str, proxy: str | None) -> dict:
@@ -248,26 +317,48 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bin_data = {"error": True}
 
         resp_text = _readable_resp(data if isinstance(data, dict) else {})
-        verdict = classify(resp_text)
+        verdict   = classify_response(resp_text)
 
-        if verdict == "APPROVED":
-            live_eid = "5427168083074628963"  # green tick
+        # ── Build status line ──────────────────────────
+        if verdict == "CHARGED":
+            status_line = (
+                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Charged '
+                f'<tg-emoji emoji-id="{_CHARGED_EMOJI_ID}">💎</tg-emoji></b>'
+            )
+        elif verdict == "TDS":
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-                f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>'
+                f'<tg-emoji emoji-id="{_TDS_EMOJI_ID}">✅</tg-emoji> '
+                f'[3DS]</b>'
             )
-        elif verdict == "DECLINED":
+        elif verdict == "LIVE":
             status_line = (
-                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Declined '
-                f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">❌</tg-emoji></b>'
+                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
+                f'<tg-emoji emoji-id="{_LIVE_EMOJI_ID}">✅</tg-emoji></b>'
             )
-        else:
+        elif verdict == "DEAD":
             status_line = (
-                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Unknown '
-                f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">❓</tg-emoji></b>'
+                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Dead '
+                f'<tg-emoji emoji-id="{_DEAD_EMOJI_ID}">❌</tg-emoji></b>'
+            )
+        elif verdict == "RETRY":
+            # Site/proxy error — refund the credit we deducted
+            if not premium:
+                ud["credits"] = ud.get("credits", 0) + 1
+            status_line = (
+                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Retry '
+                f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⚠️</tg-emoji></b>'
+            )
+        else:  # ERROR
+            # Unknown error — refund credit
+            if not premium:
+                ud["credits"] = ud.get("credits", 0) + 1
+            status_line = (
+                f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
+                f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⚠️</tg-emoji></b>'
             )
 
-        # BIN info
+        # ── BIN info ───────────────────────────────────
         bin_txt = "N/A"
         if isinstance(bin_data, dict) and not bin_data.get("error"):
             scheme  = str(bin_data.get("scheme", "N/A")).upper()
@@ -293,11 +384,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'<b>📢 <a href="{CHANNEL_LINK}">@Batcardchk</a></b>'
         )
 
-        # Update stats
+        # ── Update stats ───────────────────────────────
         ud["total_checks"] = ud.get("total_checks", 0) + 1
         ud["last_gate"]    = "Shopify | 0$"
         ud["last_card"]    = card_raw[:6] + "xxxxxxxxxx"
-        if verdict == "APPROVED":
+        if verdict in ("CHARGED", "TDS", "LIVE"):
             ud["approved_checks"] = ud.get("approved_checks", 0) + 1
         else:
             ud["declined_checks"] = ud.get("declined_checks", 0) + 1
@@ -315,7 +406,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from telegram import LinkPreviewOptions
         await msg.edit_text(
             f'<b><a href="{CHANNEL_LINK}">[❆]</a> Timeout '
-            f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">⏱</tg-emoji></b>\n\n'
+            f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⏱</tg-emoji></b>\n\n'
             f'<b><code>{escape(card_raw)}</code></b>\n'
             f'<b>Gate ➳ Shopify | 0$</b>\n'
             f'<b>──────────</b>\n'
@@ -333,7 +424,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from telegram import LinkPreviewOptions
         await msg.edit_text(
             f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
-            f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">⚠️</tg-emoji></b>\n\n'
+            f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⚠️</tg-emoji></b>\n\n'
             f'<b><code>{escape(card_raw)}</code></b>\n'
             f'<b>Gate ➳ Shopify | 0$</b>\n'
             f'<b>──────────</b>\n'
