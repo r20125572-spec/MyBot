@@ -62,7 +62,7 @@ LOCK_FILE        = "/tmp/batman_bot.lock"
 GATE_URLS: dict[str, str] = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
     "pp":   "https://pp-auth-test-production.up.railway.app/pp",
-    "sh":   "https://goshopi.up.railway.app/shopii",          # ← goshopi real Shopify API
+    "sh":   "https://goshopi.up.railway.app/shopii",
     "pyu":  "https://payu-auth-test-production.up.railway.app/pyu",
     "b3":   "https://avs.blaze.indevs.in/api/b3",
     "au":   "https://stripe-auth-test-production.up.railway.app/st0",
@@ -73,13 +73,13 @@ GATE_URLS: dict[str, str] = {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🌐  GATE TARGET SITES
 #
-#   sh is left empty here — sh.py loads sites from
-#   sites.txt and picks one randomly per check.
+#   sh → managed by sh.py which loads sites.txt per-check.
+#        The value here is a safe fallback only.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_SITES: dict[str, str] = {
     "chk":  "fashionspicex.com",
     "pp":   "example.com",
-    "sh":   "",          # managed by sh.py via sites.txt
+    "sh":   "aloracosmetics.myshopify.com",
     "pyu":  "example.com",
     "b3":   "example.com",
     "au":   "fashionspicex.com",
@@ -142,18 +142,14 @@ SPECIAL_FONT_MAP = {
 # 🛠  EMOJI HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
-    """Render a Telegram custom emoji tag (HTML parse_mode).
-    All users — including non-Premium — see the animated sticker."""
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 
 def get_random_live_emoji() -> str:
-    """Return a random live-hit emoji ID (string, not rendered tag)."""
     return random.choice(LIVE_EMOJI_IDS)
 
 
 def get_plan_emoji_id(plan_name: str) -> str:
-    """Return the custom emoji ID for a given plan name string."""
     if not plan_name:
         return PRO_EMOJI_ID
     normalized = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
@@ -167,8 +163,6 @@ def get_plan_emoji_id(plan_name: str) -> str:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🏷  PRE-RENDERED EMOJI SHORTHANDS
-#     Import in sh.py, b3.py, chk.py, main.py, etc.
-#     Always use parse_mode="HTML" — NOT MarkdownV2.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 E_CARD     = tg_emoji(CARD_EMOJI_ID,          "💳")
 E_USER     = tg_emoji(USER_EMOJI_ID,          "👤")
@@ -183,10 +177,9 @@ E_GATE     = tg_emoji(PROG_GATE_EMOJI_ID,     "🛒")
 E_HIT_RESP = tg_emoji(HIT_RESP_EMOJI_ID,      "✅")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⌨️  RAW MARKUP — coloured buttons (mst.py style)
+# ⌨️  RAW MARKUP — coloured buttons
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class RawMarkup(TelegramObject):
-    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
     __slots__ = ("_data",)
 
     def __init__(self, inline_keyboard: list):
@@ -202,7 +195,6 @@ class RawMarkup(TelegramObject):
 
 def _btn(text: str, *, cb: str = None, url: str = None,
          style: str = None, icon: str = None) -> dict:
-    """Build one raw Telegram API button dict."""
     d: dict = {"text": text}
     if cb:    d["callback_data"]        = cb
     if url:   d["url"]                  = url
@@ -215,7 +207,6 @@ def _btn(text: str, *, cb: str = None, url: str = None,
 # 🔍  BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def get_bin_info(bin_num: str) -> dict:
-    """Fetch card BIN details from binlist.net (no API key needed)."""
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=8)
@@ -247,10 +238,7 @@ async def get_bin_info(bin_num: str) -> dict:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⌨️  SHARED RESULT KEYBOARD  — coloured (mst.py style)
-#
-#   Trial users  → blue "BUY PREMIUM" + grey channel link
-#   Premium users → blue "Open Bot"  + blue "Channel"
+# ⌨️  SHARED RESULT KEYBOARD
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_result(is_premium: bool = False) -> RawMarkup:
     if is_premium:
