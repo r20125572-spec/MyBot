@@ -60,7 +60,7 @@ LOCK_FILE        = "/tmp/batman_bot.lock"
 GATE_URLS: dict[str, str] = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
     "pp":   "https://pp-auth-test-production.up.railway.app/pp",
-    "sh":   "https://shopify-auth-test-production.up.railway.app/sh",
+    "sh":   "sh": "https://goshopi.up.railway.app/shopii", 
     "pyu":  "https://payu-auth-test-production.up.railway.app/pyu",
     "b3":   "https://avs.blaze.indevs.in/api/b3",
     "au":   "https://stripe-auth-test-production.up.railway.app/st0",
