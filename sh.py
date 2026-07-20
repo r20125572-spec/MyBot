@@ -25,7 +25,6 @@ def load_sites():
             return sites
     except FileNotFoundError:
         pass
-    # Fallback if sites.txt is missing or empty
     return ["1898-products.myshopify.com", "anotherseasonwaco.myshopify.com"]
 
 def load_proxies():
@@ -65,7 +64,7 @@ def is_user_premium(ud: dict) -> bool:
 
 def get_styled_plan(raw_plan: str) -> str:
     plan_upper = raw_plan.upper()
-    if plan_upper == "CORE":   return "✨ Cᴏʀᴇ ✨"
+    if plan_upper == "CORE":    return "✨ Cᴏʀᴇ ✨"
     elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
     elif plan_upper == "ROOT":  return "👑 Rᴏᴏᴛ 👑"
     else: return "Tʀɪᴀʟ"
@@ -86,22 +85,21 @@ async def _check_force_sub(user_id: int, context) -> list:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SHOPIFY API CHECKER (via goshopi.up.railway.app)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _pretty(raw) -> str:
-    """Return a clean, readable string from the API response."""
+def full_raw(raw) -> str:
+    """Always return the full, unmodified API response string."""
     if isinstance(raw, dict):
-        for key in ("message", "status", "result", "response", "detail", "error", "msg"):
-            val = raw.get(key)
-            if val and isinstance(val, str):
-                return val
         return json.dumps(raw, ensure_ascii=False)
     return str(raw)
 
+
 def classify_response(raw) -> tuple[str, str]:
     """
-    Returns ("APPROVED", display_msg) or ("DECLINED", display_msg).
-    Checks approve keywords first, then decline keywords.
+    Returns ("APPROVED", full_api_response) or ("DECLINED", full_api_response).
+    Display is always the complete real API response — never filtered or shortened.
+    Status label is determined only by keyword scan.
     """
     raw_str = json.dumps(raw).lower() if isinstance(raw, dict) else str(raw).lower()
+    display = full_raw(raw)
 
     approve_kw = [
         "approved", "approval", "success", "charged", "captured",
@@ -115,20 +113,20 @@ def classify_response(raw) -> tuple[str, str]:
 
     for kw in approve_kw:
         if kw in raw_str:
-            return "APPROVED", _pretty(raw)
+            return "APPROVED", display
 
     for kw in decline_kw:
         if kw in raw_str:
-            return "DECLINED", _pretty(raw)
+            return "DECLINED", display
 
-    # Unknown response — treat as declined but still show raw
-    return "DECLINED", _pretty(raw)
+    # Unknown response — show full raw, treat as declined
+    return "DECLINED", display
 
 
 async def check_via_api(cc: str, month: str, year: str, cvv: str,
                         site: str | None, proxy: str | None) -> tuple[str, str, str]:
     """
-    Calls goshopi API. Returns (status, display_response, site_used).
+    Calls the goshopi API and returns (status, display_response, site_used).
     status is "APPROVED" or "DECLINED".
     """
     # API expects full 4-digit year
