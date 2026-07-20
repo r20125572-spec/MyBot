@@ -352,9 +352,38 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"✰ <b>𝐑𝐞𝐟𝐞𝐫𝐫𝐚𝐥𝐬</b>   ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)",
         f"✰ <b>𝐂𝐨𝐝𝐞𝐬</b>      ➔ {codes_red} redeemed",
         f"✰ <b>𝐊𝐞𝐲𝐬</b>       ➔ {keys_red} redeemed",
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a> {E_PRO}",
     ]
+
+    # ── Daily mass limit section (trial users only) ───────────────
+    if not premium:
+        _today      = datetime.now().strftime("%Y-%m-%d")
+        _msh_date   = ud.get("msh_daily_date", "")
+        _msh_used   = ud.get("msh_daily_cards", 0) if _msh_date == _today else 0
+        _msh_remain = max(0, 500 - _msh_used)
+        _msh_status = (
+            f"✅ Available ({_msh_remain} cards left)"
+            if _msh_used == 0
+            else (
+                f"🔒 Used ({_msh_used}/500 cards) — resets tomorrow"
+                if _msh_used >= 500
+                else f"⚡ Partial ({_msh_used}/500 used, {_msh_remain} left)"
+            )
+        )
+        lines += [
+            "━━━━━━━━━━━━━━━━━━━━",
+            "📊 <b>𝗠𝗔𝗦𝗦 𝗖𝗛𝗘𝗖𝗞𝗘𝗥 𝗟𝗜𝗠𝗜𝗧𝗦 (Trial)</b>",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"✰ <b>𝐃𝐚𝐢𝐥𝐲 𝐋𝐢𝐦𝐢𝐭</b>  ➔ 500 cards / day",
+            f"✰ <b>𝐔𝐬𝐞𝐝 𝐓𝐨𝐝𝐚𝐲</b>  ➔ {_msh_used} cards",
+            f"✰ <b>𝐑𝐞𝐦𝐚𝐢𝐧𝐢𝐧𝐠</b>   ➔ {_msh_remain} cards",
+            f"✰ <b>𝐒𝐭𝐚𝐭𝐮𝐬</b>     ➔ {_msh_status}",
+            f"✰ <b>𝐂𝐫𝐞𝐝𝐢𝐭𝐬</b>    ➔ {ud.get('credits', 0)} (1 credit = 1 card)",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+    else:
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+
+    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a> {E_PRO}")
     return "\n".join(lines)
 
 def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -693,8 +722,8 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔒 <b>Premium Plan Required</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/msh</b>  ➳ Shopify Mass 0-20$ 👑\n"
-        "       Limit ➳ 5000 cards\n"
+        "<b>/msh</b>  ➳ Shopify Mass 0-20$\n"
+        "       Limit ➳ 5000 cards (trial: 1 credit = 1 card)\n"
         "       Reply to a .txt file → <code>/msh</code>\n\n"
         "<b>/au</b>   ➳ Stripe Auth Mass 👑\n"
         "       Cost ➳ Unlimited (Premium)\n"
@@ -1591,7 +1620,7 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
         "/chk ➳ Stripe Charge\n/b3 ➳ Braintree Charge\n"
         "/pp ➳ PayPal Charge\n/sh ➳ Shopify Charge\n"
-        "/msh ➳ Shopify Mass 0-20$ (5000 limit)\n"
+        "/msh ➳ Shopify Mass 0-20$ (trial: 1cr=1card, limit 5000)\n"
         "/au ➳ Stripe Auth Mass\n"
         "/mss ➳ Stripe Mass Check\n/mpp2 ➳ PayPal Mass Check\n"
         "━━━━━━━━━━━━━━━━━\n\n"
@@ -1987,10 +2016,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(ui_start_screen(user, context), parse_mode="HTML", reply_markup=kb_main(user.id), disable_web_page_preview=True)
 
-MSH_LIMIT = 5000
+MSH_LIMIT           = 5000   # absolute hard cap
+TRIAL_MASS_DAY_LIMIT = 500   # trial users: max cards per day
 
 async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mass Shopify Checker — /msh (premium only, up to 5000 cards)."""
+    """Mass Shopify Checker — /msh.
+    Trial: once per day, max 500 cards/day, 1 credit = 1 card.
+    Premium / owner: unlimited.
+    """
     user = update.effective_user
     if not await require_not_banned(update, context): return
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
@@ -2001,18 +2034,40 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not await require_membership(update, context): return
 
-    ud      = get_user_data(user.id, context)
-    premium = is_user_premium(ud)
+    ud        = get_user_data(user.id, context)
+    premium   = is_user_premium(ud)
+    is_trial  = not premium and user.id != OWNER_ID
+    today_str = datetime.now().strftime("%Y-%m-%d")
     _update_user_meta(ud, user)
 
-    if not premium and user.id != OWNER_ID:
-        await update.message.reply_text(
-            f"<b>{E_PRO} {B('Premium Required')}</b>\n──────────\n"
-            "Mass Shopify checker requires a premium plan.\n"
-            "Use /plan to upgrade.\n──────────",
-            parse_mode="HTML", reply_markup=kb_upgrade()
-        )
-        return
+    if is_trial:
+        # ── Once-per-day gate ─────────────────────────────────────
+        last_date = ud.get("msh_daily_date", "")
+        if last_date == today_str:
+            used_today = ud.get("msh_daily_cards", 0)
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} {B('Daily Limit Reached')}</b>\n──────────\n"
+                f"You already used <b>/msh</b> today.\n\n"
+                f"<b>Used Today:</b>  {used_today} / {TRIAL_MASS_DAY_LIMIT} cards\n"
+                f"<b>Resets:</b>      Tomorrow midnight\n"
+                f"──────────\n"
+                f"💡 Upgrade to <b>Premium</b> for unlimited daily mass checking.",
+                parse_mode="HTML", reply_markup=kb_upgrade()
+            )
+            return
+
+        # ── No-credits gate ───────────────────────────────────────
+        if ud.get("credits", 0) <= 0:
+            await update.message.reply_text(
+                f"<b>{E_DECLINED} {B('No Credits')}</b>\n──────────\n"
+                "You have <b>0 credits</b> remaining.\n\n"
+                "💡 <b>1 credit = 1 card checked</b>\n"
+                "Contact the owner to buy more credits,\n"
+                "or upgrade to Premium for unlimited checks.\n"
+                "──────────",
+                parse_mode="HTML", reply_markup=kb_upgrade()
+            )
+            return
 
     # ── Collect cards from document or replied text ──────────────
     cards = []
@@ -2040,26 +2095,60 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cards = [l.strip() for l in txt.splitlines() if l.strip() and "|" in l]
 
     if not cards:
+        if is_trial:
+            trial_note = (
+                f"\n──────────\n"
+                f"💡 <b>Trial Limits (Daily)</b>\n"
+                f"   Max cards/day : <b>{TRIAL_MASS_DAY_LIMIT}</b>\n"
+                f"   Your credits  : <b>{ud.get('credits', 0)}</b>\n"
+                f"   1 credit = 1 card checked"
+            )
+        else:
+            trial_note = ""
         await update.message.reply_text(
             f"<b>{E_GATE} {B('Mass Shopify Checker')}</b>\n──────────\n"
             f"<b>Gate</b>    ➳ Shopify 0-20$\n"
             f"<b>Command</b> ➳ <code>/msh</code>\n"
-            f"<b>Limit</b>   ➳ 5000 cards\n"
+            f"<b>Limit</b>   ➳ 500 cards/day (Trial) | 5000 (Premium)\n"
             f"<b>Type</b>    ➳ Mass Checker\n"
             f"<b>Stop</b>    ➳ Button\n"
             f"──────────\n"
             f"<b>How to use:</b>\n"
             f"• Reply to a .txt file (one <code>cc|mm|yy|cvv</code> per line) with <code>/msh</code>\n"
-            f"• Or reply to a message containing cards",
+            f"• Or reply to a message containing cards"
+            f"{trial_note}",
             parse_mode="HTML"
         )
         return
 
+    # ── Enforce limits: hard cap → daily cap → credit cap ────────
     if len(cards) > MSH_LIMIT:
         cards = cards[:MSH_LIMIT]
 
+    if is_trial:
+        original_count  = len(cards)
+        trial_credits   = ud.get("credits", 0)
+        # Daily cap: 500 cards per day
+        effective_limit = min(TRIAL_MASS_DAY_LIMIT, trial_credits)
+        if original_count > effective_limit:
+            cards = cards[:effective_limit]
+            reason = (
+                f"{TRIAL_MASS_DAY_LIMIT} cards/day limit"
+                if effective_limit == TRIAL_MASS_DAY_LIMIT
+                else f"{trial_credits} credits"
+            )
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} {B('Trial Limit Applied')}</b>\n──────────\n"
+                f"You sent <b>{original_count}</b> cards.\n"
+                f"Limit applied: <b>{reason}</b>.\n"
+                f"Only <b>{effective_limit}</b> cards will be checked.\n"
+                f"──────────",
+                parse_mode="HTML"
+            )
+
     total = len(cards)
-    live_count = dead_count = error_count = 0
+    live_count = dead_count = error_count = credits_used = 0
+    stopped_no_credits = False
     start_time = time.time()
     live_hits: list[str] = []
 
@@ -2067,15 +2156,20 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data.setdefault("msh_tasks", {})[task_id] = {"running": True}
 
     stop_kb = RawMarkup([[_btn(B("Stop"), cb=f"stop_msh_{task_id}", style="danger")]])
+    uname   = f"@{user.username}" if user.username else user.first_name or "User"
 
-    uname = f"@{user.username}" if user.username else user.first_name or "User"
+    def _cr_line() -> str:
+        return (
+            f"\n<b>Credits:</b>  {ud.get('credits', 0)} remaining"
+            if is_trial else ""
+        )
 
     msg = await update.message.reply_text(
         f"<b>{E_PROGRESS} {B('Mass Shopify Starting')}</b>\n──────────\n"
         f"<b>Total:</b>  {total} cards\n"
         f"<b>Gate:</b>   Shopify 0-20$\n"
-        f"<b>User:</b>   {escape(uname)}\n──────────\n"
-        f"Starting...",
+        f"<b>User:</b>   {escape(uname)}"
+        f"{_cr_line()}\n──────────\nStarting...",
         parse_mode="HTML", reply_markup=stop_kb
     )
 
@@ -2095,7 +2189,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except FileNotFoundError:
         pass
 
-    GOSHOPI = "https://goshopi.up.railway.app/shopii"
+    GOSHOPI   = "https://goshopi.up.railway.app/shopii"
     last_edit = time.time()
 
     async def _progress_update():
@@ -2115,7 +2209,8 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>Errors:</b>   {error_count} ⚠️\n"
                 f"──────────\n"
                 f"<b>Speed:</b>    {rate:.1f} cc/s\n"
-                f"<b>User:</b>     {escape(uname)}",
+                f"<b>User:</b>     {escape(uname)}"
+                f"{_cr_line()}",
                 parse_mode="HTML", reply_markup=stop_kb
             )
         except Exception:
@@ -2123,8 +2218,14 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=30)) as session:
         for card in cards:
+            # Stop button
             if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
                 break
+            # Credit check before each card (trial users)
+            if is_trial and ud.get("credits", 0) <= 0:
+                stopped_no_credits = True
+                break
+
             site  = random.choice(sites)
             for pfx in ("https://", "http://"):
                 if site.startswith(pfx): site = site[len(pfx):]
@@ -2152,6 +2253,12 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     error_count += 1
             except Exception:
                 error_count += 1
+
+            # Deduct 1 credit per card for trial users
+            if is_trial:
+                ud["credits"] = max(0, ud.get("credits", 0) - 1)
+                credits_used += 1
+
             await _progress_update()
             await asyncio.sleep(0.25)
 
@@ -2159,9 +2266,25 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elapsed = time.time() - start_time
     checked = live_count + dead_count + error_count
 
+    # Build trial footer
+    if is_trial:
+        trial_footer = (
+            f"\n<b>Credits Used:</b>  {credits_used}\n"
+            f"<b>Credits Left:</b>  {ud.get('credits', 0)}"
+        )
+        if stopped_no_credits:
+            trial_footer += (
+                "\n──────────\n"
+                "⚠️ <b>Stopped — credits exhausted!</b>\n"
+                "Buy more credits from the owner to continue."
+            )
+    else:
+        trial_footer = ""
+
+    stop_label = "Stopped (No Credits)" if stopped_no_credits else "Done"
     try:
         await msg.edit_text(
-            f"<b>{E_LIVE} {B('Mass Shopify Done')}</b>\n──────────\n"
+            f"<b>{E_LIVE} {B('Mass Shopify')} — {stop_label}</b>\n──────────\n"
             f"<b>Total:</b>    {total}\n"
             f"<b>Checked:</b>  {checked}\n"
             f"<b>Live:</b>     {live_count} ✅\n"
@@ -2170,7 +2293,8 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"──────────\n"
             f"<b>Gate:</b>     Shopify 0-20$\n"
             f"<b>Time:</b>     {elapsed:.1f}s\n"
-            f"<b>User:</b>     {escape(uname)}",
+            f"<b>User:</b>     {escape(uname)}"
+            f"{trial_footer}",
             parse_mode="HTML", reply_markup=kb_result_raw(premium)
         )
     except Exception:
@@ -2188,6 +2312,10 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud["declined_checks"] = ud.get("declined_checks", 0) + dead_count + error_count
     ud["last_gate"]       = "Shopify | 0-20$"
     ud["last_active"]     = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # ── Save daily usage so profile and gate checks are accurate ─
+    if is_trial:
+        ud["msh_daily_date"]  = today_str
+        ud["msh_daily_cards"] = checked
 
 
 async def cmd_1day(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2610,14 +2738,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Shopify Mass gate info (special layout) ──────────────────
     if data == "imsh":
+        ud_i    = get_user_data(user.id, context)
+        prem_i  = is_user_premium(ud_i)
+        _today  = datetime.now().strftime("%Y-%m-%d")
+        if prem_i:
+            limit_line   = "Unlimited"
+            status_line  = "✅ Available"
+            credits_line = "∞"
+        else:
+            _used    = ud_i.get("msh_daily_cards", 0) if ud_i.get("msh_daily_date", "") == _today else 0
+            _remain  = max(0, 500 - _used)
+            _cr      = ud_i.get("credits", 0)
+            limit_line   = f"500 cards / day"
+            credits_line = str(_cr)
+            if ud_i.get("msh_daily_date", "") == _today:
+                status_line = f"🔒 Used today ({_used}/500)" if _used >= 500 else f"⚡ {_remain} cards left today"
+            else:
+                status_line = "✅ Available"
         await query.message.edit_text(
             f"<b>────────────</b>\n"
             f"<b>Gate</b>    ➳ Shopify 0-20$\n"
             f"<b>Command</b> ➳ <code>/msh</code>\n"
-            f"<b>Limit</b>   ➳ 5000\n"
+            f"<b>Limit</b>   ➳ {limit_line}\n"
             f"<b>Type</b>    ➳ Mass Checker\n"
             f"<b>Stop</b>    ➳ Button\n"
-            f"<b>Plan</b>    ➳ Premium 👑\n"
+            f"<b>Cost</b>    ➳ {'∞ (Premium)' if prem_i else '1 credit / card'}\n"
+            f"<b>Credits</b> ➳ {credits_line}\n"
+            f"<b>Status</b>  ➳ {status_line}\n"
             f"<b>────────────</b>",
             parse_mode="HTML",
             reply_markup=kb_back("mmass")
