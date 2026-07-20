@@ -302,14 +302,17 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             ud["declined_checks"] = ud.get("declined_checks", 0) + 1
 
+        from telegram import LinkPreviewOptions
+        _lp = LinkPreviewOptions(is_disabled=True)
         await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result(premium),
-                            disable_web_page_preview=True)
+                            link_preview_options=_lp)
 
     except asyncio.TimeoutError:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         time_taken = f"{time.time() - start_time:.2f}"
+        from telegram import LinkPreviewOptions
         await msg.edit_text(
             f'<b><a href="{CHANNEL_LINK}">[❆]</a> Timeout '
             f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">⏱</tg-emoji></b>\n\n'
@@ -320,13 +323,14 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'<b>──────────</b>\n'
             f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_taken}s</b>',
             parse_mode="HTML", reply_markup=kb_result(premium),
-            disable_web_page_preview=True
+            link_preview_options=LinkPreviewOptions(is_disabled=True)
         )
 
     except Exception as e:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         time_taken = f"{time.time() - start_time:.2f}"
+        from telegram import LinkPreviewOptions
         await msg.edit_text(
             f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
             f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">⚠️</tg-emoji></b>\n\n'
@@ -337,7 +341,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'<b>──────────</b>\n'
             f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_taken}s</b>',
             parse_mode="HTML", reply_markup=kb_result(premium),
-            disable_web_page_preview=True
+            link_preview_options=LinkPreviewOptions(is_disabled=True)
         )
 
 
