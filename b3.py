@@ -4,7 +4,7 @@ import time
 import re
 import random
 from html import escape
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
@@ -254,7 +254,7 @@ async def cmd_b3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(
             text, parse_mode="HTML",
             reply_markup=kb_result(premium),
-            disable_web_page_preview=True,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
 
         # Update user stats
