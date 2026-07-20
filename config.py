@@ -21,8 +21,10 @@ OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 VERSION  = "V4.3"
 DEV_LINK = "https://t.me/Batmancardchk"
 
-BOT_USERNAME = "batcardchk29_bot"
-BOT_LINK     = f"https://t.me/{BOT_USERNAME}"
+BOT_USERNAME  = "batcardchk29_bot"
+BOT_LINK      = f"https://t.me/{BOT_USERNAME}"
+
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 📢  CHANNEL & GROUP LINKS
@@ -30,9 +32,9 @@ BOT_LINK     = f"https://t.me/{BOT_USERNAME}"
 CHANNEL_USERNAME = "@Batcardchk"
 GROUP_USERNAME   = "@batcardchkGroup"
 
-CHANNEL_LINK = "https://t.me/Batcardchk"
-GROUP_LINK   = "https://t.me/batcardchkGroup"
-SUPPORT_LINK = "https://t.me/cardchkSupport"
+CHANNEL_LINK  = "https://t.me/Batcardchk"
+GROUP_LINK    = "https://t.me/batcardchkGroup"
+SUPPORT_LINK  = "https://t.me/cardchkSupport"
 
 _ch_raw    = os.environ.get("CHANNEL_ID", CHANNEL_USERNAME).strip()
 CHANNEL_ID = int(_ch_raw) if _ch_raw.lstrip("-").isdigit() else _ch_raw
@@ -54,10 +56,6 @@ LOCK_FILE        = "/tmp/batman_bot.lock"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔗  GATE API URLS
-#
-#   sh  → goshopi.up.railway.app/shopii
-#         (real Shopify checker — reads site from sites.txt,
-#          proxy from px.txt via sh.py)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_URLS: dict[str, str] = {
     "chk":  "https://stripe-auth-test-production.up.railway.app/st0",
@@ -72,9 +70,6 @@ GATE_URLS: dict[str, str] = {
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🌐  GATE TARGET SITES
-#
-#   sh → managed by sh.py which loads sites.txt per-check.
-#        The value here is a safe fallback only.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE_SITES: dict[str, str] = {
     "chk":  "fashionspicex.com",
@@ -93,8 +88,11 @@ GATE_SITES: dict[str, str] = {
 PREMIUM_GATES: set[str] = {"au", "mss", "mpp2"}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🎨  CUSTOM EMOJI IDS
+# 🎨  CUSTOM EMOJI IDS  (mst.py style)
+#     Telegram Premium custom emoji stickers.
+#     All users see them — even non-Premium accounts.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 DECLINED_EMOJI_ID      = "4956612582816351459"
 CARD_EMOJI_ID          = "5800709991627232190"
 USER_EMOJI_ID          = "4958689671950369798"
@@ -141,15 +139,18 @@ SPECIAL_FONT_MAP = {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🛠  EMOJI HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
+    """Render a Telegram custom emoji tag (HTML parse_mode).
+    All users — including non-Premium — see the animated sticker."""
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
-
 def get_random_live_emoji() -> str:
+    """Return a random live-hit emoji ID (string, not rendered tag)."""
     return random.choice(LIVE_EMOJI_IDS)
 
-
 def get_plan_emoji_id(plan_name: str) -> str:
+    """Return the custom emoji ID for a given plan name string."""
     if not plan_name:
         return PRO_EMOJI_ID
     normalized = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
@@ -160,10 +161,12 @@ def get_plan_emoji_id(plan_name: str) -> str:
             return eid
     return PRO_EMOJI_ID
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🏷  PRE-RENDERED EMOJI SHORTHANDS
+#     Import these in b3.py, chk.py, main.py, etc.
+#     Always use parse_mode="HTML" — NOT MarkdownV2.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 E_CARD     = tg_emoji(CARD_EMOJI_ID,          "💳")
 E_USER     = tg_emoji(USER_EMOJI_ID,          "👤")
 E_TIME     = tg_emoji(TIME_EMOJI_ID,          "⏱")
@@ -177,9 +180,19 @@ E_GATE     = tg_emoji(PROG_GATE_EMOJI_ID,     "🛒")
 E_HIT_RESP = tg_emoji(HIT_RESP_EMOJI_ID,      "✅")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⌨️  RAW MARKUP — coloured buttons
+# ⌨️  RAW MARKUP — coloured buttons (mst.py style)
+#
+#   Telegram Bot API supports:
+#     "style": "primary"   → blue button
+#     "style": "danger"    → red button
+#     "icon_custom_emoji_id" → animated sticker on button
+#
+#   python-telegram-bot calls .to_dict() on reply_markup,
+#   so this thin wrapper passes raw API JSON straight through.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 class RawMarkup(TelegramObject):
+    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
     __slots__ = ("_data",)
 
     def __init__(self, inline_keyboard: list):
@@ -195,6 +208,7 @@ class RawMarkup(TelegramObject):
 
 def _btn(text: str, *, cb: str = None, url: str = None,
          style: str = None, icon: str = None) -> dict:
+    """Build one raw Telegram API button dict."""
     d: dict = {"text": text}
     if cb:    d["callback_data"]        = cb
     if url:   d["url"]                  = url
@@ -202,11 +216,12 @@ def _btn(text: str, *, cb: str = None, url: str = None,
     if icon:  d["icon_custom_emoji_id"] = icon
     return d
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔍  BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 async def get_bin_info(bin_num: str) -> dict:
+    """Fetch card BIN details from binlist.net (no API key needed)."""
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=8)
@@ -236,10 +251,14 @@ async def get_bin_info(bin_num: str) -> dict:
     except Exception:
         return {"error": True}
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ⌨️  SHARED RESULT KEYBOARD  — coloured (mst.py style)
+#
+#   Used by b3.py, chk.py, and any other checker module.
+#   Trial users  → blue "BUY PREMIUM" + grey channel link
+#   Premium users → blue "Open Bot" + blue "Channel"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⌨️  SHARED RESULT KEYBOARD
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def kb_result(is_premium: bool = False) -> RawMarkup:
     if is_premium:
         return RawMarkup([
