@@ -43,6 +43,7 @@ from config import (
 from mass import get_mass_handlers
 from b3 import get_b3_handler
 from chk import get_chk_handler
+from sh import get_sh_handler
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -2521,7 +2522,7 @@ def main():
         app.add_handler(get_bin_lookup_handler())
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(CommandHandler("pp",      cmd_pp))
-        app.add_handler(CommandHandler("sh",      cmd_sh))
+        app.add_handler(get_sh_handler())
         app.add_handler(CommandHandler("pyu",     cmd_pyu))
         app.add_handler(get_b3_handler())
         app.add_handler(get_chk_handler())
