@@ -1056,8 +1056,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
         f"<b>Credits</b>  ➳ Unlimited\n"
         f"<b>Expires</b>  ➳ {exp_date}\n"
         f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
-        f"──────────\nSave this receipt ID.
-{E_DEV} Batamanchk {E_PRO}"
+        f"──────────\nSave this receipt ID.\n{E_DEV} Batamanchk {E_PRO}"
     )
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
