@@ -67,18 +67,22 @@ async def lookup_bin(bin_number: str) -> dict:
         
         if status_code == 200:
             country_data = data.get("country") or {}
-            bank_data = data.get("bank") or {}
+            bank_data    = data.get("bank") or {}
+            alpha2       = (country_data.get("alpha2") or "").upper()
+            # binlist.net has no emoji field — build flag from alpha2 e.g. "US" -> 🇺🇸
+            flag = "".join(chr(ord(c) + 127397) for c in alpha2) if len(alpha2) == 2 else "🌍"
             return {
-                "success": True, "bin": bin_clean[:6],
-                "scheme": (data.get("scheme") or "N/A").upper(),
-                "type": (data.get("type") or "N/A").upper(),
-                "brand": (data.get("brand") or "N/A").upper(),
-                "country": country_data.get("name", "N/A"),
-                "country_flag": country_data.get("emoji", "🌍"),
-                "country_code": country_data.get("alpha2", "??"),
-                "bank": bank_data.get("name", "N/A"),
-                "bank_url": bank_data.get("url", "N/A"),
-                "prepaid": data.get("prepaid", False)
+                "success":      True,
+                "bin":          bin_clean[:6],
+                "scheme":       (data.get("scheme") or "N/A").upper(),
+                "type":         (data.get("type")   or "N/A").upper(),
+                "brand":        (data.get("brand")  or "N/A").upper(),
+                "country":      country_data.get("name", "N/A"),
+                "country_flag": flag,
+                "country_code": alpha2 or "??",
+                "bank":         bank_data.get("name", "N/A"),
+                "bank_url":     bank_data.get("url",  "N/A"),
+                "prepaid":      data.get("prepaid", False),
             }
         return {"success": False, "error": "BIN not found or rate limited."}
     except Exception:
@@ -121,14 +125,14 @@ async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     styled_plan_map = {"CORE": "Cᴏʀᴇ", "ELITE": "Eʟɪᴛᴇ", "ROOT": "Rᴏᴏᴛ"}
     styled_plan = styled_plan_map.get(raw_plan, "Tʀɪᴀʟ")
     
+    text = format_bin_response(result, user_name, styled_plan)
     try:
-        await status_msg.edit_text(
-            text=format_bin_response(result, user_name, styled_plan), 
-            parse_mode="HTML", 
-            disable_web_page_preview=True
-        )
+        await status_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
-        pass
+        try:
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            pass
 
 def get_bin_handler():
     return CommandHandler("bin", cmd_bin)
