@@ -187,9 +187,9 @@ async def _stripe(card: str) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _kb_running(sid: str, checked: int) -> dict:
     return {"inline_keyboard": [
-        [{"text": f"📋 All ({checked})", "callback_data": f"mstr:{sid}:all",
+        [{"text": f"All ({checked})", "callback_data": f"mstr:{sid}:all",
           "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID}],
-        [{"text": "🛑 Stop", "callback_data": f"msts:{sid}",
+        [{"text": "Stop", "callback_data": f"msts:{sid}",
           "style": "danger",  "icon_custom_emoji_id": BTN_STOP_EMOJI_ID}],
     ]}
 
@@ -197,9 +197,9 @@ def _kb_done(sid: str, live: int, dead: int) -> dict:
     total = live + dead
     rows  = []
     row1  = []
-    if live: row1.append({"text": f"✅ Live ({live})", "callback_data": f"mstr:{sid}:live",
+    if live: row1.append({"text": f"Live ({live})", "callback_data": f"mstr:{sid}:live",
                            "style": "primary", "icon_custom_emoji_id": BTN_STOP_EMOJI_ID})
-    row1.append({"text": f"📋 All ({total})", "callback_data": f"mstr:{sid}:all",
+    row1.append({"text": f"All ({total})", "callback_data": f"mstr:{sid}:all",
                  "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID})
     rows.append(row1)
     return {"inline_keyboard": rows}
@@ -497,7 +497,7 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not _is_premium(uid):
         await update.message.reply_text(
-            "💎 <b>Premium required for /mst.</b>\n"
+            f"{E_CHARGED} <b>Premium required for /mst.</b>\n"
             "Contact the owner to upgrade.",
             parse_mode="HTML"
         )
@@ -509,7 +509,7 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for sid, sd in list(MST_SESSIONS.items()):
         if sd.get("user_id") == uid and sd.get("status") == "CHECKING":
             await update.message.reply_text(
-                "⚠️ <b>You already have an active /mst session.</b>\n"
+                f"{E_ERRORS} <b>You already have an active /mst session.</b>\n"
                 "Use the Stop button to cancel it first.",
                 parse_mode="HTML"
             )
@@ -527,17 +527,17 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = msg.document or (msg.reply_to_message.document if msg.reply_to_message else None)
     if doc:
         if doc.file_size > 3 * 1024 * 1024:
-            await msg.reply_text("❌ File too large (max 3 MB)."); return
+            await msg.reply_text("File too large (max 3 MB)."); return
         try:
             f    = await doc.get_file()
             data = await f.download_as_bytearray()
             raw += data.decode("utf-8", errors="ignore")
         except Exception as e:
-            await msg.reply_text(f"❌ Error reading file: {e}"); return
+            await msg.reply_text(f"Error reading file: {e}"); return
 
     if not raw.strip():
         await msg.reply_text(
-            f'<b>🛒 Mass Stripe — <code>/mst</code></b>\n──────────\n'
+            f'<b>{E_GATE} Mass Stripe — <code>/mst</code></b>\n──────────\n'
             f'Reply to a <code>.txt</code> file or paste cards directly.\n'
             f'Format: <code>cc|mm|yy|cvv</code> (one per line)',
             parse_mode="HTML"
@@ -545,7 +545,7 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cards = _parse_cards(raw)
     if not cards:
-        await msg.reply_text("❌ No valid cards found (use <code>cc|mm|yy|cvv</code>).",
+        await msg.reply_text(f"{E_DECLINED} No valid cards found (use <code>cc|mm|yy|cvv</code>).",
                              parse_mode="HTML"); return
     if len(cards) > 20000:
         cards = cards[:20000]
@@ -616,15 +616,15 @@ async def cb_mst_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, sid, rtype = parts[0], parts[1], parts[2]
     sess = _sess(sid)
     if not sess:
-        await query.answer("⚠️ Session not found.", show_alert=True); return
+        await query.answer("Session not found.", show_alert=True); return
     if query.from_user.id != sess.get("user_id"):
-        await query.answer("❌ Not your session.", show_alert=True); return
+        await query.answer("Not your session.", show_alert=True); return
 
     buf, fn, count = _result_file(sess, rtype)
     if count == 0:
-        await query.answer(f"❌ No {rtype} cards yet.", show_alert=True); return
+        await query.answer(f"No {rtype} cards yet.", show_alert=True); return
 
-    await query.answer("📦 Generating…")
+    await query.answer("Generating…")
     try:
         await context.bot.send_document(
             chat_id=query.message.chat.id,
@@ -643,16 +643,16 @@ async def cb_mst_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sid   = query.data.split(":")[-1]   # msts:<sid>
     sess  = MST_SESSIONS.get(sid)
     if not sess:
-        await query.answer("ℹ️ Session already finished.", show_alert=True); return
+        await query.answer("Session already finished.", show_alert=True); return
     if query.from_user.id != sess.get("user_id"):
-        await query.answer("❌ Not your session.", show_alert=True); return
+        await query.answer("Not your session.", show_alert=True); return
     if sess["status"] != "CHECKING":
-        await query.answer("ℹ️ Not running.", show_alert=True); return
+        await query.answer("Not running.", show_alert=True); return
 
     sess["status"] = "STOPPED"
     for t in MST_TASKS.get(sid, []):
         if not t.done(): t.cancel()
-    await query.answer("🛑 Stopped.")
+    await query.answer("Stopped.")
     try:
         await _update_progress(context.bot, sid, force=True)
     except Exception:
