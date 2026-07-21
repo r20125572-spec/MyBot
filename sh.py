@@ -7,10 +7,7 @@ from telegram import Update, LinkPreviewOptions, InlineKeyboardButton, InlineKey
 from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
-    CHANNEL_LINK, tg_emoji,
-    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
-    PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID, DECLINED_EMOJI_ID,
-    PROG_PROGRESS_EMOJI_ID, DEV_LINK,
+    CHANNEL_LINK, DEV_LINK,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
