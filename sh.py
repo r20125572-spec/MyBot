@@ -26,7 +26,7 @@ FALLBACK_SITE = "aloracosmetics.myshopify.com"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 BOT_CHANNEL   = "https://t.me/Batcardchk"
-BOT_NAME      = "Batman CardXChk"
+BOT_NAME      = "Batamanchk"
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -47,12 +47,12 @@ HIT_GATE_EMOJI_ID      = "5341715473882955310"
 HIT_RESP_EMOJI_ID      = "5839116473951328489"
 
 # Progress-message emojis (msh.py)
-PROG_GATE_EMOJI_ID     = "5341715473882955310"
+PROG_GATE_EMOJI_ID         = "5341715473882955310"
 PROG_PROGRESS_EMOJI_ID_SH  = "5258113901106580375"
-PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
-PROG_LIVE_EMOJI_ID_SH  = "6267225207560214192"
-PROG_DEAD_EMOJI_ID_SH  = "4958526153955476488"
-PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+PROG_CHARGED_EMOJI_ID      = "5427168083074628963"
+PROG_LIVE_EMOJI_ID_SH      = "6267225207560214192"
+PROG_DEAD_EMOJI_ID_SH      = "4958526153955476488"
+PROG_ERRORS_EMOJI_ID       = "4956611513369494230"
 
 # Button emojis (msh.py + mst.py)
 GATE_EMOJI_ID          = "5801044672658805468"
@@ -60,7 +60,7 @@ BTN_LIVE_EMOJI_ID      = "5039793437776282663"
 BTN_DEAD_EMOJI_ID      = "4956612582816351459"
 BTN_CHARGED_EMOJI_ID   = "5465465194056525619"
 BTN_ALL_EMOJI_ID       = "4956324463525233747"
-BTN_STOP_EMOJI_ID      = "6179444193518162239"   # red Stop — danger style in aiogram
+BTN_STOP_EMOJI_ID      = "6179444193518162239"
 CARD_CHK_BTN_EMOJI_ID  = "5935795874251674052"
 
 # Pool of charged emoji IDs — random per CHARGED hit (msh.py)
@@ -149,11 +149,16 @@ def load_sites() -> list:
         return [f"https://{FALLBACK_SITE}"]
 
 def load_proxies() -> list:
-    try:
-        with open("px.txt", "r") as f:
-            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    except FileNotFoundError:
-        return []
+    """Load proxies — proxies.txt first, px.txt as fallback."""
+    for fname in ("proxies.txt", "px.txt"):
+        try:
+            with open(fname, "r") as f:
+                px = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+            if px:
+                return px
+        except FileNotFoundError:
+            continue
+    return []
 
 def _clean_site(url: str) -> str:
     s = url.strip()
@@ -173,12 +178,12 @@ def _readable_resp(data: dict) -> str:
     return raw[:200] if len(raw) > 200 else raw
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESPONSE CLASSIFICATION — merged from msh.py + mst.py
+# RESPONSE CLASSIFICATION — synced from msh.py (1784626205918)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Shopify site/proxy errors (msh.py) — credit refunded
+# Shopify site/proxy/delivery errors — credit refunded, gate shown as Shopify 0-20$
 RETRY_ERRORS = [
-    # ── Shopify gate errors (msh.py) ──────────────────
+    # ── Core gate errors (msh.py) ─────────────────────────────────
     'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
     'product not found', 'hcaptcha detected', 'tax ammount empty',
     'del ammount empty', 'product id is empty', 'py id empty',
@@ -188,20 +193,22 @@ RETRY_ERRORS = [
     'connection error', 'connection error!', 'error processing card',
     '504', 'server error', 'client error', 'failed',
     'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
-    'token not found', 'invalid_response', 'resolve', 'curl error',
+    'token not found', 'invalid_response', 'resolve', 'item', 'curl error',
     'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED', 'could not resolve host',
     'connect tunnel failed', 'timeout', 'proxy error',
     'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
     'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
     'step 8 failed', 'step 9 failed', 'step 10 failed',
     'SESSION_ERROR',
-    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',           # → Gate: Shopify 0-20$ (not error)
+    # ── Delivery strategy errors — Gate shows Shopify 0-20$ (not Error)
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
     'DELIVERY_ZONE_NOT_FOUND',
     'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
     'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
     'no available delivery strategy found',
     'no available delivery strategy',
     'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
+    # ── Receipt / product errors ───────────────────────────────────
     'no available products found', 'could not extract receiptid',
     'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
     'could not extract signedhandles', 'receiptid missing',
@@ -210,15 +217,15 @@ RETRY_ERRORS = [
     'returned status 502', 'returned status 503', 'returned status 504',
     'store incompatible', 'extract signedHandles', 'missing receiptId',
     'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
-    # ── Stripe / mass gate errors (mst.py) ────────────
+    # ── Stripe / mass gate errors (mst.py) ────────────────────────
     'connection timed out', 'connection failed', 'unexpected error',
     'api error (http', 'api error', 'api timeout',
     'connection reset', 'network error',
 ]
 
-# Hard declines (msh.py + mst.py) — card is dead, credit deducted
+# Hard declines — card is dead, credit deducted
 DECLINED_RESPONSES = [
-    # ── Shopify declines (msh.py) ─────────────────────
+    # ── Shopify declines (msh.py) ─────────────────────────────────
     'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
     'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
     'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
@@ -226,8 +233,8 @@ DECLINED_RESPONSES = [
     'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
     'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
     'TRANSACTION_NOT_ALLOWED',
-    # ── Stripe declines (mst.py) ──────────────────────
-    'declined', 'card_declined', 'do_not_honor', 'insufficient_funds',
+    # ── Stripe declines (mst.py) ──────────────────────────────────
+    'declined', 'card_declined', 'do_not_honor', 'insufficient_funds_declined',
     'lost_card', 'stolen_card', 'expired_card', 'incorrect_cvc',
     'processing_error', 'fraudulent', 'pickup_card', 'restricted_card',
     'security_violation', 'service_not_allowed', 'transaction_not_allowed',
@@ -236,16 +243,15 @@ DECLINED_RESPONSES = [
 
 def classify_response(message: str) -> str:
     """
-    Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR.
+    Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR
 
-    Merged from msh.py + mst.py:
-    ─ CHARGED  : ORDER_PAID / CHARGED → show real price (Gate ➳ Shopify | 2.1 USD)
-    ─ TDS      : 3DS_REQUIRED → Live [3DS]
-    ─ LIVE     : INSUFFICIENT_FUNDS / INCORRECT_CVV/CVC/ZIP / approved (Stripe)
-    ─ DEAD     : Any hard decline keyword → Gate ➳ Shopify 0-20$
-    ─ RETRY    : Site/proxy/delivery errors → credit refunded, Gate ➳ Shopify 0-20$
-               → e.g. "No available delivery strategy found" maps here
-    ─ ERROR    : Anything else → credit refunded, Gate ➳ Shopify 0-20$
+    Synced from msh.py (1784626205918) + mst.py:
+    ─ CHARGED : ORDER_PAID / CHARGED  → Gate ➳ Shopify | <price> <currency>
+    ─ TDS     : 3DS_REQUIRED           → Live [3DS], Gate ➳ Shopify 0-20$
+    ─ LIVE    : INSUFFICIENT_FUNDS / INCORRECT_CVV/CVC/ZIP → Gate ➳ Shopify 0-20$
+    ─ DEAD    : Hard decline keyword   → Gate ➳ Shopify 0-20$
+    ─ RETRY   : Site/proxy/delivery errors → credit refunded, Gate ➳ Shopify 0-20$
+    ─ ERROR   : Anything else          → credit refunded, Gate ➳ Shopify 0-20$
     """
     mu = message.upper()
     ml = message.lower()
@@ -255,15 +261,15 @@ def classify_response(message: str) -> str:
         return "CHARGED"
 
     # 3DS challenge — counts as Live, tracked separately
-    if "3DS_REQUIRED" in mu or "3D_SECURE" in mu or "3DS" in mu:
+    if "3DS_REQUIRED" in mu or "3D_SECURE" in mu:
         return "TDS"
 
-    # Live: strong evidence card is valid but blocked/insufficient
+    # Live: strong evidence card is valid but blocked / insufficient
     if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
             or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
         return "LIVE"
 
-    # Stripe "approved" status (mst.py gate)
+    # Stripe "approved"
     if mu.strip() == "APPROVED" or "APPROVED" in mu:
         return "LIVE"
 
@@ -278,7 +284,7 @@ def classify_response(message: str) -> str:
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
-    # Stripe "error" / "timeout" status (mst.py gate) → RETRY
+    # Stripe "error" / "timeout" status → RETRY
     if mu.strip() in ("ERROR", "TIMEOUT"):
         return "RETRY"
 
@@ -312,20 +318,19 @@ async def call_shopii(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESULT MESSAGE BUILDER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Layout matches the screenshot + msh.py _build_hit_dm exactly:
-#
-#   [❆] Charged 💎                ← clickable [❆] link
+# Layout:
+#   [❆] Charged 💎          ← clickable [❆] link
 #
 #   💳
-#      ⤷ 4848100079211955|04|28|504   ← monospace
-#   Gate ➳ Shopify | 2.1 USD      ← CHARGED shows real price
+#      ⤷ 4848...|04|28|504  ← monospace
+#   Gate ➳ Shopify | 2.1 USD  ← CHARGED shows real price
 #   ──────────
 #   Resp ➳ ORDER_PAID
-#   Bin  ➳ VISA - PUBLIC BANK BERHAD - 🇲🇾 MALAYSIA  ← monospace
+#   Bin  ➳ VISA - BANK - 🇲🇾 MALAYSIA  ← monospace
 #   ──────────
 #   ⏱ ➳ 13s
 #   👤 ➳ Tom ⭐
-#   ⚡ ➳ Batman CardXChk ⭐
+#   ⚡ ➳ Batamanchk ⭐
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _build_result_msg(
@@ -376,7 +381,6 @@ def _build_result_msg(
 
     elif verdict == "RETRY":
         # Site/proxy/delivery errors — Gate still shown as Shopify 0-20$
-        # (e.g. "No available delivery strategy found" → still Shopify 0-20$)
         status_line = (
             f'<b><a href="{BOT_CHANNEL}">[❆]</a> Retry '
             f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>'
@@ -479,26 +483,15 @@ async def _check_force_sub(user_id: int, context) -> list:
     return not_joined
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BACK BUTTON — red ❌ (PTB InlineKeyboardButton)
-# Note: PTB does not support Telegram's "danger" button style
-# (that's aiogram-only). We use a ❌ emoji prefix so it appears
-# visually distinct and red-ish in intent.
+# BACK BUTTON
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _kb_with_back(premium: bool) -> InlineKeyboardMarkup:
-    """
-    Returns kb_result markup from config (the standard result keyboard)
-    PLUS a red-labeled back/channel button at the bottom.
-    Uses the stop emoji from mst.py for the red back effect.
-    """
-    # Start with whatever kb_result returns, then append Batman channel row
     try:
         base_kb = kb_result(premium)
         rows    = list(base_kb.inline_keyboard) if hasattr(base_kb, "inline_keyboard") else []
     except Exception:
         rows = []
-
-    # Add Batman channel button (acts as the "back" branded button)
     rows.append([
         InlineKeyboardButton(
             "❌ 𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
