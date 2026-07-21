@@ -158,7 +158,15 @@ def classify_response(resp_text: str) -> str:
 from mass import get_mass_handlers
 from b3 import get_b3_handler
 from chk import get_chk_handler
-from sh import get_sh_handler
+from sh import (
+    get_sh_handler,
+    classify_response   as _sh_classify,   # battle-tested — same as /sh
+    _call_shopii        as _sh_call_shopii, # same real API call as /sh
+    _readable_resp      as _sh_readable_resp,
+    _clean_site         as _sh_clean_site,
+    _load_sites         as _sh_load_sites,
+    _load_proxies       as _sh_load_proxies,
+)
 from mst import get_mst_handlers
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2311,45 +2319,35 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML", reply_markup=stop_kb
     )
 
-    # ── Load sites and proxies ─────────────────────────────────────
-    sites: list[str] = []
-    proxies: list[str] = []
-    try:
-        with open("sites.txt") as f:
-            sites = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    except FileNotFoundError:
-        pass
-    if not sites:
-        sites = ["aloracosmetics.myshopify.com"]
-    try:
-        with open("px.txt") as f:
-            proxies = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    except FileNotFoundError:
-        pass
+    # ── Load sites and proxies — same logic as /sh so same results ──
+    # _sh_load_sites: reads sites.txt, falls back to aloracosmetics
+    # _sh_load_proxies: tries proxies.txt → px.txt → proxy.txt
+    sites   = _sh_load_sites()
+    proxies = _sh_load_proxies()
 
     GOSHOPI = "https://goshopi.up.railway.app/shopii"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # SPEED SETTINGS — one card at a time, full 120 s timeout
-    # This gives the real Shopify gate time to respond properly.
-    # Cards are checked sequentially so every response is real.
+    # SPEED SETTINGS
+    # 5 cards checked in parallel — fast but real responses.
+    # ERRORs were caused by the broken classifier (now fixed),
+    # not by parallelism. 120 s per card keeps the gate happy.
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    CARD_TIMEOUT       = 120   # seconds per card
-    DELAY_BETWEEN      = 3     # seconds between cards (don't hammer gate)
-    MAX_RETRIES        = 1     # retry once on RETRY/ERROR with a different site
-    CONNECTOR_LIMIT    = 5
+    CONCURRENCY    = 5     # parallel workers
+    CARD_TIMEOUT   = 120   # seconds timeout per card
+    CONNECTOR_LIM  = 20    # TCP connection pool size
+    PROG_INTERVAL  = 5.0   # progress message refresh (seconds)
 
-    # ── Helpers ─────────────────────────────────────────────────────
-    def _clean_site(s: str) -> str:
-        for pfx in ("https://", "http://"):
-            if s.startswith(pfx):
-                s = s[len(pfx):]
-        return s.rstrip("/")
+    sem   = asyncio.Semaphore(CONCURRENCY)
+    _lock = asyncio.Lock()
 
-    def _build_progress_text(checked: int, elapsed: float) -> str:
-        mins = int(elapsed // 60)
-        secs = int(elapsed % 60)
-        ts   = f"{mins}m {secs}s" if mins else f"{secs}s"
+    # ── Progress helpers ────────────────────────────────────────────
+    def _ts(sec: float) -> str:
+        s = int(sec); m = s // 60; s = s % 60
+        return f"{m}m {s}s" if m else f"{s}s"
+
+    def _build_progress_text(elapsed: float) -> str:
+        checked = charged_count + live_count + dead_count + error_count
         return (
             f"{E_GATE} <b>Gate</b> ➳ Shopify 0-20$\n"
             f"{E_PROGRESS} <b>Progress</b> ➳ {checked}/{total}\n"
@@ -2357,119 +2355,114 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{E_LIVE} <b>Live</b> ➳ {live_count}\n"
             f"{E_DECLINED} <b>Dead</b> ➳ {dead_count}\n"
             f"{E_ERRORS} <b>Errors</b> ➳ {error_count}\n"
-            f"{E_TIME} <b>Time</b> ➳ {ts}\n"
+            f"{E_TIME} <b>Time</b> ➳ {_ts(elapsed)}\n"
             f"{E_USER} ➳ {escape(uname)} {E_PRO}\n"
             f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
         )
 
-    def _build_progress_kb(running: bool = True) -> RawMarkup:
-        chk = live_count + dead_count + error_count + charged_count
-        row1 = [
-            _btn(f"Charged ({charged_count})", cb=f"dl_charged_{task_id}",
-                 style="primary", icon=BTN_CHARGED_EMOJI_ID),
-            _btn(f"Live ({live_count})", cb=f"dl_live_{task_id}",
-                 style="primary", icon=BTN_LIVE_EMOJI_ID),
-            _btn(f"All ({chk})", cb=f"dl_all_{task_id}", icon=BTN_ALL_EMOJI_ID),
-        ]
-        rows = [row1]
-        if running:
-            rows.append([_btn("Stop", cb=f"stop_msh_{task_id}",
-                              style="danger", icon=BTN_STOP_EMOJI_ID)])
-        return RawMarkup(rows)
+    def _build_progress_kb() -> RawMarkup:
+        chk = charged_count + live_count + dead_count + error_count
+        return RawMarkup([
+            [
+                _btn(f"Charged ({charged_count})", cb=f"dl_charged_{task_id}",
+                     style="primary", icon=BTN_CHARGED_EMOJI_ID),
+                _btn(f"Live ({live_count})", cb=f"dl_live_{task_id}",
+                     style="primary", icon=BTN_LIVE_EMOJI_ID),
+                _btn(f"All ({chk})", cb=f"dl_all_{task_id}", icon=BTN_ALL_EMOJI_ID),
+            ],
+            [_btn("Stop", cb=f"stop_msh_{task_id}", style="danger", icon=BTN_STOP_EMOJI_ID)],
+        ])
 
-    # ── Single-card API call — tries once, returns (verdict, resp_text, price, currency) ─
-    async def _call_goshopi(session, card: str, site: str, proxy) -> tuple:
-        params: dict = {"cc": card, "site": site}
-        if proxy:
-            params["proxy"] = proxy
-        try:
-            async with session.get(
-                GOSHOPI, params=params,
-                timeout=_aiohttp.ClientTimeout(total=CARD_TIMEOUT)
-            ) as resp:
-                try:
-                    data = await resp.json(content_type=None)
-                except Exception:
-                    raw = await resp.text()
-                    data = {"Response": raw}
+    # ── Progress loop — updates every 5 s independently ─────────────
+    async def _progress_loop() -> None:
+        while True:
+            await asyncio.sleep(PROG_INTERVAL)
+            elapsed = time.time() - start_time
+            try:
+                await msg.edit_text(
+                    _build_progress_text(elapsed),
+                    parse_mode="HTML",
+                    reply_markup=_build_progress_kb(),
+                )
+            except Exception:
+                pass
+
+    # ── Single-card worker ──────────────────────────────────────────
+    # Uses sh.py's proven _call_shopii + classify_response — same as /sh.
+    async def _worker(card: str, session) -> None:
+        nonlocal live_count, dead_count, error_count, charged_count
+        nonlocal credits_used, stopped_no_credits
+
+        async with sem:
+            # Stop / credit guard
+            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
+                return
+            if is_trial and ud.get("credits", 0) <= 0:
+                async with _lock:
+                    stopped_no_credits = True
+                return
+
+            site  = _sh_clean_site(random.choice(sites))
+            proxy = random.choice(proxies) if proxies else None
+
+            # API call — same code path as /sh
+            try:
+                data = await _sh_call_shopii(session, card, site, proxy)
+            except asyncio.TimeoutError:
+                data = {"Response": "TIMEOUT"}
+            except Exception as e:
+                data = {"Response": f"CONNECTION_ERROR: {str(e)[:80]}"}
 
             if not isinstance(data, dict):
                 data = {"Response": str(data)}
 
-            # Extract the real response text — goshopi key order
-            resp_text = ""
-            for k in ("Response", "response", "value", "message", "category"):
-                v = data.get(k)
-                if v and str(v).strip() not in ("", "null", "None", "false", "true"):
-                    resp_text = str(v).strip()
-                    break
-            if not resp_text:
-                resp_text = str(data)[:150]
+            resp_text = _sh_readable_resp(data)
+            price     = str(data.get("Price",    data.get("price",    "0.00"))).strip()
+            currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
+            verdict   = _sh_classify(resp_text)
 
-            price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
-            currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
-            verdict  = classify_response(resp_text)
-            return verdict, resp_text, price, currency
-
-        except asyncio.TimeoutError:
-            return "RETRY", "TIMEOUT — gate took too long", "0.00", "USD"
-        except Exception as e:
-            return "ERROR", f"CONNECTION_ERROR: {str(e)[:80]}", "0.00", "USD"
-
-    # ── Sequential card checker — one card at a time ─────────────────
-    async def _check_sequential(cards_list: list, session) -> None:
-        nonlocal live_count, dead_count, error_count, charged_count
-        nonlocal credits_used, stopped_no_credits
-
-        for card in cards_list:
-            # Stop check
-            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-                break
-            # Credit check for trial
-            if is_trial and ud.get("credits", 0) <= 0:
-                stopped_no_credits = True
-                break
-
-            site  = _clean_site(random.choice(sites))
-            proxy = random.choice(proxies) if proxies else None
-
-            verdict, resp_text, price, currency = await _call_goshopi(
-                session, card, site, proxy
-            )
-
-            # ── Retry once on RETRY/ERROR with a different site/proxy ──
-            if verdict in ("RETRY", "ERROR") and MAX_RETRIES > 0:
-                await asyncio.sleep(2)
-                site2  = _clean_site(random.choice(sites))
+            # ── Retry once on RETRY/ERROR ──────────────────────────
+            if verdict in ("RETRY", "ERROR"):
+                site2  = _sh_clean_site(random.choice(sites))
                 proxy2 = random.choice(proxies) if proxies else None
-                verdict, resp_text, price, currency = await _call_goshopi(
-                    session, card, site2, proxy2
-                )
+                try:
+                    data2 = await _sh_call_shopii(session, card, site2, proxy2)
+                except asyncio.TimeoutError:
+                    data2 = {"Response": "TIMEOUT"}
+                except Exception as e2:
+                    data2 = {"Response": f"CONNECTION_ERROR: {str(e2)[:80]}"}
+                if not isinstance(data2, dict):
+                    data2 = {"Response": str(data2)}
+                resp_text = _sh_readable_resp(data2)
+                price     = str(data2.get("Price",    data2.get("price",    price))).strip()
+                currency  = str(data2.get("Currency", data2.get("currency", currency))).strip()
+                verdict   = _sh_classify(resp_text)
 
-            # ── Count results ──────────────────────────────────────────
-            if verdict == "CHARGED":
-                charged_count += 1
-                live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
-                live_hits_raw.append(card)
-                all_checked_raw.append(f"[CHARGED] {card} | {resp_text}")
-            elif verdict in ("LIVE", "TDS"):
-                live_count += 1
-                tag = "[TDS]  " if verdict == "TDS" else "[LIVE] "
-                live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
-                live_hits_raw.append(card)
-                all_checked_raw.append(f"{tag} {card} | {resp_text}")
-            elif verdict == "DEAD":
-                dead_count += 1
-                all_checked_raw.append(f"[DEAD]  {card} | {resp_text}")
-            else:
-                error_count += 1
-                all_checked_raw.append(f"[ERROR] {card} | {resp_text}")
+            # ── Update shared counters (locked) ────────────────────
+            async with _lock:
+                if verdict == "CHARGED":
+                    charged_count += 1
+                    live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
+                    live_hits_raw.append(card)
+                    all_checked_raw.append(f"[CHARGED] {card} | {resp_text}")
+                elif verdict in ("LIVE", "TDS"):
+                    live_count += 1
+                    tag = "[TDS]  " if verdict == "TDS" else "[LIVE] "
+                    live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
+                    live_hits_raw.append(card)
+                    all_checked_raw.append(f"{tag} {card} | {resp_text}")
+                elif verdict == "DEAD":
+                    dead_count += 1
+                    all_checked_raw.append(f"[DEAD]  {card} | {resp_text}")
+                else:
+                    error_count += 1
+                    all_checked_raw.append(f"[ERROR] {card} | {resp_text}")
 
-            if is_trial:
-                ud["credits"] = max(0, ud.get("credits", 0) - 1)
-                credits_used += 1
+                if is_trial:
+                    ud["credits"] = max(0, ud.get("credits", 0) - 1)
+                    credits_used += 1
 
-            # ── DM on CHARGED ──────────────────────────────────────────
+            # ── DM user on CHARGED ─────────────────────────────────
             if verdict == "CHARGED":
                 try:
                     await context.bot.send_message(
@@ -2477,11 +2470,10 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text=(
                             f"{E_CHARGED} <b>CHARGED #{charged_count}</b>\n"
                             f"──────────\n"
-                            f"<b>{E_CARD}</b>\n"
-                            f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
+                            f"{E_CARD} <b>⤷ <code>{escape(card)}</code></b>\n"
                             f"<b>Gate ➳ Shopify | {escape(price)} {escape(currency)}</b>\n"
                             f"──────────\n"
-                            f"<b>Resp ➳ {escape(resp_text[:100])}</b>\n"
+                            f"<b>Resp ➳ {escape(resp_text[:120])}</b>\n"
                             f"──────────\n"
                             f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
                         ),
@@ -2490,37 +2482,28 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-            # ── Live progress update after each card ───────────────────
-            checked_now = charged_count + live_count + dead_count + error_count
-            elapsed     = time.time() - start_time
-            try:
-                await msg.edit_text(
-                    _build_progress_text(checked_now, elapsed),
-                    parse_mode="HTML",
-                    reply_markup=_build_progress_kb(running=True),
-                )
-            except Exception:
-                pass
-
-            # ── Delay between cards ────────────────────────────────────
-            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-                break
-            await asyncio.sleep(DELAY_BETWEEN)
-
-    # ── Run ─────────────────────────────────────────────────────────
+    # ── Run all workers concurrently ────────────────────────────────
     connector = _aiohttp.TCPConnector(
-        limit=CONNECTOR_LIMIT,
+        limit=CONNECTOR_LIM,
         ttl_dns_cache=300,
         enable_cleanup_closed=True,
     )
+    prog_task = asyncio.create_task(_progress_loop())
     try:
         async with _aiohttp.ClientSession(
             connector=connector,
-            timeout=_aiohttp.ClientTimeout(total=None),  # no session-level cap; per-card handles it
+            timeout=_aiohttp.ClientTimeout(total=None),  # no session cap; per-card 120 s handles it
         ) as session:
-            await _check_sequential(cards, session)
+            await asyncio.gather(
+                *[asyncio.create_task(_worker(card, session)) for card in cards],
+                return_exceptions=True,
+            )
     except Exception:
         pass
+    finally:
+        prog_task.cancel()
+        try: await prog_task
+        except asyncio.CancelledError: pass
 
     context.bot_data.get("msh_tasks", {}).pop(task_id, None)
     elapsed = time.time() - start_time
