@@ -1227,3 +1227,4 @@ async def run_mass_checker(bot: Bot, session_id, cards, user_obj, plan_name):
     else:
         logging.error(f"[MST] Session {session_id} not found in finally block!")
 
+    MST_TASKS.pop(session_id, None)
