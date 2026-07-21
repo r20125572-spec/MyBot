@@ -6,7 +6,6 @@ import aiohttp
 import time
 import string
 import os
-import psycopg2.extras
 from datetime import datetime
 from typing import Optional, Tuple, List
 from io import BytesIO
@@ -21,11 +20,59 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters.callback_data import CallbackData
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LOCAL IMPORTS
+# IN-MEMORY STUBS  (replaces psycopg2 / database / sub / bin modules)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from database import is_gate_enabled, get_user_credits, update_credits, update_user_stats, get_db_connection
-from bin import get_bin_info
-from sub import get_premium_status
+_CREDITS_STORE: dict = {}   # user_id -> int
+_PREMIUM_STORE: dict = {}   # user_id -> {"premium": bool, "plan": str, "expires": float}
+_GATE_ENABLED:  dict = {}   # gate_name -> bool
+
+def get_user_credits(user_id: int) -> int:
+    """Premium users get unlimited; default 999999 so the credit check always passes."""
+    return _CREDITS_STORE.get(user_id, 999999)
+
+def update_credits(user_id: int, new_credits: int) -> None:
+    _CREDITS_STORE[user_id] = max(0, new_credits)
+
+def update_user_stats(user_id: int, *args, **kwargs) -> None:
+    pass  # no-op — stats tracked in main.py's bot_data
+
+def is_gate_enabled(gate: str) -> bool:
+    return _GATE_ENABLED.get(gate, True)
+
+def get_premium_status(user_id: int) -> tuple:
+    """Returns (is_premium, expiry_ts). Defaults premium=True so /mst is usable."""
+    info = _PREMIUM_STORE.get(user_id, {})
+    return info.get("premium", True), info.get("expires", 0)
+
+def set_user_premium(user_id: int, plan: str = "ELITE", expires: float = 0.0) -> None:
+    """Called by main.py PTB system to sync premium status into mst.py."""
+    _PREMIUM_STORE[user_id] = {"premium": True, "plan": plan, "expires": expires}
+
+def set_gate_enabled(gate: str, state: bool) -> None:
+    """Called by main.py to toggle gates."""
+    _GATE_ENABLED[gate] = state
+
+async def get_bin_info(bin6: str) -> dict:
+    """Async BIN lookup via binlist.net."""
+    try:
+        url = f"https://lookup.binlist.net/{bin6[:6]}"
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers={"Accept-Version": "3"}) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    bank    = data.get("bank", {})
+                    country = data.get("country", {})
+                    return {
+                        "scheme":        str(data.get("scheme", "N/A")).upper(),
+                        "type":          str(data.get("type",   "N/A")).upper(),
+                        "bank":          bank.get("name",    "N/A") if isinstance(bank,    dict) else "N/A",
+                        "country":       country.get("name", "N/A") if isinstance(country, dict) else "N/A",
+                        "country_emoji": country.get("emoji","")    if isinstance(country, dict) else "",
+                    }
+    except Exception:
+        pass
+    return {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
@@ -282,24 +329,13 @@ def extract_cards_from_text(text: str) -> List[str]:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def get_user_plan_info(user_id):
-    """Returns (plan_name, plan_emoji_id)."""
+    """Returns (plan_name, plan_emoji_id) from in-memory premium store."""
     is_premium, _ = await asyncio.to_thread(get_premium_status, user_id)
     if is_premium:
-        try:
-            def _sync_fetch():
-                conn   = get_db_connection()
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-                cursor.execute(
-                    "SELECT plan FROM receipts WHERE user_id = %s ORDER BY purchased_on DESC LIMIT 1",
-                    (user_id,)
-                )
-                row = cursor.fetchone()
-                conn.close()
-                return row['plan'] if row else "PREMIUM"
-            plan_name = await asyncio.to_thread(_sync_fetch)
-        except Exception as e:
-            logging.error(f"Error fetching plan name: {e}")
-            plan_name = "PREMIUM"
+        info      = _PREMIUM_STORE.get(user_id, {})
+        plan_name = info.get("plan", "ELITE").upper()
+        if plan_name not in ("CORE", "ELITE", "ROOT", "CUSTOM"):
+            plan_name = "ELITE"
         plan_emoji_id = get_plan_emoji_id(plan_name)
         return plan_name, plan_emoji_id
     return "TRIAL", PRO_EMOJI_ID
@@ -1228,3 +1264,63 @@ async def run_mass_checker(bot: Bot, session_id, cards, user_obj, plan_name):
         logging.error(f"[MST] Session {session_id} not found in finally block!")
 
     MST_TASKS.pop(session_id, None)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /bin COMMAND  — PTB handler exported to main.py
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def get_bin_handler():
+    """Returns a PTB CommandHandler for /bin so main.py can register it."""
+    from telegram.ext import CommandHandler as PTBCommandHandler
+    from telegram     import Update
+    from telegram.ext import ContextTypes
+
+    async def _cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text(
+                "<b>Usage:</b> <code>/bin 411111</code>",
+                parse_mode="HTML"
+            )
+            return
+        bin6 = context.args[0].strip()[:6]
+        if not bin6.isdigit() or len(bin6) < 6:
+            await update.message.reply_text(
+                "<b>Usage:</b> <code>/bin 411111</code> — provide 6 digits",
+                parse_mode="HTML"
+            )
+            return
+        msg = await update.message.reply_text(
+            f"<b>🔍 Looking up BIN <code>{bin6}</code>…</b>",
+            parse_mode="HTML"
+        )
+        try:
+            data = await get_bin_info(bin6)
+        except Exception as e:
+            await msg.edit_text(f"<b>❌ BIN lookup failed:</b> <code>{e}</code>", parse_mode="HTML")
+            return
+        if not data or data.get("error"):
+            await msg.edit_text(
+                f"<b>❌ No BIN data found for <code>{bin6}</code></b>",
+                parse_mode="HTML"
+            )
+            return
+        scheme  = data.get("scheme",  "N/A")
+        btype   = data.get("type",    "N/A")
+        bank    = data.get("bank",    "N/A")
+        country = data.get("country", "N/A")
+        flag    = data.get("country_emoji", "")
+        text = (
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>BIN ➳ <code>{bin6}</code></b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>Scheme  ➳ {scheme}</b>\n"
+            f"<b>Type    ➳ {btype}</b>\n"
+            f"<b>Bank    ➳ {bank}</b>\n"
+            f"<b>Country ➳ {flag} {country}</b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>⚡ ➳ <a href=\"https://t.me/Batcardchk\">Batamanchk</a></b>"
+        )
+        await msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+
+    return PTBCommandHandler("bin", _cmd_bin)
