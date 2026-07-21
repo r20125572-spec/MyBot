@@ -3,7 +3,7 @@ import asyncio
 import time
 import random
 from html import escape
-from telegram import Update, LinkPreviewOptions
+from telegram import Update, LinkPreviewOptions, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
@@ -14,42 +14,56 @@ from config import (
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GOSHOPI SHOPIFY GATE  — uses goshopi.up.railway.app/shopii
-# Sites loaded from sites.txt (one full URL per line).
-# Proxies loaded from px.txt (one proxy per line).
+# GOSHOPI SHOPIFY GATE  — goshopi.up.railway.app/shopii
+# Sites: sites.txt | Proxies: px.txt
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 GOSHOPI_URL   = "https://goshopi.up.railway.app/shopii"
 FALLBACK_SITE = "aloracosmetics.myshopify.com"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BOT IDENTITY
+# BOT IDENTITY — Batman CardXChk
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-BOT_NAME    = "Batman CardXChk"
-BOT_LINK    = "https://t.me/Batcardchk"
-DEV_LINK_TG = f'<a href="{BOT_LINK}">{BOT_NAME}</a>'
+BOT_CHANNEL   = "https://t.me/Batcardchk"
+BOT_NAME      = "Batman CardXChk"
+DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EMOJI IDs — full set from msh.py
+# FULL EMOJI IDs — merged from msh.py + mst.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+# Core result emojis (msh.py)
 LIVE_EMOJI_ID          = "4958610528588008305"
-DECLINED_EMOJI_ID      = "4956612582816351459"
-# CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID, DEV_EMOJI_ID,
-# PRO_EMOJI_ID imported from config above.
+DECLINED_EMOJI_ID_SH   = "4956612582816351459"
+CARD_EMOJI_ID_SH       = "5800709991627232190"
+USER_EMOJI_ID_SH       = "4958689671950369798"
+TIME_EMOJI_ID_SH       = "5382194935057372936"
+DEV_EMOJI_ID_SH        = "6267091732861555879"
+PRO_EMOJI_ID_SH        = "6298678524379137990"
+
+# Hit-log emojis (msh.py)
 HIT_GATE_EMOJI_ID      = "5341715473882955310"
 HIT_RESP_EMOJI_ID      = "5839116473951328489"
+
+# Progress-message emojis (msh.py)
 PROG_GATE_EMOJI_ID     = "5341715473882955310"
-PROG_PROGRESS_EMOJI_ID_LOCAL = "5258113901106580375"   # local alias (config may differ)
+PROG_PROGRESS_EMOJI_ID_SH  = "5258113901106580375"
 PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
-PROG_LIVE_EMOJI_ID_LOCAL     = "6267225207560214192"
-PROG_DEAD_EMOJI_ID_LOCAL     = "4958526153955476488"
+PROG_LIVE_EMOJI_ID_SH  = "6267225207560214192"
+PROG_DEAD_EMOJI_ID_SH  = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+
+# Button emojis (msh.py + mst.py)
 GATE_EMOJI_ID          = "5801044672658805468"
+BTN_LIVE_EMOJI_ID      = "5039793437776282663"
+BTN_DEAD_EMOJI_ID      = "4956612582816351459"
+BTN_CHARGED_EMOJI_ID   = "5465465194056525619"
+BTN_ALL_EMOJI_ID       = "4956324463525233747"
+BTN_STOP_EMOJI_ID      = "6179444193518162239"   # red Stop — danger style in aiogram
 CARD_CHK_BTN_EMOJI_ID  = "5935795874251674052"
 
-# Pool of charged emoji IDs — a random one is picked per charged hit (from msh.py)
+# Pool of charged emoji IDs — random per CHARGED hit (msh.py)
 CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -59,8 +73,18 @@ CHARGED_EMOJI_IDS = [
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
 
+# Pool of live emoji IDs — random per LIVE hit (mst.py)
+LIVE_EMOJI_IDS = [
+    "5801154993188770160", "4956739572114392015", "5285221724634239278",
+    "5287777298894835685", "5285024405246725814", "5287547831677112267",
+    "5287658362660474522", "5285186510197381130", "5803233241963959320",
+    "5462902520215002477", "5787435351521889877", "5323674506705785412",
+    "5801005158959683238", "5436143465211640305", "5800688138833629633",
+    "5891044423856296980", "5436068999068662274", "5427168083074628963",
+]
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PLAN EMOJIS  — mirrors msh.py
+# PLAN EMOJIS — from msh.py + mst.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 PLAN_EMOJIS = {
@@ -79,37 +103,38 @@ SPECIAL_FONT_MAP = {
     'ᴢ': 'Z', 'Ɪ': 'I',
 }
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HELPER FUNCTIONS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def get_random_charged_emoji() -> str:
     return random.choice(CHARGED_EMOJI_IDS)
 
+def get_random_live_emoji() -> str:
+    return random.choice(LIVE_EMOJI_IDS)
 
 def get_plan_emoji_id(plan_name: str) -> str:
-    """Return the tg-emoji ID for a plan name (mirrors msh.py)."""
+    """Return tg-emoji ID for the user's plan (from msh.py + mst.py)."""
     if not plan_name:
-        return PRO_EMOJI_ID
+        return PRO_EMOJI_ID_SH
     normalized = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
     if normalized in PLAN_EMOJIS:
         return PLAN_EMOJIS[normalized]
     for key, eid in PLAN_EMOJIS.items():
         if key in normalized:
             return eid
-    return PRO_EMOJI_ID
-
+    return PRO_EMOJI_ID_SH
 
 def build_user_link(user) -> str:
-    """Build an HTML link to the user's profile (mirrors msh.py)."""
+    """HTML link to user profile (from mst.py)."""
     name = escape(user.first_name or "User")
     if user.username:
         return f'<a href="https://t.me/{user.username}">{name}</a>'
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
-
 def fmt_time(seconds: float) -> str:
-    """Format elapsed seconds → '13s' or '1m 5s'."""
     s = int(seconds)
     return f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SITE / PROXY LOADERS
@@ -118,19 +143,17 @@ def fmt_time(seconds: float) -> str:
 def load_sites() -> list:
     try:
         with open("sites.txt", "r") as f:
-            sites = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            sites = [l.strip() for l in f if l.strip() and not l.startswith("#")]
         return sites if sites else [f"https://{FALLBACK_SITE}"]
     except FileNotFoundError:
         return [f"https://{FALLBACK_SITE}"]
 
-
 def load_proxies() -> list:
     try:
         with open("px.txt", "r") as f:
-            return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except FileNotFoundError:
         return []
-
 
 def _clean_site(url: str) -> str:
     s = url.strip()
@@ -141,7 +164,6 @@ def _clean_site(url: str) -> str:
         s = s[4:]
     return s.rstrip("/")
 
-
 def _readable_resp(data: dict) -> str:
     for key in ("Response", "response", "value", "message", "category", "status", "detail", "error"):
         val = data.get(key)
@@ -150,28 +172,32 @@ def _readable_resp(data: dict) -> str:
     raw = str(data)
     return raw[:200] if len(raw) > 200 else raw
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RETRY / DECLINED KEYWORD LISTS — copied verbatim from msh.py
+# RESPONSE CLASSIFICATION — merged from msh.py + mst.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+# Shopify site/proxy errors (msh.py) — credit refunded
 RETRY_ERRORS = [
+    # ── Shopify gate errors (msh.py) ──────────────────
     'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
     'product not found', 'hcaptcha detected', 'tax ammount empty',
     'del ammount empty', 'product id is empty', 'py id empty',
-    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na', 'DELIVERY_ZONE_NOT_FOUND',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na',
     'site error! status: 429', 'site requires login!', 'failed to get token',
     'no valid products', 'not shopify!', 'site not supported for now!', 'VALIDATION_CUSTOM',
     'connection error', 'connection error!', 'error processing card',
-    '504', 'server error', 'client error', 'failed', 'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
-    'token not found', 'invalid_response', 'resolve', 'item', 'curl error',
+    '504', 'server error', 'client error', 'failed',
+    'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
+    'token not found', 'invalid_response', 'resolve', 'curl error',
     'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED', 'could not resolve host',
     'connect tunnel failed', 'timeout', 'proxy error',
     'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
     'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
     'step 8 failed', 'step 9 failed', 'step 10 failed',
-    'SESSION_ERROR', 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
-    'DELIVERY_ZONE_NOT_FOUND', 'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
+    'SESSION_ERROR',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',           # → Gate: Shopify 0-20$ (not error)
+    'DELIVERY_ZONE_NOT_FOUND',
+    'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
     'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
     'no available delivery strategy found',
     'no available delivery strategy',
@@ -184,9 +210,15 @@ RETRY_ERRORS = [
     'returned status 502', 'returned status 503', 'returned status 504',
     'store incompatible', 'extract signedHandles', 'missing receiptId',
     'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
+    # ── Stripe / mass gate errors (mst.py) ────────────
+    'connection timed out', 'connection failed', 'unexpected error',
+    'api error (http', 'api error', 'api timeout',
+    'connection reset', 'network error',
 ]
 
+# Hard declines (msh.py + mst.py) — card is dead, credit deducted
 DECLINED_RESPONSES = [
+    # ── Shopify declines (msh.py) ─────────────────────
     'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
     'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
     'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
@@ -194,42 +226,63 @@ DECLINED_RESPONSES = [
     'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
     'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
     'TRANSACTION_NOT_ALLOWED',
+    # ── Stripe declines (mst.py) ──────────────────────
+    'declined', 'card_declined', 'do_not_honor', 'insufficient_funds',
+    'lost_card', 'stolen_card', 'expired_card', 'incorrect_cvc',
+    'processing_error', 'fraudulent', 'pickup_card', 'restricted_card',
+    'security_violation', 'service_not_allowed', 'transaction_not_allowed',
+    'try_again_later', 'withdrawal_count_limit_exceeded',
 ]
-
 
 def classify_response(message: str) -> str:
     """
-    Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR
-    Mirrors msh.py exactly.
+    Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR.
 
-    RETRY cards get their credit refunded — they hit a site/proxy error,
-    not a real card decline. Gate is shown as Shopify 0-20$ (not an error).
+    Merged from msh.py + mst.py:
+    ─ CHARGED  : ORDER_PAID / CHARGED → show real price (Gate ➳ Shopify | 2.1 USD)
+    ─ TDS      : 3DS_REQUIRED → Live [3DS]
+    ─ LIVE     : INSUFFICIENT_FUNDS / INCORRECT_CVV/CVC/ZIP / approved (Stripe)
+    ─ DEAD     : Any hard decline keyword → Gate ➳ Shopify 0-20$
+    ─ RETRY    : Site/proxy/delivery errors → credit refunded, Gate ➳ Shopify 0-20$
+               → e.g. "No available delivery strategy found" maps here
+    ─ ERROR    : Anything else → credit refunded, Gate ➳ Shopify 0-20$
     """
     mu = message.upper()
     ml = message.lower()
 
+    # Charged / order paid (highest priority)
     if "ORDER_PAID" in mu or "CHARGED" in mu:
         return "CHARGED"
 
-    if "3DS_REQUIRED" in mu:
+    # 3DS challenge — counts as Live, tracked separately
+    if "3DS_REQUIRED" in mu or "3D_SECURE" in mu or "3DS" in mu:
         return "TDS"
 
+    # Live: strong evidence card is valid but blocked/insufficient
     if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
             or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
+        return "LIVE"
+
+    # Stripe "approved" status (mst.py gate)
+    if mu.strip() == "APPROVED" or "APPROVED" in mu:
         return "LIVE"
 
     if "GENERIC_ERROR" in mu:
         return "DEAD"
 
+    # Hard declines → DEAD
     if any(d.upper() in mu for d in DECLINED_RESPONSES):
         return "DEAD"
 
-    # Site / proxy / delivery errors → RETRY (credit refunded, gate = Shopify 0-20$)
+    # Site / proxy / delivery errors → RETRY (credit refunded)
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
-    return "ERROR"
+    # Stripe "error" / "timeout" status (mst.py gate) → RETRY
+    if mu.strip() in ("ERROR", "TIMEOUT"):
+        return "RETRY"
 
+    return "ERROR"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # API CALL
@@ -256,40 +309,30 @@ async def call_shopii(
     except Exception as e:
         return {"Response": f"CONNECTION_ERROR: {e}", "_error": True}
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESULT MESSAGE BUILDER — matches msh.py _build_hit_dm exactly
+# RESULT MESSAGE BUILDER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Layout matches the screenshot + msh.py _build_hit_dm exactly:
+#
+#   [❆] Charged 💎                ← clickable [❆] link
+#
+#   💳
+#      ⤷ 4848100079211955|04|28|504   ← monospace
+#   Gate ➳ Shopify | 2.1 USD      ← CHARGED shows real price
+#   ──────────
+#   Resp ➳ ORDER_PAID
+#   Bin  ➳ VISA - PUBLIC BANK BERHAD - 🇲🇾 MALAYSIA  ← monospace
+#   ──────────
+#   ⏱ ➳ 13s
+#   👤 ➳ Tom ⭐
+#   ⚡ ➳ Batman CardXChk ⭐
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _build_result_msg(
-    card_raw: str,
-    resp_text: str,
-    verdict: str,
-    bin_txt: str,
-    api_price: str,
-    api_currency: str,
-    elapsed: float,
-    user,
-    plan: str,
+    card_raw: str, resp_text: str, verdict: str,
+    bin_txt: str, api_price: str, api_currency: str,
+    elapsed: float, user, plan: str,
 ) -> str:
-    """
-    Build the full Telegram HTML result message for /sh.
-
-    Layout matches the screenshot exactly:
-
-        [❆] Charged 💎          ← status line (clickable link on [❆])
-
-        💳
-           ⤷ {card}              ← monospace
-        Gate ➳ Shopify | 2.1 USD  ← CHARGED shows price; others show 0-20$
-        ──────────
-        Resp ➳ ORDER_PAID
-        Bin  ➳ VISA - PUBLIC BANK BERHAD - 🇲🇾 MALAYSIA
-        ──────────
-        ⏱ ➳ 13s
-        👤 ➳ Tom ⭐
-        ⚡ ➳ Batman CardXChk ⭐
-    """
     plan_emoji_id = get_plan_emoji_id(plan)
     user_link     = build_user_link(user)
     time_str      = fmt_time(elapsed)
@@ -299,50 +342,50 @@ def _build_result_msg(
     safe_price    = escape(api_price)
     safe_cur      = escape(api_currency)
 
-    # ── Status line ──────────────────────────────────────────────
+    # ── Status line + gate line per verdict ─────────────────────
     if verdict == "CHARGED":
         charged_eid = get_random_charged_emoji()
         status_line = (
-            f'<b><a href="{BOT_LINK}">[❆]</a> Charged '
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Charged '
             f'<tg-emoji emoji-id="{charged_eid}">💎</tg-emoji></b>'
         )
-        gate_line = (
-            f'<b>Gate ➳ Shopify | {safe_price} {safe_cur}</b>'
-        )
+        gate_line = f'<b>Gate ➳ Shopify | {safe_price} {safe_cur}</b>'
 
     elif verdict == "TDS":
+        live_eid    = get_random_live_emoji()
         status_line = (
-            f'<b><a href="{BOT_LINK}">[❆]</a> Live '
-            f'<tg-emoji emoji-id="{LIVE_EMOJI_ID}">✅</tg-emoji> [3DS]</b>'
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Live '
+            f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji> [3DS]</b>'
         )
         gate_line = '<b>Gate ➳ Shopify 0-20$</b>'
 
     elif verdict == "LIVE":
+        live_eid    = get_random_live_emoji()
         status_line = (
-            f'<b><a href="{BOT_LINK}">[❆]</a> Live '
-            f'<tg-emoji emoji-id="{LIVE_EMOJI_ID}">✅</tg-emoji></b>'
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Live '
+            f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>'
         )
         gate_line = '<b>Gate ➳ Shopify 0-20$</b>'
 
     elif verdict == "DEAD":
         status_line = (
-            f'<b><a href="{BOT_LINK}">[❆]</a> Dead '
-            f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">❌</tg-emoji></b>'
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Dead '
+            f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID_SH}">❌</tg-emoji></b>'
         )
         gate_line = '<b>Gate ➳ Shopify 0-20$</b>'
 
     elif verdict == "RETRY":
-        # Site/proxy/delivery error — gate still shown as Shopify 0-20$
-        # (e.g. "No available delivery strategy found" still gets this label)
+        # Site/proxy/delivery errors — Gate still shown as Shopify 0-20$
+        # (e.g. "No available delivery strategy found" → still Shopify 0-20$)
         status_line = (
-            f'<b><a href="{BOT_LINK}">[❆]</a> Retry '
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Retry '
             f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>'
         )
         gate_line = '<b>Gate ➳ Shopify 0-20$</b>'
 
     else:  # ERROR
         status_line = (
-            f'<b><a href="{BOT_LINK}">[❆]</a> Error '
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Error '
             f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>'
         )
         gate_line = '<b>Gate ➳ Shopify 0-20$</b>'
@@ -350,20 +393,49 @@ def _build_result_msg(
     return (
         f'{status_line}\n'
         f'\n'
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID_SH}">💳</tg-emoji></b>\n'
         f'<b>   ⤷ <code>{safe_card}</code></b>\n'
         f'{gate_line}\n'
         f'<b>──────────</b>\n'
         f'<b>Resp ➳ {safe_resp}</b>\n'
         f'<b>Bin  ➳ <code>{safe_bin}</code></b>\n'
         f'<b>──────────</b>\n'
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_str}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {user_link} '
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID_SH}">⏱</tg-emoji> ➳ {time_str}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID_SH}">👤</tg-emoji> ➳ {user_link} '
         f'<tg-emoji emoji-id="{plan_emoji_id}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {DEV_LINK_TG} '
-        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID_SH}">⚡</tg-emoji> ➳ {DEV_LINK_HTML} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID_SH}">⭐</tg-emoji></b>'
     )
 
+
+def _build_timeout_msg(card_raw: str, elapsed: float) -> str:
+    return (
+        f'<b><a href="{BOT_CHANNEL}">[❆]</a> Timeout '
+        f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⏱</tg-emoji></b>\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID_SH}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{escape(card_raw)}</code></b>\n'
+        f'<b>Gate ➳ Shopify 0-20$</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b>Resp ➳ Request Timed Out</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID_SH}">⏱</tg-emoji> ➳ {fmt_time(elapsed)}</b>'
+    )
+
+
+def _build_error_msg(card_raw: str, err: str, elapsed: float) -> str:
+    return (
+        f'<b><a href="{BOT_CHANNEL}">[❆]</a> Error '
+        f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID_SH}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{escape(card_raw)}</code></b>\n'
+        f'<b>Gate ➳ Shopify 0-20$</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b>Resp ➳ {escape(err[:150])}</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID_SH}">⏱</tg-emoji> ➳ {fmt_time(elapsed)}</b>'
+    )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PLAN HELPERS  (local — avoids circular import with main)
@@ -406,6 +478,34 @@ async def _check_force_sub(user_id: int, context) -> list:
             pass
     return not_joined
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BACK BUTTON — red ❌ (PTB InlineKeyboardButton)
+# Note: PTB does not support Telegram's "danger" button style
+# (that's aiogram-only). We use a ❌ emoji prefix so it appears
+# visually distinct and red-ish in intent.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _kb_with_back(premium: bool) -> InlineKeyboardMarkup:
+    """
+    Returns kb_result markup from config (the standard result keyboard)
+    PLUS a red-labeled back/channel button at the bottom.
+    Uses the stop emoji from mst.py for the red back effect.
+    """
+    # Start with whatever kb_result returns, then append Batman channel row
+    try:
+        base_kb = kb_result(premium)
+        rows    = list(base_kb.inline_keyboard) if hasattr(base_kb, "inline_keyboard") else []
+    except Exception:
+        rows = []
+
+    # Add Batman channel button (acts as the "back" branded button)
+    rows.append([
+        InlineKeyboardButton(
+            "❌ 𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
+            url=BOT_CHANNEL,
+        )
+    ])
+    return InlineKeyboardMarkup(rows)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # /sh COMMAND
@@ -429,7 +529,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Force-sub check ─────────────────────────────────
     not_joined = await _check_force_sub(user.id, context)
     if not_joined:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
         rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
         await update.message.reply_text(
@@ -474,7 +573,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining      = 25 - (time.time() - last_check)
         if remaining > 0:
             await update.message.reply_text(
-                f"<b>⏳ Cooldown</b>\n──────────\nWait <b>{remaining:.1f}s</b> before your next check.\n──────────",
+                f"<b>⏳ Cooldown</b>\n──────────\n"
+                f"Wait <b>{remaining:.1f}s</b> before your next check.\n──────────",
                 parse_mode="HTML"
             )
             return
@@ -492,8 +592,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan    = ud.get("plan", "TRIAL")
     _lp     = LinkPreviewOptions(is_disabled=True)
 
+    # ── "Checking" spinner — gate name shown immediately ─
     msg = await update.message.reply_text(
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> '
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID_SH}">🔄</tg-emoji> '
         f'Checking — Gate ➳ Shopify 0-20$...</b>',
         parse_mode="HTML"
     )
@@ -537,9 +638,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if verdict in ("CHARGED", "TDS", "LIVE"):
             ud["approved_checks"] = ud.get("approved_checks", 0) + 1
         elif verdict in ("RETRY", "ERROR"):
-            # Refund credit — site/proxy/delivery error, not the card's fault
             if not premium:
-                ud["credits"] = ud.get("credits", 0) + 1
+                ud["credits"] = ud.get("credits", 0) + 1   # refund
             ud["declined_checks"] = ud.get("declined_checks", 0) + 1
         else:  # DEAD
             ud["declined_checks"] = ud.get("declined_checks", 0) + 1
@@ -548,7 +648,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["last_gate"]    = "Shopify 0-20$"
         ud["last_card"]    = card_raw[:6] + "xxxxxxxxxx"
 
-        # ── Build & send result ─────────────────────────
         text = _build_result_msg(
             card_raw, resp_text, verdict, bin_txt,
             api_price, api_currency, elapsed, user, plan,
@@ -565,16 +664,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ud["credits"] = ud.get("credits", 0) + 1
         elapsed = time.time() - start_time
         await msg.edit_text(
-            f'<b><a href="{BOT_LINK}">[❆]</a> Timeout '
-            f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⏱</tg-emoji></b>\n'
-            f'\n'
-            f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
-            f'<b>   ⤷ <code>{escape(card_raw)}</code></b>\n'
-            f'<b>Gate ➳ Shopify 0-20$</b>\n'
-            f'<b>──────────</b>\n'
-            f'<b>Resp ➳ Request Timed Out</b>\n'
-            f'<b>──────────</b>\n'
-            f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {fmt_time(elapsed)}</b>',
+            _build_timeout_msg(card_raw, elapsed),
             parse_mode="HTML",
             reply_markup=kb_result(premium),
             link_preview_options=_lp,
@@ -585,16 +675,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ud["credits"] = ud.get("credits", 0) + 1
         elapsed = time.time() - start_time
         await msg.edit_text(
-            f'<b><a href="{BOT_LINK}">[❆]</a> Error '
-            f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
-            f'\n'
-            f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
-            f'<b>   ⤷ <code>{escape(card_raw)}</code></b>\n'
-            f'<b>Gate ➳ Shopify 0-20$</b>\n'
-            f'<b>──────────</b>\n'
-            f'<b>Resp ➳ {escape(str(e)[:150])}</b>\n'
-            f'<b>──────────</b>\n'
-            f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {fmt_time(elapsed)}</b>',
+            _build_error_msg(card_raw, str(e), elapsed),
             parse_mode="HTML",
             reply_markup=kb_result(premium),
             link_preview_options=_lp,
