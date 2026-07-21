@@ -15,7 +15,7 @@ import asyncio
 import time
 import random
 from html import escape
-from telegram import Update, LinkPreviewOptions, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
@@ -598,7 +598,11 @@ def _get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
     return context.bot_data["user_data"][uid]
 
 
-def _is_premium(ud: dict) -> bool:
+def _is_premium(ud: dict, user_id: int = 0) -> bool:
+    # Owner is always premium — unlimited checks, no cooldown, no credit drain
+    if user_id and user_id == OWNER_ID:
+        ud["plan"] = "ROOT"
+        return True
     plan = ud.get("plan", "TRIAL").upper()
     if plan == "TRIAL":
         return False
@@ -673,7 +677,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Credits / cooldown ──────────────────────────────
     ud      = _get_user_data(user.id, context)
-    premium = _is_premium(ud)
+    premium = _is_premium(ud, user.id)
 
     if not premium:
         if ud.get("credits", 0) <= 0:
@@ -704,22 +708,28 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     site     = _clean_site(raw_site)
     proxy    = random.choice(proxies) if proxies else None
 
-    bin_num  = card_raw.replace("|", "").replace(" ", "")[:6]
-    plan     = ud.get("plan", "TRIAL")
-    _lp      = LinkPreviewOptions(is_disabled=True)
+    bin_num    = card_raw.replace("|", "").replace(" ", "")[:6]
+    plan       = ud.get("plan", "TRIAL")
+    start_time = time.time()
 
     # ── "Checking" spinner ───────────────────────────────
     spinner_kb = RawMarkup([
         [_btn("Checking...", url=BOT_CHANNEL, style="secondary", icon=PROG_PROGRESS_EMOJI_ID)]
     ])
-    msg = await update.message.reply_text(
-        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Shopify\n'
-        f'<tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Checking...</b>',
-        parse_mode="HTML",
-        reply_markup=spinner_kb,
-        link_preview_options=_lp,
-    )
-    start_time = time.time()
+    try:
+        msg = await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Shopify\n'
+            f'<tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Checking...</b>',
+            parse_mode="HTML",
+            reply_markup=spinner_kb,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        # RawMarkup failed — fall back to plain spinner
+        msg = await update.message.reply_text(
+            "🛒 Gate ➳ Shopify\n🔄 Checking...",
+            disable_web_page_preview=True,
+        )
 
     try:
         timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
@@ -731,7 +741,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         if isinstance(data, BaseException):
-            raise data
+            data = {"Response": f"CONNECTION_ERROR: {data}"}
         if isinstance(bin_data, BaseException):
             bin_data = {}
         if not isinstance(data, dict):
@@ -740,12 +750,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resp_text    = _readable_resp(data)
         api_price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
         api_currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
-
-        verdict = classify_response(resp_text)
+        verdict      = classify_response(resp_text)
 
         # ── BIN line ─────────────────────────────────────
         bin_txt = "N/A"
-        if isinstance(bin_data, dict) and bin_data:
+        if isinstance(bin_data, dict) and bin_data and not bin_data.get("error"):
             scheme  = str(bin_data.get("scheme",  "N/A")).upper()
             bank    = bin_data.get("bank",    "N/A")
             country = str(bin_data.get("country", "N/A")).upper()
@@ -759,7 +768,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ud["approved_checks"] = ud.get("approved_checks", 0) + 1
         elif verdict in ("RETRY", "ERROR"):
             if not premium:
-                ud["credits"] = ud.get("credits", 0) + 1   # refund
+                ud["credits"] = ud.get("credits", 0) + 1  # refund on error
             ud["declined_checks"] = ud.get("declined_checks", 0) + 1
         else:  # DEAD
             ud["declined_checks"] = ud.get("declined_checks", 0) + 1
@@ -769,55 +778,53 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["last_card"]    = card_raw[:6] + "xxxxxxxxxx"
 
         # ── Build and send result ─────────────────────────
-        text = _build_result_msg(
-            card_raw, resp_text, verdict, bin_txt,
-            api_price, api_currency, elapsed, user, plan,
-        )
+        text      = _build_result_msg(card_raw, resp_text, verdict, bin_txt,
+                                      api_price, api_currency, elapsed, user, plan)
         result_kb = _kb_for_verdict(verdict, premium)
 
-        await msg.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=result_kb,
-            link_preview_options=_lp,
-        )
+        try:
+            await msg.edit_text(text, parse_mode="HTML", reply_markup=result_kb,
+                                disable_web_page_preview=True)
+        except Exception:
+            # edit failed — send a new message instead
+            await update.message.reply_text(text, parse_mode="HTML",
+                                            reply_markup=result_kb,
+                                            disable_web_page_preview=True)
 
-        # ── CHARGED-only notifications ────────────────────
-        # DM the user in their private chat + log to hit-log group
+        # ── CHARGED-only: DM + hit-log ────────────────────
         if verdict == "CHARGED":
             await asyncio.gather(
-                _send_charged_dm(
-                    context, user,
-                    card_raw, resp_text, bin_txt,
-                    api_price, api_currency, elapsed, plan,
-                ),
-                _send_hit_log(
-                    context, user,
-                    resp_text, api_price, api_currency, plan,
-                ),
+                _send_charged_dm(context, user, card_raw, resp_text,
+                                 bin_txt, api_price, api_currency, elapsed, plan),
+                _send_hit_log(context, user, resp_text, api_price, api_currency, plan),
+                return_exceptions=True,
             )
 
     except asyncio.TimeoutError:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         elapsed = time.time() - start_time
-        await msg.edit_text(
-            _build_timeout_msg(card_raw, elapsed),
-            parse_mode="HTML",
-            reply_markup=_kb_error(premium),
-            link_preview_options=_lp,
-        )
+        try:
+            await msg.edit_text(_build_timeout_msg(card_raw, elapsed),
+                                parse_mode="HTML", reply_markup=_kb_error(premium),
+                                disable_web_page_preview=True)
+        except Exception:
+            await update.message.reply_text(_build_timeout_msg(card_raw, elapsed),
+                                            parse_mode="HTML", reply_markup=_kb_error(premium),
+                                            disable_web_page_preview=True)
 
     except Exception as e:
         if not premium:
             ud["credits"] = ud.get("credits", 0) + 1
         elapsed = time.time() - start_time
-        await msg.edit_text(
-            _build_error_msg(card_raw, str(e), elapsed),
-            parse_mode="HTML",
-            reply_markup=_kb_error(premium),
-            link_preview_options=_lp,
-        )
+        err_txt = _build_error_msg(card_raw, str(e), elapsed)
+        try:
+            await msg.edit_text(err_txt, parse_mode="HTML", reply_markup=_kb_error(premium),
+                                disable_web_page_preview=True)
+        except Exception:
+            await update.message.reply_text(err_txt, parse_mode="HTML",
+                                            reply_markup=_kb_error(premium),
+                                            disable_web_page_preview=True)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
