@@ -26,7 +26,7 @@ from config import (
     CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
     PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_LIVE_EMOJI_ID,
     PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
-    BOT_NAME,
+    BOT_NAME, RawMarkup, _btn,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -308,89 +308,41 @@ async def _call_shopii(
 # INLINE KEYBOARDS (raw dict — preserves style + icon)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _kb_charged(premium: bool) -> dict:
+def _kb_charged(premium: bool) -> RawMarkup:
     """Green 'CHARGED' button + purple 'Bot' button."""
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "CHARGED",
-                    "url": BOT_CHANNEL,
-                    "style": "success",
-                    "icon_custom_emoji_id": BTN_CHARGED_EMOJI_ID,
-                },
-                {
-                    "text": "𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
-                    "url": BOT_CHANNEL,
-                    "style": "primary",
-                    "icon_custom_emoji_id": CARD_CHK_BTN_EMOJI_ID,
-                },
-            ]
+    return RawMarkup([
+        [
+            _btn("CHARGED",       url=BOT_CHANNEL, style="success", icon=BTN_CHARGED_EMOJI_ID),
+            _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_CHANNEL, style="primary", icon=CARD_CHK_BTN_EMOJI_ID),
         ]
-    }
+    ])
 
-def _kb_live(premium: bool) -> dict:
+def _kb_live(premium: bool) -> RawMarkup:
     """Green 'LIVE' button + purple 'Bot' button."""
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "LIVE",
-                    "url": BOT_CHANNEL,
-                    "style": "success",
-                    "icon_custom_emoji_id": BTN_LIVE_EMOJI_ID,
-                },
-                {
-                    "text": "𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
-                    "url": BOT_CHANNEL,
-                    "style": "primary",
-                    "icon_custom_emoji_id": CARD_CHK_BTN_EMOJI_ID,
-                },
-            ]
+    return RawMarkup([
+        [
+            _btn("LIVE",          url=BOT_CHANNEL, style="success", icon=BTN_LIVE_EMOJI_ID),
+            _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_CHANNEL, style="primary", icon=CARD_CHK_BTN_EMOJI_ID),
         ]
-    }
+    ])
 
-def _kb_dead(premium: bool) -> dict:
+def _kb_dead(premium: bool) -> RawMarkup:
     """Red 'DEAD' button + purple 'Bot' button."""
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "DEAD",
-                    "url": BOT_CHANNEL,
-                    "style": "danger",
-                    "icon_custom_emoji_id": BTN_DEAD_EMOJI_ID,
-                },
-                {
-                    "text": "𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
-                    "url": BOT_CHANNEL,
-                    "style": "primary",
-                    "icon_custom_emoji_id": CARD_CHK_BTN_EMOJI_ID,
-                },
-            ]
+    return RawMarkup([
+        [
+            _btn("DEAD",          url=BOT_CHANNEL, style="danger",  icon=BTN_DEAD_EMOJI_ID),
+            _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_CHANNEL, style="primary", icon=CARD_CHK_BTN_EMOJI_ID),
         ]
-    }
+    ])
 
-def _kb_error(premium: bool) -> dict:
-    """Amber 'ERROR' button + purple 'Bot' button."""
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "ERROR / RETRY",
-                    "url": BOT_CHANNEL,
-                    "style": "secondary",
-                    "icon_custom_emoji_id": PROG_ERRORS_EMOJI_ID,
-                },
-                {
-                    "text": "𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
-                    "url": BOT_CHANNEL,
-                    "style": "primary",
-                    "icon_custom_emoji_id": CARD_CHK_BTN_EMOJI_ID,
-                },
-            ]
+def _kb_error(premium: bool) -> RawMarkup:
+    """Amber 'ERROR / RETRY' button + purple 'Bot' button."""
+    return RawMarkup([
+        [
+            _btn("ERROR / RETRY", url=BOT_CHANNEL, style="secondary", icon=PROG_ERRORS_EMOJI_ID),
+            _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_CHANNEL, style="primary",   icon=CARD_CHK_BTN_EMOJI_ID),
         ]
-    }
+    ])
 
 def _kb_for_verdict(verdict: str, premium: bool) -> dict:
     if verdict == "CHARGED":
@@ -578,16 +530,9 @@ async def _send_charged_dm(
         card_raw, resp_text, bin_txt,
         api_price, api_currency, elapsed, user, plan,
     )
-    dm_kb = {
-        "inline_keyboard": [[
-            {
-                "text": "CHARGED HIT",
-                "url": BOT_CHANNEL,
-                "style": "success",
-                "icon_custom_emoji_id": BTN_CHARGED_EMOJI_ID,
-            }
-        ]]
-    }
+    dm_kb = RawMarkup([
+        [_btn("CHARGED HIT", url=BOT_CHANNEL, style="success", icon=BTN_CHARGED_EMOJI_ID)]
+    ])
     try:
         await context.bot.send_message(
             chat_id=user.id,
@@ -623,16 +568,9 @@ async def _send_hit_log(
         f'<b>User ➛ {user_link} '
         f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>'
     )
-    log_kb = {
-        "inline_keyboard": [[
-            {
-                "text": "𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
-                "url": BOT_CHANNEL,
-                "style": "primary",
-                "icon_custom_emoji_id": CARD_CHK_BTN_EMOJI_ID,
-            }
-        ]]
-    }
+    log_kb = RawMarkup([
+        [_btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_CHANNEL, style="primary", icon=CARD_CHK_BTN_EMOJI_ID)]
+    ])
     try:
         await context.bot.send_message(
             chat_id=HIT_LOG_GROUP_ID,
@@ -771,16 +709,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _lp      = LinkPreviewOptions(is_disabled=True)
 
     # ── "Checking" spinner ───────────────────────────────
-    spinner_kb = {
-        "inline_keyboard": [[
-            {
-                "text": "Checking...",
-                "url": BOT_CHANNEL,
-                "style": "secondary",
-                "icon_custom_emoji_id": PROG_PROGRESS_EMOJI_ID,
-            }
-        ]]
-    }
+    spinner_kb = RawMarkup([
+        [_btn("Checking...", url=BOT_CHANNEL, style="secondary", icon=PROG_PROGRESS_EMOJI_ID)]
+    ])
     msg = await update.message.reply_text(
         f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Shopify\n'
         f'<tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Checking...</b>',
