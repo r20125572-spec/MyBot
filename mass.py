@@ -8,7 +8,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 from config import (
     API_TIMEOUT, get_bin_info, OWNER_ID, PREMIUM_GATES,
-    GATE_URLS, GATE_SITES, CHANNEL_LINK, FORCE_CHANNELS
+    GATE_URLS, GATE_SITES, CHANNEL_LINK, FORCE_CHANNELS,
+    E_GATE, E_PROGRESS, E_CHARGED, E_LIVE, E_DECLINED, E_ERRORS,
+    E_USER, E_DEV, E_PRO, E_ERRORS as E_WARN,
+    tg_emoji, PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID,
+    PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID,
+    PROG_CHARGED_EMOJI_ID, USER_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
+    BTN_CHARGED_EMOJI_ID, BTN_LIVE_EMOJI_ID, BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -242,15 +248,15 @@ def _build_progress_msg(
 ) -> str:
     """
     Premium sticker progress format:
-    🛒 Gate ➳ {gate_name}
-    🔄 Progress ➳ N/Total
-    Charged ➳ N 💎
-    Live ➳ N ✅
-    Dead ➳ N ❌
-    Errors ➳ N ⚠️
+    [tg-emoji] Gate ➳ {gate_name}
+    [tg-emoji] Progress ➳ N/Total
+    Charged ➳ N [tg-emoji]
+    Live ➳ N [tg-emoji]
+    Dead ➳ N [tg-emoji]
+    Errors ➳ N [tg-emoji]
     Time ➳ Xs
-    👤 ➳ Tom ⭐
-    ⚡ ➳ Batamanchk ⭐
+    [tg-emoji] ➳ Tom [tg-emoji]
+    [tg-emoji] ➳ Batamanchk [tg-emoji]
     """
     minutes  = int(elapsed // 60)
     seconds  = int(elapsed % 60)
@@ -259,15 +265,15 @@ def _build_progress_msg(
     dev_link  = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
     return (
-        f"<b>🛒 Gate ➳ {gate_name}</b>\n"
-        f"<b>🔄 Progress ➳ {done}/{total}</b>\n"
-        f"<b>Charged ➳ {charged} 💎</b>\n"
-        f"<b>Live ➳ {live} ✅</b>\n"
-        f"<b>Dead ➳ {dead} ❌</b>\n"
-        f"<b>Errors ➳ {errors} ⚠️</b>\n"
+        f"<b>{E_GATE} Gate ➳ {gate_name}</b>\n"
+        f"<b>{E_PROGRESS} Progress ➳ {done}/{total}</b>\n"
+        f"<b>Charged ➳ {charged} {E_CHARGED}</b>\n"
+        f"<b>Live ➳ {live} {E_LIVE}</b>\n"
+        f"<b>Dead ➳ {dead} {E_DECLINED}</b>\n"
+        f"<b>Errors ➳ {errors} {E_ERRORS}</b>\n"
         f"<b>Time ➳ {time_str}</b>\n"
-        f"<b>👤 ➳ {user_html} ⭐</b>\n"
-        f"<b>⚡ ➳ {dev_link} ⭐</b>"
+        f"<b>{E_USER} ➳ {user_html} {E_PRO}</b>\n"
+        f"<b>{E_DEV} ➳ {dev_link} {E_PRO}</b>"
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -281,7 +287,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
 
     # ── Maintenance check ──
     if context.bot_data.get("maintenance") and user_id != OWNER_ID:
-        await update.message.reply_text("⚠️ Bot is under maintenance."); return
+        await update.message.reply_text(f"{E_ERRORS} Bot is under maintenance."); return
 
     # ── Force subscribe check ──
     if user_id != OWNER_ID:
@@ -295,7 +301,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
                 pass
         if not_joined:
             rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
-            rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
+            rows.append([InlineKeyboardButton("I Joined — Verify Now", callback_data="check_sub")])
             await update.message.reply_text(
                 "<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
                 "Join channels to use mass check.\n━━━━━━━━━━━━━━━━━",
@@ -311,11 +317,11 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     )
     if not is_premium:
         await update.message.reply_text(
-            "<b>⚠️ Pʀᴇᴍɪᴜᴍ Gᴀᴛᴇ</b>\n\n"
+            f"<b>{E_ERRORS} Premium Gate</b>\n\n"
             "This gate is only for premium users.\nUpgrade: /plan",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 BUY PREMIUM", callback_data="mprice")],
+                [InlineKeyboardButton("BUY PREMIUM", callback_data="mprice")],
             ])
         )
         return
@@ -324,7 +330,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     cards = await extract_cards_from_update(update, context.bot, context)
     if not cards:
         await update.message.reply_text(
-            f"⚠️ <b>Uꜱᴀɢᴇ:</b>\n\n"
+            f"{E_ERRORS} <b>Usage:</b>\n\n"
             f"1️⃣ Reply to a .txt file and send <code>/{gate_key}</code>\n"
             f"2️⃣ Send a .txt file with <code>/{gate_key}</code> as caption\n"
             f"3️⃣ <code>/{gate_key} cc|mm|yy|cvv</code>",
@@ -334,7 +340,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
 
     if len(cards) > MAX_CARDS:
         await update.message.reply_text(
-            f"⚠️ Max <b>{MAX_CARDS:,}</b> cards per run. Your file has <b>{len(cards):,}</b> cards.",
+            f"{E_ERRORS} Max <b>{MAX_CARDS:,}</b> cards per run. Your file has <b>{len(cards):,}</b> cards.",
             parse_mode="HTML"
         )
         return
@@ -342,7 +348,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     api_url = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
     site    = GATE_SITES.get(gate_key, "example.com")
     if not api_url:
-        await update.message.reply_text("⚠️ Gate API not configured.", parse_mode="HTML")
+        await update.message.reply_text(f"{E_ERRORS} Gate API not configured.", parse_mode="HTML")
         return
 
     dynamic_proxies = load_list_from_file("px.txt", PROXIES)
@@ -449,12 +455,12 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
 def _create_result_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💎 CHARGED", callback_data="result_charge"),
-            InlineKeyboardButton("✅ LIVE",    callback_data="result_live"),
+            InlineKeyboardButton("CHARGED", callback_data="result_charge"),
+            InlineKeyboardButton("LIVE",    callback_data="result_live"),
         ],
         [
-            InlineKeyboardButton("🔐 3DS",    callback_data="result_3ds"),
-            InlineKeyboardButton("📦 ALL",    callback_data="result_all"),
+            InlineKeyboardButton("3DS",    callback_data="result_3ds"),
+            InlineKeyboardButton("ALL",    callback_data="result_all"),
         ],
     ])
 
@@ -476,7 +482,7 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     result_key = context.bot_data.get(f"last_mass_{user_id}")
     if not result_key or result_key not in context.bot_data:
-        await query.answer("⚠️ Results expired. Run the check again.", show_alert=True)
+        await query.answer(f"{E_ERRORS} Results expired. Run the check again.", show_alert=True)
         return
 
     results   = context.bot_data[result_key]
@@ -495,7 +501,7 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             resp   = r.get("error") if r.get("error") else r.get("response", "N/A")
             lines.append(f"Card: {card}\nStatus: {status}\nResponse: {resp}\n{'-'*30}")
         file_content = "\n".join(lines)
-        caption      = f"📦 All Results ({len(parsed):,} total) — @Batcardchk"
+        caption      = f"All Results ({len(parsed):,} total) — @Batcardchk"
         file_name    = f"BATAMANCHK_ALL_{user_id}.txt"
         bio          = BytesIO(file_content.encode("utf-8"))
         bio.name     = file_name
@@ -507,15 +513,15 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     if action == "result_live":
         cards_out = results.get("approved", [])
-        caption   = f"✅ LIVE Cards ({len(cards_out):,} found) — @Batcardchk"
+        caption   = f"LIVE Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"BATAMANCHK_LIVE_{user_id}.txt"
     elif action == "result_3ds":
         cards_out = results.get("threeds", [])
-        caption   = f"🔐 3DS Cards ({len(cards_out):,} found) — @Batcardchk"
+        caption   = f"3DS Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"BATAMANCHK_3DS_{user_id}.txt"
     elif action == "result_charge":
         cards_out = results.get("charged", [])
-        caption   = f"💎 Charged Cards ({len(cards_out):,} found) — @Batcardchk"
+        caption   = f"Charged Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"BATAMANCHK_CHARGED_{user_id}.txt"
     else:
         return
