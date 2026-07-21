@@ -20,6 +20,13 @@ from telegram.ext import CommandHandler, ContextTypes
 from config import (
     get_bin_info, kb_result, OWNER_ID, FORCE_CHANNELS, SUPPORT_LINK, API_TIMEOUT,
     CHANNEL_LINK, DEV_LINK,
+    E_GATE, E_PROGRESS, E_CHARGED, E_LIVE, E_DECLINED, E_ERRORS,
+    E_CARD, E_USER, E_TIME, E_DEV, E_PRO,
+    tg_emoji, get_plan_emoji_id, get_random_live_emoji,
+    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
+    PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_LIVE_EMOJI_ID,
+    PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
+    BOT_NAME,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -307,7 +314,7 @@ def _kb_charged(premium: bool) -> dict:
         "inline_keyboard": [
             [
                 {
-                    "text": "💎 CHARGED ✔",
+                    "text": "CHARGED",
                     "url": BOT_CHANNEL,
                     "style": "success",
                     "icon_custom_emoji_id": BTN_CHARGED_EMOJI_ID,
@@ -328,7 +335,7 @@ def _kb_live(premium: bool) -> dict:
         "inline_keyboard": [
             [
                 {
-                    "text": "✅ LIVE",
+                    "text": "LIVE",
                     "url": BOT_CHANNEL,
                     "style": "success",
                     "icon_custom_emoji_id": BTN_LIVE_EMOJI_ID,
@@ -349,7 +356,7 @@ def _kb_dead(premium: bool) -> dict:
         "inline_keyboard": [
             [
                 {
-                    "text": "❌ DEAD",
+                    "text": "DEAD",
                     "url": BOT_CHANNEL,
                     "style": "danger",
                     "icon_custom_emoji_id": BTN_DEAD_EMOJI_ID,
@@ -370,7 +377,7 @@ def _kb_error(premium: bool) -> dict:
         "inline_keyboard": [
             [
                 {
-                    "text": "⚠️ ERROR / RETRY",
+                    "text": "ERROR / RETRY",
                     "url": BOT_CHANNEL,
                     "style": "secondary",
                     "icon_custom_emoji_id": PROG_ERRORS_EMOJI_ID,
@@ -574,7 +581,7 @@ async def _send_charged_dm(
     dm_kb = {
         "inline_keyboard": [[
             {
-                "text": "💎 CHARGED HIT",
+                "text": "CHARGED HIT",
                 "url": BOT_CHANNEL,
                 "style": "success",
                 "icon_custom_emoji_id": BTN_CHARGED_EMOJI_ID,
@@ -688,12 +695,12 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Maintenance / gate off ──────────────────────────
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
         await update.message.reply_text(
-            "⚠️ Bot is under maintenance. Try again later.", parse_mode="HTML"
+            f"{E_ERRORS} Bot is under maintenance. Try again later.", parse_mode="HTML"
         )
         return
     if not context.bot_data.get("sh_on", True):
         await update.message.reply_text(
-            "⚠️ <b>Shopify gate is currently OFF.</b>", parse_mode="HTML"
+            f"{E_ERRORS} <b>Shopify gate is currently OFF.</b>", parse_mode="HTML"
         )
         return
 
@@ -701,7 +708,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     not_joined = await _check_force_sub(user.id, context)
     if not_joined:
         rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
-        rows.append([InlineKeyboardButton("✅ I Joined — Verify Now", callback_data="check_sub")])
+        rows.append([InlineKeyboardButton("I Joined — Verify Now", callback_data="check_sub")])
         await update.message.reply_text(
             "<b>Join Required</b>\n──────────\nJoin our channel & group to use this bot.",
             reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML",
@@ -733,7 +740,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not premium:
         if ud.get("credits", 0) <= 0:
             await update.message.reply_text(
-                "<b>❌ No Credits</b>\n──────────\n"
+                f"<b>{E_DECLINED} No Credits</b>\n──────────\n"
                 "You have 0 credits left.\n"
                 "Use /rm to redeem a code or /plan to upgrade.\n──────────",
                 parse_mode="HTML",
@@ -744,7 +751,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining      = 25 - (time.time() - last_check)
         if remaining > 0:
             await update.message.reply_text(
-                f"<b>⏳ Cooldown</b>\n──────────\n"
+                f"<b>{E_ERRORS} Cooldown</b>\n──────────\n"
                 f"Wait <b>{remaining:.1f}s</b> before your next check.\n──────────",
                 parse_mode="HTML",
             )
@@ -767,7 +774,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     spinner_kb = {
         "inline_keyboard": [[
             {
-                "text": "🔄 Checking...",
+                "text": "Checking...",
                 "url": BOT_CHANNEL,
                 "style": "secondary",
                 "icon_custom_emoji_id": PROG_PROGRESS_EMOJI_ID,
