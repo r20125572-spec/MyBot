@@ -19,6 +19,7 @@ OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 # 🤖  BOT IDENTITY
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VERSION  = "V4.3"
+BOT_NAME = "Batamanchk"
 DEV_LINK = "https://t.me/Batcardchk"
 
 BOT_USERNAME  = "batcardchk29_bot"
@@ -107,9 +108,12 @@ PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
 PROG_LIVE_EMOJI_ID     = "5427168083074628963"
 PROG_DEAD_EMOJI_ID     = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+PROG_CHARGED_EMOJI_ID  = "5386367538735104399"   # 💎 charged
 
 BTN_ALL_EMOJI_ID       = "4956324463525233747"
 BTN_STOP_EMOJI_ID      = "6179444193518162239"
+BTN_CHARGED_EMOJI_ID   = "5386367538735104399"   # 💎 green charged button
+BTN_LIVE_EMOJI_ID      = "5427168083074628963"   # ✅ green live button
 
 LIVE_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
@@ -177,6 +181,7 @@ E_DECLINED = tg_emoji(PROG_DEAD_EMOJI_ID,     "❌")
 E_ERRORS   = tg_emoji(PROG_ERRORS_EMOJI_ID,   "⚠️")
 E_PROGRESS = tg_emoji(PROG_PROGRESS_EMOJI_ID, "🔄")
 E_GATE     = tg_emoji(PROG_GATE_EMOJI_ID,     "🛒")
+E_CHARGED  = tg_emoji(PROG_CHARGED_EMOJI_ID,  "💎")
 E_HIT_RESP = tg_emoji(HIT_RESP_EMOJI_ID,      "✅")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
