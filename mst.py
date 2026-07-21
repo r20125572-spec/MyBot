@@ -35,6 +35,7 @@ from config import (
     CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
     DEV_EMOJI_ID, PRO_EMOJI_ID, HIT_RESP_EMOJI_ID,
     get_random_live_emoji, get_plan_emoji_id,
+    RawMarkup, _btn,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -44,10 +45,10 @@ HIT_LOG_GROUP_ID         = -1004398328329   # ← set to your hit-log group
 EXTRA_CHARGED_GROUP_ID   = -1003991915326   # ← set to your extra-log group
 STRIPE_GATE_API_URL      = "https://cardx.up.railway.app/stripe/cc={card}"
 
-MAX_CONCURRENT_CARDS     = 10
-CARD_TIMEOUT_SECONDS     = 60
-PROGRESS_UPDATE_INTERVAL = 5.0
-CARDS_PER_UPDATE         = 10
+MAX_CONCURRENT_CARDS     = 3     # real Stripe gate is slow; 3 parallel avoids hammering
+CARD_TIMEOUT_SECONDS     = 120   # give each card up to 2 minutes
+PROGRESS_UPDATE_INTERVAL = 10.0  # update every 10s to avoid Telegram flood limits
+CARDS_PER_UPDATE         = 5
 SESSION_CLEANUP_SECS     = 1800
 COMPLETED_KEEP_SECS      = 86400
 
@@ -78,28 +79,56 @@ def _stopped(sid: str) -> bool:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD RESPONSE CLASSIFIER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHARGED_KW = ["charged","payment_intent.succeeded","amount_captured",
-               "captured successfully","payment captured","charge succeeded",
-               "order placed","order confirmed","payment successful"]
-LIVE_KW    = ["approved","success","true","live","authenticated",
-               "authentication successful","thank you"]
-DEAD_KW    = ["declined","do_not_honor","insufficient funds","card declined",
-               "blocked","stolen","lost","expired","security violation",
-               "restricted","not permitted","fraud","invalid card","cvv"]
-RETRY_KW   = ["connection error","timeout","socket","ssl","rate limit",
-               "too many requests","service unavailable","gateway timeout"]
-
 def _classify(resp: str) -> str:
-    low = resp.lower()
-    for k in CHARGED_KW:
-        if k in low: return "CHARGED"
-    for k in LIVE_KW:
-        if k in low: return "LIVE"
-    for k in DEAD_KW:
-        if k in low: return "DEAD"
-    for k in RETRY_KW:
-        if k in low: return "RETRY"
-    return "DEAD"
+    """
+    Classify a raw gate response string.
+    Returns: CHARGED | LIVE | DEAD | RETRY | ERROR
+    Case-insensitive; handles both upper and lower gate responses.
+    """
+    mu = resp.upper()
+    ml = resp.lower()
+
+    # CHARGED — real money taken
+    if any(x in mu for x in (
+        "ORDER_PAID", "ORDER PAID", "CHARGED", "CAPTURED",
+        "PAYMENT_INTENT.SUCCEEDED", "AMOUNT_CAPTURED",
+        "PAYMENT CAPTURED", "CHARGE SUCCEEDED",
+        "ORDER PLACED", "ORDER CONFIRMED", "PAYMENT SUCCESSFUL",
+    )):
+        return "CHARGED"
+
+    # TDS / 3D Secure
+    if any(x in mu for x in ("3DS_REQUIRED", "3D_SECURE", "3D SECURE", "THREE_D_SECURE")):
+        return "LIVE"   # treat TDS as LIVE in Stripe mass (card is valid)
+
+    # LIVE — card valid but not charged
+    if any(x in mu for x in (
+        "INSUFFICIENT_FUNDS", "INCORRECT_CVV", "INCORRECT_CVC",
+        "INCORRECT_ZIP", "DO_NOT_HONOR", "DO NOT HONOR",
+        "APPROVED", "SUCCESS", "AUTHENTICATED",
+        "THANK YOU", "AUTHENTICATION SUCCESSFUL",
+    )):
+        return "LIVE"
+
+    # DEAD — hard decline
+    if any(x in mu for x in (
+        "DECLINED", "CARD_DECLINED", "GENERIC_DECLINE",
+        "PROCESSING_ERROR", "PICK_UP_CARD", "FRAUD_SUSPECTED",
+        "STOLEN", "LOST_CARD", "EXPIRED", "RESTRICTED",
+        "TRANSACTION_NOT_ALLOWED", "INVALID_CARD",
+        "SECURITY_VIOLATION", "CALL_ISSUER", "BLOCKED",
+    )):
+        return "DEAD"
+
+    # RETRY — infra/proxy/site errors
+    if any(x in ml for x in (
+        "connection error", "timeout", "socket", "ssl",
+        "rate limit", "too many requests", "service unavailable",
+        "gateway timeout", "proxy error", "hcaptcha",
+    )):
+        return "RETRY"
+
+    return "DEAD"   # unknown → treat as dead, not error
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HELPERS
@@ -185,24 +214,19 @@ async def _stripe(card: str) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # KEYBOARD BUILDERS  (raw dicts — coloured buttons)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _kb_running(sid: str, checked: int) -> dict:
-    return {"inline_keyboard": [
-        [{"text": f"All ({checked})", "callback_data": f"mstr:{sid}:all",
-          "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID}],
-        [{"text": "Stop", "callback_data": f"msts:{sid}",
-          "style": "danger",  "icon_custom_emoji_id": BTN_STOP_EMOJI_ID}],
-    ]}
+def _kb_running(sid: str, checked: int) -> RawMarkup:
+    return RawMarkup([
+        [_btn(f"All ({checked})", cb=f"mstr:{sid}:all", style="primary", icon=BTN_ALL_EMOJI_ID)],
+        [_btn("Stop",             cb=f"msts:{sid}",     style="danger",  icon=BTN_STOP_EMOJI_ID)],
+    ])
 
-def _kb_done(sid: str, live: int, dead: int) -> dict:
+def _kb_done(sid: str, live: int, dead: int) -> RawMarkup:
     total = live + dead
-    rows  = []
     row1  = []
-    if live: row1.append({"text": f"Live ({live})", "callback_data": f"mstr:{sid}:live",
-                           "style": "primary", "icon_custom_emoji_id": BTN_STOP_EMOJI_ID})
-    row1.append({"text": f"All ({total})", "callback_data": f"mstr:{sid}:all",
-                 "style": "primary", "icon_custom_emoji_id": BTN_ALL_EMOJI_ID})
-    rows.append(row1)
-    return {"inline_keyboard": rows}
+    if live:
+        row1.append(_btn(f"Live ({live})", cb=f"mstr:{sid}:live", style="primary", icon=BTN_STOP_EMOJI_ID))
+    row1.append(_btn(f"All ({total})", cb=f"mstr:{sid}:all", style="primary", icon=BTN_ALL_EMOJI_ID))
+    return RawMarkup([row1])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PROGRESS TEXT
@@ -406,8 +430,10 @@ async def _run_mass(bot, sid: str, cards: list):
                 raise
             except Exception as e:
                 logging.error(f"[MST] worker error {fmt}: {e}")
-                sess = MST_SESSIONS.get(sid)
-                if sess: sess["errors"] += 1
+                s = MST_SESSIONS.get(sid)
+                if s: s["errors"] += 1
+            # small delay between cards so the gate gets breathing room
+            await asyncio.sleep(2)
 
     tasks = [asyncio.create_task(_worker(fmt, cc)) for fmt, cc in cards]
     MST_TASKS[sid] = tasks
