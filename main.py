@@ -238,7 +238,7 @@ def gen_code(length: int = 10) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 def gen_receipt() -> str:
-    return f"Batman{random.randint(100000, 999999)}-CHK"
+    return f"Batamanchk{random.randint(100000, 999999)}-CHK"
 
 def get_referral_link(user_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
@@ -286,7 +286,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
         f"✰ <b>𝐑𝐞𝐟𝐞𝐫𝐫𝐚𝐥𝐬</b>  ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a> {E_PRO}",
+        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}",
     ]
     return "\n".join(lines)
 
@@ -384,7 +384,7 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     else:
         lines.append("━━━━━━━━━━━━━━━━━━━━")
 
-    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a> {E_PRO}")
+    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}")
     return "\n".join(lines)
 
 def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -412,7 +412,7 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"────────────\n"
         f"Choose an option below.\n"
         f"────────────\n"
-        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batman</a> {E_PRO}\n"
+        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}\n"
         f"<b>Version</b> ➳ {VERSION}"
     )
 
@@ -575,7 +575,7 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
         f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {uname_display} '
         f'{plan_emoji} ({plan_label})</b>\n'
         f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ '
-        f'<a href="{DEV_LINK}">Batman</a> '
+        f'<a href="{DEV_LINK}">Batamanchk</a> '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
@@ -596,7 +596,7 @@ def kb_main(user_id: int) -> RawMarkup:
     ])
 
 def kb_back(cb: str) -> RawMarkup:
-    return RawMarkup([[_btn("🔙 " + B("BACK"), cb=cb)]])
+    return RawMarkup([[_btn("🔙 " + B("BACK"), cb=cb, style="primary")]])
 
 def kb_price() -> RawMarkup:
     return RawMarkup([
@@ -1056,7 +1056,8 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
         f"<b>Credits</b>  ➳ Unlimited\n"
         f"<b>Expires</b>  ➳ {exp_date}\n"
         f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
-        f"──────────\nSave this receipt ID.\n{E_DEV} Batman {E_PRO}"
+        f"──────────\nSave this receipt ID.
+{E_DEV} Batamanchk {E_PRO}"
     )
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
@@ -3172,7 +3173,7 @@ def main():
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
 
-        logger.info(f"Batman Bot {VERSION} starting...")
+        logger.info(f"Batamanchk Bot {VERSION} starting...")
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
