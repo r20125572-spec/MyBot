@@ -21,7 +21,56 @@ from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
 
-from mst import get_bin_handler as get_bin_lookup_handler
+# /bin handler — defined inline so mst.py (aiogram) is never imported at PTB startup
+def get_bin_lookup_handler():
+    async def _cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text(
+                "<b>Usage:</b> <code>/bin 411111</code>",
+                parse_mode="HTML"
+            )
+            return
+        bin6 = context.args[0].strip()[:6]
+        if not bin6.isdigit() or len(bin6) < 6:
+            await update.message.reply_text(
+                "<b>❌ Provide 6 digits.</b> Example: <code>/bin 411111</code>",
+                parse_mode="HTML"
+            )
+            return
+        msg = await update.message.reply_text(
+            f"<b>{E_PROGRESS} Looking up BIN <code>{bin6}</code>…</b>",
+            parse_mode="HTML"
+        )
+        try:
+            data = await get_bin_info(bin6)
+        except Exception as e:
+            await msg.edit_text(f"<b>❌ BIN lookup failed:</b> <code>{escape(str(e))}</code>", parse_mode="HTML")
+            return
+        if not data or data.get("error"):
+            await msg.edit_text(
+                f"<b>❌ No BIN data found for <code>{bin6}</code></b>",
+                parse_mode="HTML"
+            )
+            return
+        scheme  = str(data.get("scheme",  "N/A")).upper()
+        btype   = str(data.get("type",    "N/A")).upper()
+        bank    = data.get("bank",    "N/A")
+        country = data.get("country", "N/A")
+        flag    = data.get("country_emoji", "")
+        await msg.edit_text(
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>BIN     ➳ <code>{bin6}</code></b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>Scheme  ➳ {escape(scheme)}</b>\n"
+            f"<b>Type    ➳ {escape(btype)}</b>\n"
+            f"<b>Bank    ➳ {escape(bank)}</b>\n"
+            f"<b>Country ➳ {flag} {escape(country)}</b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"{E_DEV} ➳ <a href=\"{DEV_LINK}\">Batamanchk</a> {E_PRO}",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    return CommandHandler("bin", _cmd_bin)
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
@@ -40,58 +89,55 @@ from config import (
     PROG_GATE_EMOJI_ID, PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID,
     PROG_ERRORS_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
     CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
-    DEV_EMOJI_ID, DECLINED_EMOJI_ID,
+    DEV_EMOJI_ID, DECLINED_EMOJI_ID, HIT_RESP_EMOJI_ID,
     E_CHARGED, BOT_NAME,
 )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CARD-RESPONSE CLASSIFIER  (used by /msh and /mst)
+# CARD CLASSIFIER  (used by /msh)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CHARGED_RESPONSES = [
-    "charged", "payment_intent.succeeded", "amount_captured",
-    "captured successfully", "payment captured", "charge succeeded",
-    "order placed", "order confirmed", "order created",
-    "payment successful", "transaction approved",
+    "charged","payment_intent.succeeded","amount_captured",
+    "captured successfully","payment captured","charge succeeded",
+    "order placed","order confirmed","order created",
+    "payment successful","transaction approved",
 ]
 LIVE_RESPONSES = [
-    "approved", "success", "true", "live",
-    "thank you for your order", "order received",
+    "approved","success","true","live",
+    "thank you for your order","order received",
     "your order has been received",
 ]
 DECLINED_RESPONSES = [
-    "declined", "do_not_honor", "insufficient funds", "card declined",
-    "blocked", "stolen", "lost card", "expired", "security violation",
-    "restricted", "not permitted", "pickup card", "revocation",
-    "fraud", "limit exceeded", "cvv", "invalid card",
+    "declined","do_not_honor","insufficient funds","card declined",
+    "blocked","stolen","lost card","expired","security violation",
+    "restricted","not permitted","pickup card","revocation",
+    "fraud","limit exceeded","cvv","invalid card",
 ]
 RETRY_ERRORS = [
-    "connection error", "timeout", "socket", "ssl error",
-    "network", "rate limit", "too many requests",
-    "service unavailable", "gateway timeout", "502", "503", "504",
+    "connection error","timeout","socket","ssl error",
+    "network","rate limit","too many requests",
+    "service unavailable","gateway timeout","502","503","504",
 ]
 
 def classify_response(resp_text: str) -> str:
     """Return 'CHARGED', 'LIVE', 'DEAD', 'RETRY', or 'ERROR'."""
     low = resp_text.lower()
     for kw in CHARGED_RESPONSES:
-        if kw in low:
-            return "CHARGED"
+        if kw in low: return "CHARGED"
     for kw in LIVE_RESPONSES:
-        if kw in low:
-            return "LIVE"
+        if kw in low: return "LIVE"
     for kw in DECLINED_RESPONSES:
-        if kw in low:
-            return "DEAD"
+        if kw in low: return "DEAD"
     for kw in RETRY_ERRORS:
-        if kw in low:
-            return "RETRY"
+        if kw in low: return "RETRY"
     return "ERROR"
 
 from mass import get_mass_handlers
 from b3 import get_b3_handler
 from chk import get_chk_handler
 from sh import get_sh_handler
+from mst import get_mst_handlers
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -285,7 +331,7 @@ def gen_code(length: int = 10) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 def gen_receipt() -> str:
-    return f"Batman{random.randint(100000, 999999)}-CHK"
+    return f"Batamanchk{random.randint(100000, 999999)}-CHK"
 
 def get_referral_link(user_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
@@ -333,7 +379,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
         f"✰ <b>𝐑𝐞𝐟𝐞𝐫𝐫𝐚𝐥𝐬</b>  ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a> {E_PRO}",
+        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}",
     ]
     return "\n".join(lines)
 
@@ -431,7 +477,7 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     else:
         lines.append("━━━━━━━━━━━━━━━━━━━━")
 
-    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>𝗕𝗮𝘁𝗺𝗮𝗻</a> {E_PRO}")
+    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}")
     return "\n".join(lines)
 
 def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -459,7 +505,7 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"────────────\n"
         f"Choose an option below.\n"
         f"────────────\n"
-        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batman</a> {E_PRO}\n"
+        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}\n"
         f"<b>Version</b> ➳ {VERSION}"
     )
 
@@ -622,7 +668,7 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
         f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {uname_display} '
         f'{plan_emoji} ({plan_label})</b>\n'
         f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ '
-        f'<a href="{DEV_LINK}">Batman</a> '
+        f'<a href="{DEV_LINK}">Batamanchk</a> '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
@@ -643,7 +689,7 @@ def kb_main(user_id: int) -> RawMarkup:
     ])
 
 def kb_back(cb: str) -> RawMarkup:
-    return RawMarkup([[_btn("🔙 " + B("BACK"), cb=cb)]])
+    return RawMarkup([[_btn("🔙 " + B("BACK"), cb=cb, style="primary")]])
 
 def kb_price() -> RawMarkup:
     return RawMarkup([
@@ -1109,7 +1155,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
         f"<b>Credits</b>  ➳ Unlimited\n"
         f"<b>Expires</b>  ➳ {exp_date}\n"
         f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
-        f"──────────\nSave this receipt ID.\n{E_DEV} Batman {E_PRO}"
+        f"──────────\nSave this receipt ID.\n{E_DEV} Batamanchk {E_PRO}"
     )
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
@@ -2366,7 +2412,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with _lock:
                     if verdict == "CHARGED":
                         charged_count += 1
-                        live_count    += 1   # charged is also live
+                        live_count    += 1
                         live_hits.append(
                             f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}"
                         )
@@ -2466,7 +2512,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trial_footer = ""
 
     stop_label = "Stopped" if stopped_no_credits else "Done"
-    suffix     = f"\n⚠️ <b>No credits left — stopped early.</b>" if stopped_no_credits else ""
+    suffix = f"\n⚠️ <b>No credits left — stopped early.</b>" if stopped_no_credits else ""
     try:
         await msg.edit_text(
             f"{E_GATE} <b>Gate</b> ➳ Shopify\n"
@@ -3224,6 +3270,8 @@ def main():
         app.add_handler(get_b3_handler())
         app.add_handler(get_chk_handler())
         app.add_handler(CommandHandler("msh",     cmd_msh))
+        for h in get_mst_handlers():
+            app.add_handler(h)
         for h in get_mass_handlers():
             app.add_handler(h)
 
@@ -3261,7 +3309,7 @@ def main():
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
 
-        logger.info(f"Batman Bot {VERSION} starting...")
+        logger.info(f"Batamanchk Bot {VERSION} starting...")
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
