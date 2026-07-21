@@ -257,11 +257,13 @@ def classify_response(message: str) -> str:
     ml = message.lower()
 
     # Charged / order paid (highest priority)
-    if "ORDER_PAID" in mu or "CHARGED" in mu:
+    # "CAPTURED" added from uploaded gate source — some APIs return "captured" for successful charge
+    if "ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu:
         return "CHARGED"
 
     # 3DS challenge — counts as Live, tracked separately
-    if "3DS_REQUIRED" in mu or "3D_SECURE" in mu:
+    # "3D SECURE" (with space) and "3d secure" added from uploaded gate source
+    if "3DS_REQUIRED" in mu or "3D_SECURE" in mu or "3D SECURE" in mu:
         return "TDS"
 
     # Live: strong evidence card is valid but blocked / insufficient
