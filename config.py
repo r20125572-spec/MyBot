@@ -19,7 +19,7 @@ OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 # 🤖  BOT IDENTITY
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VERSION  = "V4.3"
-DEV_LINK = "https://t.me/Batmancardchk"
+DEV_LINK = "https://t.me/Batcardchk"
 
 BOT_USERNAME  = "batcardchk29_bot"
 BOT_LINK      = f"https://t.me/{BOT_USERNAME}"
