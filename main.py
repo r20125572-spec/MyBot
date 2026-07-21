@@ -21,7 +21,56 @@ from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
 
-from mst import get_bin_handler as get_bin_lookup_handler
+# /bin handler — defined inline so mst.py (aiogram) is never imported at PTB startup
+def get_bin_lookup_handler():
+    async def _cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text(
+                "<b>Usage:</b> <code>/bin 411111</code>",
+                parse_mode="HTML"
+            )
+            return
+        bin6 = context.args[0].strip()[:6]
+        if not bin6.isdigit() or len(bin6) < 6:
+            await update.message.reply_text(
+                "<b>❌ Provide 6 digits.</b> Example: <code>/bin 411111</code>",
+                parse_mode="HTML"
+            )
+            return
+        msg = await update.message.reply_text(
+            f"<b>{E_PROGRESS} Looking up BIN <code>{bin6}</code>…</b>",
+            parse_mode="HTML"
+        )
+        try:
+            data = await get_bin_info(bin6)
+        except Exception as e:
+            await msg.edit_text(f"<b>❌ BIN lookup failed:</b> <code>{escape(str(e))}</code>", parse_mode="HTML")
+            return
+        if not data or data.get("error"):
+            await msg.edit_text(
+                f"<b>❌ No BIN data found for <code>{bin6}</code></b>",
+                parse_mode="HTML"
+            )
+            return
+        scheme  = str(data.get("scheme",  "N/A")).upper()
+        btype   = str(data.get("type",    "N/A")).upper()
+        bank    = data.get("bank",    "N/A")
+        country = data.get("country", "N/A")
+        flag    = data.get("country_emoji", "")
+        await msg.edit_text(
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>BIN     ➳ <code>{bin6}</code></b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"<b>Scheme  ➳ {escape(scheme)}</b>\n"
+            f"<b>Type    ➳ {escape(btype)}</b>\n"
+            f"<b>Bank    ➳ {escape(bank)}</b>\n"
+            f"<b>Country ➳ {flag} {escape(country)}</b>\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            f"{E_DEV} ➳ <a href=\"{DEV_LINK}\">Batamanchk</a> {E_PRO}",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    return CommandHandler("bin", _cmd_bin)
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
