@@ -92,30 +92,57 @@ CHARGED_SHARE_GROUP_ID = 0               # legacy — not used
 SH_COOLDOWN      = 25              # seconds, trial users only
 
 # ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 10              # 10 different sites per single card
+SH_SITE_RETRIES  = 6               # 6 different sites per single card
 SH_SITE_TIMEOUT  = 11              # seconds per attempt (fast)
 SH_TCP_LIMIT     = 200             # persistent connection pool
 SH_TCP_PER_HOST  = 80
 
 # ── Speed knobs — mass /msh ─────────────────────────────
-MAX_CONCURRENT       = 120         # parallel workers
-SITE_RETRIES         = 10          # 10 sites per card before giving up
-SITE_TIMEOUT         = 14          # seconds per attempt
-TCP_LIMIT            = 500         # connection pool
-TCP_PER_HOST         = 150
+MAX_CONCURRENT       = 150         # parallel workers (max speed)
+SITE_RETRIES         = 6           # 6 sites per card — fast, no error flood
+SITE_TIMEOUT         = 12          # seconds per attempt
+TCP_LIMIT            = 600         # connection pool
+TCP_PER_HOST         = 200
 PROGRESS_INTERVAL    = 2.0         # progress updates every 2 s
 PROGRESS_EVERY_N     = 5
 BUTTON_LOCK_SECONDS  = 30
 
-# ── Button emoji IDs ─────────────────────────────────────
-BTN_CHARGED_EMOJI_ID = "5465465194056525619"
-BTN_LIVE_EMOJI_ID    = "5039793437776282663"
-BTN_DEAD_EMOJI_ID    = "4956612582816351459"
-BTN_ALL_EMOJI_ID     = "4956324463525233747"
-BTN_STOP_EMOJI_ID    = "6179444193518162239"
-CARD_CHK_BTN_ID      = "5935795874251674052"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ALL CUSTOM STICKER EMOJI IDs  — copied from msh.py
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Core hit emojis
+LIVE_EMOJI_ID         = "4958610528588008305"   # single live-hit sticker
+DECLINED_EMOJI_ID     = "4956612582816351459"
+HIT_GATE_EMOJI_ID     = "5341715473882955310"
+HIT_RESP_EMOJI_ID     = "5839116473951328489"
+GATE_EMOJI_ID         = "5801044672658805468"
 
-CHARGED_EMOJI_IDS    = LIVE_EMOJI_IDS
+# Progress-message emojis (msh.py values — override config.py)
+PROG_GATE_EMOJI_ID    = "5341715473882955310"
+PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
+PROG_CHARGED_EMOJI_ID = "5427168083074628963"   # msh.py value
+PROG_LIVE_EMOJI_ID    = "6267225207560214192"   # msh.py value
+PROG_DEAD_EMOJI_ID    = "4958526153955476488"
+PROG_ERRORS_EMOJI_ID  = "4956611513369494230"
+
+# Button emoji IDs
+BTN_CHARGED_EMOJI_ID  = "5465465194056525619"
+BTN_LIVE_EMOJI_ID     = "5039793437776282663"
+BTN_DEAD_EMOJI_ID     = "4956612582816351459"
+BTN_ALL_EMOJI_ID      = "4956324463525233747"
+BTN_STOP_EMOJI_ID     = "6179444193518162239"
+CARD_CHK_BTN_ID       = "5935795874251674052"
+CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"   # alias used in hit-log button
+
+# 18-sticker animated pool — one random sticker per charged hit
+CHARGED_EMOJI_IDS = [
+    "5801154993188770160", "4956739572114392015", "5285221724634239278",
+    "5287777298894835685", "5285024405246725814", "5287547831677112267",
+    "5287658362660474522", "5285186510197381130", "5803233241963959320",
+    "5462902520215002477", "5787435351521889877", "5323674506705785412",
+    "5801005158959683238", "5436143465211640305", "5800688138833629633",
+    "5891044423856296980", "5436068999068662274", "5427168083074628963",
+]
 
 # ── Callback data prefixes ────────────────────────────────
 _CB_RESULT = "mshr"   # mshr_{sid}_{type}
@@ -252,7 +279,7 @@ def _rand_charged() -> str:
     return _te(random.choice(CHARGED_EMOJI_IDS), "💎")
 
 def _rand_live() -> str:
-    return _te(random.choice(LIVE_EMOJI_IDS), "✅")
+    return _te(LIVE_EMOJI_ID, "✅")
 
 def _plan_eid(plan: str) -> str:
     norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in (plan or ""))
@@ -602,14 +629,20 @@ def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
     s   = MSH_SESSIONS.get(sid, {})
     chg = s.get("charged", 0)
     lv  = s.get("live", 0)
+    dd  = s.get("dead", 0)
     chk = s.get("checked", 0)
-    rows = [[
-        _btn(f"Charged ({chg})", cb=f"{_CB_RESULT}_{sid}_charged", style="success",  icon=BTN_CHARGED_EMOJI_ID),
-        _btn(f"Live ({lv})",     cb=f"{_CB_RESULT}_{sid}_live",    style="success",  icon=BTN_LIVE_EMOJI_ID),
-        _btn(f"All ({chk})",     cb=f"{_CB_RESULT}_{sid}_all",     style="primary",  icon=BTN_ALL_EMOJI_ID),
-    ]]
+    rows = [
+        [
+            _btn(f"Charged ({chg})", cb=f"{_CB_RESULT}_{sid}_charged", style="success", icon=BTN_CHARGED_EMOJI_ID),
+            _btn(f"Live ({lv})",     cb=f"{_CB_RESULT}_{sid}_live",    style="success", icon=BTN_LIVE_EMOJI_ID),
+        ],
+        [
+            _btn(f"Dead ({dd})",     cb=f"{_CB_RESULT}_{sid}_dead",    style="danger",  icon=BTN_DEAD_EMOJI_ID),
+            _btn(f"All ({chk})",     cb=f"{_CB_RESULT}_{sid}_all",     style="primary", icon=BTN_ALL_EMOJI_ID),
+        ],
+    ]
     if running:
-        rows.append([_btn("Stop", cb=f"{_CB_STOP}_{sid}", style="danger", icon=BTN_STOP_EMOJI_ID)])
+        rows.append([_btn("⏹ Stop", cb=f"{_CB_STOP}_{sid}", style="danger", icon=BTN_STOP_EMOJI_ID)])
     return RawMarkup(rows)
 
 
@@ -975,7 +1008,9 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
     elif rtype == "live":
         cards = sess.get("charged_cards", []) + sess.get("live_cards", [])
         label = "Live"
-    else:
+    elif rtype == "dead":
+        cards, label = sess.get("dead_cards", []), "Dead"
+    else:  # "all"
         cards = (sess.get("charged_cards", []) + sess.get("live_cards", []) +
                  sess.get("dead_cards", []))
         label = "All"
@@ -1320,7 +1355,9 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = len(sess.get("charged_cards", []))
     elif rtype == "live":
         count = len(sess.get("charged_cards", [])) + len(sess.get("live_cards", []))
-    else:
+    elif rtype == "dead":
+        count = len(sess.get("dead_cards", []))
+    else:  # "all"
         count = (len(sess.get("charged_cards", [])) + len(sess.get("live_cards", [])) +
                  len(sess.get("dead_cards", [])))
     if count == 0:
