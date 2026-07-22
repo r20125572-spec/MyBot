@@ -92,19 +92,19 @@ CHARGED_SHARE_GROUP_ID = 0               # legacy — not used
 SH_COOLDOWN      = 25              # seconds, trial users only
 
 # ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 6               # 6 different sites per single card
+SH_SITE_RETRIES  = 10              # 10 different sites per single card
 SH_SITE_TIMEOUT  = 11              # seconds per attempt (fast)
-SH_TCP_LIMIT     = 120             # persistent connection pool
-SH_TCP_PER_HOST  = 60
+SH_TCP_LIMIT     = 200             # persistent connection pool
+SH_TCP_PER_HOST  = 80
 
 # ── Speed knobs — mass /msh ─────────────────────────────
-MAX_CONCURRENT       = 80          # parallel workers (was 60)
-SITE_RETRIES         = 8           # 8 sites per card before giving up (was 5)
-SITE_TIMEOUT         = 16          # seconds per attempt (was 22)
-TCP_LIMIT            = 350         # connection pool (was 200)
-TCP_PER_HOST         = 120
-PROGRESS_INTERVAL    = 3.0         # faster progress updates
-PROGRESS_EVERY_N     = 6
+MAX_CONCURRENT       = 120         # parallel workers
+SITE_RETRIES         = 10          # 10 sites per card before giving up
+SITE_TIMEOUT         = 14          # seconds per attempt
+TCP_LIMIT            = 500         # connection pool
+TCP_PER_HOST         = 150
+PROGRESS_INTERVAL    = 2.0         # progress updates every 2 s
+PROGRESS_EVERY_N     = 5
 BUTTON_LOCK_SECONDS  = 30
 
 # ── Button emoji IDs ─────────────────────────────────────
@@ -236,7 +236,10 @@ def classify_response(msg: str) -> str:
         return "RETRY"
     if mu.strip() in ("ERROR", "TIMEOUT", "UNKNOWN"):
         return "RETRY"
-    return "RETRY"
+    # Unknown response → treat as DEAD (not RETRY) so exhausted retries don't
+    # inflate the error counter. _check_card_with_retry already returns "DEAD"
+    # when all sites are exhausted, so this only fires on truly unknown replies.
+    return "DEAD"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
