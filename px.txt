@@ -188,4 +188,15 @@ http://purevpn0s11340994:ak3t35fp@px051003.pointtoserver.com:10780
 http://purevpn0s7397024:6CU9ZvexLGTqpB@px051003.pointtoserver.com:10780
 http://purevpn0s8732217:i67s60ep@px051003.pointtoserver.com:10780
 http://purevpn0s8732217:i67s60ep@px014236.pointtoserver.com:10780
-http://purevpn0s12153504:1LTpwxbCJbEdXo@px870303.pointtoserver.com:10780
+http://purevpn0s12153504:1LTpwxbCJbEdXo@px870303.pointtoserver.com:10780 
+http://4036:6WkJdN7MGpUF@p104.instantproxies.com:9371
+http://4036:6WkJdN7MGpUF@p105.instantproxies.com:9370
+http://4034:XuZX0V2kZtfd@p104.instantproxies.com:9369
+http://4034:XuZX0V2kZtfd@p105.instantproxies.com:9368
+http://4340:hx7skg3J3xPA@p104.instantproxies.com:9575
+http://4338:DWtl58RyKRgv@p105.instantproxies.com:9573
+http://4339:uheGvpZwIETU@p105.instantproxies.com:9574
+http://4338:DWtl58RyKRgv@p104.instantproxies.com:9574
+http://3212:Pn3Xw99bv35r@p103.instantproxies.com:9826
+http://4340:hx7skg3J3xPA@p105.instantproxies.com:9575
+http://3213:UKbkw5Xgd6yl@p102.instantproxies.com:9837
