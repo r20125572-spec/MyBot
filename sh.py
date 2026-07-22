@@ -92,20 +92,20 @@ CHARGED_SHARE_GROUP_ID = 0               # legacy — not used
 SH_COOLDOWN      = 25              # seconds, trial users only
 
 # ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 6               # 6 different sites per single card
+SH_SITE_RETRIES  = 15              # try up to 15 sites per single card before giving up
 SH_SITE_TIMEOUT  = 11              # seconds per attempt (fast)
 SH_TCP_LIMIT     = 200             # persistent connection pool
 SH_TCP_PER_HOST  = 80
 
 # ── Speed knobs — mass /msh ─────────────────────────────
 MAX_CONCURRENT       = 150         # parallel workers (max speed)
-SITE_RETRIES         = 6           # 6 sites per card — fast, no error flood
+SITE_RETRIES         = 12          # try 12 sites per card — better hit rate
 SITE_TIMEOUT         = 12          # seconds per attempt
 TCP_LIMIT            = 600         # connection pool
 TCP_PER_HOST         = 200
 PROGRESS_INTERVAL    = 2.0         # progress updates every 2 s
 PROGRESS_EVERY_N     = 5
-BUTTON_LOCK_SECONDS  = 30
+BUTTON_LOCK_SECONDS  = 5           # only lock download buttons for 5s, stop always works
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ALL CUSTOM STICKER EMOJI IDs  — copied from msh.py
@@ -230,15 +230,18 @@ RETRY_PATTERNS = [
     'unexpected error','invalid json','json decode',
 ]
 DECLINED_PATTERNS = [
-    'CARD_DECLINED','PROCESSING_ERROR','GENERIC_DECLINE','DO NOT HONOR',
-    'DO_NOT_HONOR','UNKNOWN_ERROR','Processing Error','PICK_UP_CARD',
+    # Hard declines — card definitively rejected
+    'CARD_DECLINED','PROCESSING_ERROR','GENERIC_DECLINE',
+    'UNKNOWN_ERROR','Processing Error',
     'DECISION_RULE_BLOCK','FRAUD_SUSPECTED','INVALID_PURCHASE_TYPE',
     'INVALID_PAYMENT_METHOD','TEST_MODE_LIVE_CARD','AMOUNT_TOO_SMALL',
-    'INCORRECT_NUMBER','EXPIRED_CARD','CALL_ISSUER','STOLEN_CARD',
+    'INCORRECT_NUMBER','EXPIRED_CARD','STOLEN_CARD',
     'LOST_CARD','RESTRICTED_CARD','TRANSACTION_NOT_ALLOWED','card_declined',
-    'do_not_honor','insufficient_funds_declined','fraudulent','pickup_card',
+    'insufficient_funds_declined','fraudulent',
     'security_violation','service_not_allowed','try_again_later',
     'withdrawal_count_limit_exceeded',
+    # NOTE: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD are treated as LIVE
+    # (real card, bank soft-block) — handled above in classify_response
 ]
 
 
@@ -246,26 +249,37 @@ def classify_response(msg: str) -> str:
     """Returns CHARGED | TDS | LIVE | DEAD | RETRY."""
     mu = msg.upper()
     ml = msg.lower()
-    if "ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu:
+    # ── CHARGED ──────────────────────────────────────────────────────────
+    if ("ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu
+            or "PAYMENT_AUTHORIZED" in mu or "SUBSCRIPTION_CREATED" in mu
+            or "PAYMENT_CAPTURED" in mu or "TRANSACTION_APPROVED" in mu):
         return "CHARGED"
+    # ── 3DS ──────────────────────────────────────────────────────────────
     if "3DS_REQUIRED" in mu or "3D_SECURE" in mu or "3D SECURE" in mu:
         return "TDS"
+    # ── LIVE (card is real, bank soft-declined) ───────────────────────────
     if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
-            or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
+            or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu
+            or "SECURITY_CODE_INCORRECT" in mu or "SECURITY_CODE_CHECK_FAILED" in mu
+            or "CVV_FAILED" in mu or "CVC_FAILED" in mu):
         return "LIVE"
     if mu.strip() == "APPROVED" or ("APPROVED" in mu and "NOT" not in mu):
         return "LIVE"
+    # DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD = real card, bank declining
+    if ("DO_NOT_HONOR" in mu or "DO NOT HONOR" in mu
+            or "CALL_ISSUER" in mu or "PICK_UP_CARD" in mu):
+        return "LIVE"
+    # ── DEAD (hard decline — card definitively rejected) ──────────────────
     if "GENERIC_ERROR" in mu:
         return "DEAD"
     if any(d.upper() in mu for d in DECLINED_PATTERNS):
         return "DEAD"
+    # ── RETRY (site/network issue — try different site) ───────────────────
     if any(r.lower() in ml for r in RETRY_PATTERNS):
         return "RETRY"
     if mu.strip() in ("ERROR", "TIMEOUT", "UNKNOWN"):
         return "RETRY"
-    # Unknown response → treat as DEAD (not RETRY) so exhausted retries don't
-    # inflate the error counter. _check_card_with_retry already returns "DEAD"
-    # when all sites are exhausted, so this only fires on truly unknown replies.
+    # Unknown response → DEAD (not RETRY) so we never loop forever
     return "DEAD"
 
 
@@ -312,6 +326,21 @@ def _readable_resp(data: dict) -> str:
         if v and str(v).strip() not in ("", "null", "None"):
             return str(v).strip()
     return str(data)[:200]
+
+def _clean_resp(resp: str) -> str:
+    """Strip site URLs, NO_PRODUCTS noise, and proxy/network junk from response text.
+    Only the clean verdict keyword is shown to the user — never the Shopify domain."""
+    import re as _re
+    # Remove full URLs (https://store.myshopify.com/...)
+    resp = _re.sub(r'https?://\S+', '', resp)
+    # Remove "at <domain>" fragments left after URL stripping
+    resp = _re.sub(r'\s+at\s+\S+', '', resp)
+    # Collapse "NO_PRODUCTS: No products above $X.XX" → just the keyword
+    resp = _re.sub(r'NO_PRODUCTS?:\s*[^,;\n]*', 'NO_PRODUCTS', resp, flags=_re.IGNORECASE)
+    # Remove "connection_error: ..." internal noise
+    resp = _re.sub(r'connection_error:\s*.*', 'Connection Error', resp, flags=_re.IGNORECASE)
+    resp = resp.strip().strip(':').strip()
+    return resp if resp else "Declined"
 
 def _bin_str(bd: dict) -> str:
     if not bd or bd.get("error"):
@@ -542,7 +571,7 @@ async def _check_card_with_retry(
         except Exception:
             continue
 
-        resp_text    = _readable_resp(data)
+        resp_text    = _clean_resp(_readable_resp(data))   # strip site URLs before classify
         last_resp    = resp_text
         price        = str(data.get("Price",    data.get("price",    "0.00"))).strip()
         currency     = str(data.get("Currency", data.get("currency", "USD"))).strip()
@@ -553,7 +582,8 @@ async def _check_card_with_retry(
         # RETRY → silently continue to next site+proxy
 
     # Exhausted all attempts — card is likely dead or all sites busy
-    return "DEAD", last_resp, price, currency
+    # Return a clean response — never expose site URLs to the user
+    return "DEAD", _clean_resp(last_resp), price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -579,13 +609,14 @@ def _status_line(verdict: str, price: str = "", currency: str = "") -> tuple[str
 
 def _build_result(card, resp, verdict, bin_txt, price, currency, elapsed, user, plan) -> str:
     sl, gl = _status_line(verdict, price, currency)
+    clean = _clean_resp(resp)   # never show site URL to user
     return (
         f'{sl}\n\n'
         f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
         f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
         f'{gl}\n'
         f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {escape(resp)}</b>\n'
+        f'<b>Resp ➳ {escape(clean)}</b>\n'
         f'<b>Bin  ➳ <code>{escape(bin_txt)}</code></b>\n'
         f'<b>──────────</b>\n'
         f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {_fmt_time(elapsed)}</b>\n'
@@ -925,6 +956,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["declined_checks"] = ud.get("declined_checks", 0) + 1
     ud["total_checks"] = ud.get("total_checks", 0) + 1
 
+    # ── Show result for ALL verdicts (CHARGED / LIVE / TDS / DEAD) ───────
+    # Response text is already cleaned by _clean_resp — site URL never shows
     text = _build_result(card, resp_text, verdict, bt, api_price, api_currency, elapsed, user, plan)
     kb   = _kb_verdict(verdict)
     try:
@@ -1396,14 +1429,19 @@ async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ Session not found", show_alert=True); return
     if query.from_user.id != sess.get("user_id"):
         await query.answer("❌ No permission", show_alert=True); return
-    if _is_locked(sid):
-        await query.answer(f"⏳ Wait {_lock_rem(sid)}s", show_alert=True); return
+    # NOTE: Stop button NEVER locks — user must be able to stop immediately
     if sess["status"] != "CHECKING":
-        await query.answer("ℹ️ Not running", show_alert=True); return
+        await query.answer("ℹ️ Already stopped", show_alert=True); return
+    # Mark stopped FIRST so all workers see it instantly on next iteration
     sess["status"] = "STOPPED"
+    # Cancel all pending tasks immediately
+    cancelled = 0
     for t in sess.get("tasks", []):
-        if not t.done(): t.cancel()
-    await query.answer("🛑 Stopping…")
+        if not t.done():
+            t.cancel()
+            cancelled += 1
+    sess["tasks"] = []
+    await query.answer(f"🛑 Stopped! ({cancelled} tasks cancelled)")
     sess["last_text"] = ""
     asyncio.create_task(_update_progress(context.bot, sid, force=True))
 
@@ -1423,4 +1461,3 @@ def get_msh_callback_handlers() -> list:
         CallbackQueryHandler(cb_msh_result, pattern=rf"^{_CB_RESULT}_"),
         CallbackQueryHandler(cb_msh_stop,   pattern=rf"^{_CB_STOP}_"),
     ]
-
