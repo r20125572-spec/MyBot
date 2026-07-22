@@ -533,7 +533,7 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     access   = get_styled_plan(raw_plan)
 
     return (
-        f"<b><a href='{CHANNEL_LINK}'>[❆]</a> Welcome to CardXChk Bot 💎</b>\n"
+        f"<b><a href='{CHANNEL_LINK}'>[❆]</a> Welcome to Batmancardchk Bot 💎</b>\n"
         f"────────────\n"
         f"<b>User</b>    ➳ {uname}\n"
         f"<b>User ID</b> ➳ <code>{user.id}</code>\n"
@@ -2509,21 +2509,19 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 # ── Auto-forward to public share group (clean UI, no card/bank) ──
                 if CHARGED_SHARE_GROUP_ID:
-                    fname = user.first_name or "User"
+                    fname = escape(user.first_name or "User")
                     try:
                         await context.bot.send_message(
                             chat_id=CHARGED_SHARE_GROUP_ID,
                             text=(
-                                f"💎 <b>HIT ➛ CHARGED</b>\n"
-                                f"──────────\n"
-                                f"Gate ➛ Shopify Payments\n"
-                                f"✅ ORDER_PAID\n"
-                                f"──────────\n"
-                                f"User ➛ {escape(fname)} ⭐"
+                                f"<b>HIT ➛ CHARGED 💎</b>\n"
+                                f"<b>Gate ➛ Shopify Payments</b>\n"
+                                f"<b>✅ ORDER_PAID</b>\n"
+                                f"<b>User ➛ {fname} ⭐</b>"
                             ),
                             parse_mode="HTML",
                             reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton("🤖 Get Access", url=BOT_DEEP_BUY)
+                                InlineKeyboardButton("🤖 Batmancardchk", url=BOT_DEEP_BUY)
                             ]])
                         )
                     except Exception:
