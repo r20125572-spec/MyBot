@@ -12,7 +12,7 @@ from telegram import TelegramObject
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8229923654:AAHxFHr5wDNqFXCD3O65xtVPVdggN4efdQg")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8600797754:AAGBWYx4r129ejPF8j38kEK8j_nzYRPa1Zo")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -34,7 +34,7 @@ GROUP_USERNAME   = "@batcardchkGroup"
 
 CHANNEL_LINK  = "https://t.me/Batcardchk"
 GROUP_LINK    = "https://t.me/batcardchkGroup"
-SUPPORT_LINK  = "https://t.me/cardchkSupport"
+SUPPORT_LINK  = "https://t.me/+Gjwke5Yc1ddhYmZk"
 
 _ch_raw    = os.environ.get("CHANNEL_ID", CHANNEL_USERNAME).strip()
 CHANNEL_ID = int(_ch_raw) if _ch_raw.lstrip("-").isdigit() else _ch_raw
