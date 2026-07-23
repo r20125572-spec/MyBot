@@ -1011,6 +1011,99 @@ def _load_sites() -> list:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SITE PROBER  — finds which sites the API actually supports
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _probe_one_site(site: str, proxies: list) -> bool:
+    """Return True if the API can reach this site (anything except 404/403)."""
+    px = random.choice(proxies) if proxies else None
+    try:
+        resp, _gw, _price, _currency, http_st = await _call_api(
+            PROBE_CARD, site, px, timeout=PROBE_TIMEOUT
+        )
+        if http_st in (404, 403):
+            return False
+        return not _is_dead_site_response(resp)
+    except Exception:
+        return False
+
+
+async def probe_all_sites(all_sites: list, proxies: list,
+                          on_progress=None) -> list:
+    """
+    Test every site concurrently. Returns confirmed-working sites.
+    Falls back to all_sites if nothing is alive.
+    on_progress(done, total) is called every 50 sites if provided.
+    """
+    global _WORKING_SITES, _PROBE_IN_PROGRESS, _PROBE_LAST_RUN
+
+    if _PROBE_IN_PROGRESS:
+        logging.info("[PROBE] already running — skipping duplicate call")
+        return _WORKING_SITES or all_sites
+
+    _PROBE_IN_PROGRESS = True
+    logging.info(f"[PROBE] Starting: {len(all_sites)} sites, "
+                 f"{len(proxies)} proxies, concurrency={PROBE_CONCURRENCY}")
+
+    sem     = asyncio.Semaphore(PROBE_CONCURRENCY)
+    working = []
+    done_n  = 0
+    total   = len(all_sites)
+
+    async def _check_one(site):
+        nonlocal done_n
+        async with sem:
+            result = await _probe_one_site(site, proxies)
+            done_n += 1
+            if result:
+                working.append(site)
+            if on_progress and done_n % 50 == 0:
+                try:
+                    await on_progress(done_n, total)
+                except Exception:
+                    pass
+
+    try:
+        await asyncio.gather(*[_check_one(s) for s in all_sites],
+                             return_exceptions=True)
+    finally:
+        _PROBE_IN_PROGRESS = False
+
+    if working:
+        random.shuffle(working)
+        _WORKING_SITES  = working
+        _PROBE_LAST_RUN = time.time()
+        logging.info(f"[PROBE] ✅ {len(working)}/{total} sites alive")
+    else:
+        logging.warning("[PROBE] ⚠️ 0 working sites found — "
+                        "keeping previous cache or using full list")
+        if not _WORKING_SITES:
+            _WORKING_SITES = list(all_sites)
+
+    return _WORKING_SITES
+
+
+def get_working_sites() -> list:
+    """Return probed working sites, or the full list if probe hasn't run."""
+    return list(_WORKING_SITES) if _WORKING_SITES else _load_sites()
+
+
+async def _auto_probe_loop(all_sites: list, proxies: list):
+    """Background loop: probe now, then re-probe every PROBE_TTL seconds."""
+    await asyncio.sleep(5)          # let bot finish startup first
+    while True:
+        try:
+            await probe_all_sites(all_sites, proxies)
+        except Exception as exc:
+            logging.error(f"[PROBE] background error: {exc}")
+        await asyncio.sleep(PROBE_TTL)
+
+
+def start_probe_background(all_sites: list, proxies: list):
+    """Schedule the background probe loop. Call once from _post_init."""
+    asyncio.ensure_future(_auto_probe_loop(all_sites, proxies))
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD UTILITIES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def luhn_check(n: str) -> bool:
