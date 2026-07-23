@@ -49,7 +49,6 @@ from sh import (
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background,
-    _WORKING_SITES,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3080,3 +3079,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
