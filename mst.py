@@ -693,3 +693,74 @@ def get_mst_handlers():
         CallbackQueryHandler(cb_mst_result, pattern=r"^mstr:"),
         CallbackQueryHandler(cb_mst_stop,   pattern=r"^msts:"),
     ]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /bin  —  BIN Lookup
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_bin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "<b>BIN Lookup</b>\nUsage: <code>/bin 411111</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    bin6 = args[0].strip()[:8]   # accept 6-8 digits
+    if not bin6.isdigit() or len(bin6) < 6:
+        await update.message.reply_text(
+            "❌ Enter a valid 6-digit BIN.", parse_mode="HTML"
+        )
+        return
+
+    wait_msg = await update.message.reply_text(
+        f"{tg_emoji(PROG_PROGRESS_EMOJI_ID, '🔄')} Looking up BIN <code>{bin6}</code>…",
+        parse_mode="HTML",
+    )
+
+    try:
+        info = await asyncio.wait_for(get_bin_info(bin6), timeout=10)
+    except Exception:
+        info = {}
+
+    if not info:
+        await wait_msg.edit_text(
+            f"❌ No info found for BIN <code>{bin6}</code>.", parse_mode="HTML"
+        )
+        return
+
+    brand    = info.get("brand",    info.get("scheme",       "Unknown")).upper()
+    ctype    = info.get("type",     "Unknown").upper()
+    level    = info.get("level",    info.get("category",     "")).upper()
+    bank     = info.get("bank",     info.get("issuer",       "Unknown"))
+    country  = info.get("country",  info.get("country_name", "Unknown"))
+    flag     = info.get("flag",     info.get("emoji",        ""))
+    currency = info.get("currency", "")
+
+    level_str    = f" | {level}"    if level    else ""
+    currency_str = f" | {currency}" if currency else ""
+    flag_str     = f" {flag}"       if flag     else ""
+
+    text = (
+        f"<b>{tg_emoji(CARD_EMOJI_ID, '💳')} BIN Lookup</b>\n\n"
+        f"<b>BIN     ➳</b> <code>{bin6}</code>\n"
+        f"<b>Brand   ➳</b> {html_escape(brand)}\n"
+        f"<b>Type    ➳</b> {html_escape(ctype)}{html_escape(level_str)}\n"
+        f"<b>Bank    ➳</b> {html_escape(str(bank))}\n"
+        f"<b>Country ➳</b> {html_escape(str(country))}{flag_str}{html_escape(currency_str)}\n\n"
+        f"<b>{tg_emoji(DEV_EMOJI_ID, '⚡')} ➳ {DEV_LINK}</b>"
+    )
+
+    try:
+        await wait_msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        await update.message.reply_text(
+            text, parse_mode="HTML", disable_web_page_preview=True
+        )
+
+
+def get_bin_handler():
+    """Returns the /bin CommandHandler — imported by main.py as get_bin_lookup_handler."""
+    return CommandHandler("bin", cmd_bin)
