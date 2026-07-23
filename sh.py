@@ -106,34 +106,6 @@ _CB_STOP   = "mshs"
 
 MSH_SESSIONS: dict = {}
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FAKE BILLING DATA  (injected into every API call)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_FIRST = ["James","John","Robert","Michael","William","David","Richard",
-          "Emma","Olivia","Sophia","Mia","Charlotte","Amelia","Harper"]
-_LAST  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller",
-          "Davis","Rodriguez","Martinez","Wilson","Anderson","Taylor"]
-_STREETS = ["123 Main St","456 Oak Ave","789 Pine Rd","321 Maple Dr",
-            "654 Elm St","987 Cedar Ln","147 Birch Blvd","258 Walnut Way"]
-_CITIES  = [
-    ("New York","NY","10001"), ("Los Angeles","CA","90001"),
-    ("Chicago","IL","60601"),  ("Houston","TX","77001"),
-    ("Phoenix","AZ","85001"),  ("Dallas","TX","75201"),
-    ("San Diego","CA","92101"),("San Jose","CA","95101"),
-]
-
-def _fake_billing() -> dict:
-    first  = random.choice(_FIRST)
-    last   = random.choice(_LAST)
-    city, state, zip_ = random.choice(_CITIES)
-    phone  = f"+1{''.join(random.choices('0123456789', k=10))}"
-    email  = f"{first.lower()}.{last.lower()}{random.randint(10,99)}@gmail.com"
-    return {
-        "fname": first, "lname": last,
-        "address": random.choice(_STREETS),
-        "city": city, "state": state, "zip": zip_,
-        "country": "US", "phone": phone, "email": email,
-    }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PROXY LOADER  — px.txt first, then proxies.txt
@@ -455,18 +427,19 @@ async def _call_api(
 ) -> dict:
     """
     Call goshopi shopii API.
+    API accepts ONLY three params: site, cc, proxy.
+    Sending extra params (billing data etc.) causes HTTP 404.
     site must be a bare domain e.g. "store.myshopify.com"
-    proxy is REQUIRED by the API — without it you get HTTP 404.
+    proxy must be raw "ip:port" — NOT "http://ip:port".
+    proxy is REQUIRED — without it the API returns 404.
     """
-    site = _strip_scheme(site)   # guarantee bare domain
+    site = _strip_scheme(site)   # guarantee bare domain, no https://
 
+    # ── ONLY the three params the API accepts ──────────────
     params: dict = {"cc": card, "site": site}
     if proxy:
-        params["proxy"] = proxy
-
-    # Inject fake billing data
-    b = _fake_billing()
-    params.update(b)
+        params["proxy"] = proxy          # raw ip:port, no http:// prefix
+    # ───────────────────────────────────────────────────────
 
     try:
         async with session.get(
@@ -474,16 +447,39 @@ async def _call_api(
             timeout=aiohttp.ClientTimeout(total=timeout),
             ssl=False,
         ) as resp:
+            # Always try to read the body — even on non-200 the API may
+            # return a JSON object with a useful Response/message field.
+            try:
+                body_text = await resp.text()
+            except Exception:
+                body_text = ""
+
             if resp.status != 200:
+                # Try to parse as JSON first to get real API message
+                try:
+                    import json as _json
+                    data = _json.loads(body_text)
+                    if isinstance(data, dict) and data:
+                        return data   # use real API response even on 404
+                except Exception:
+                    pass
+                # Fall back to a RETRY-triggering string
+                logging.warning(f"[API] HTTP {resp.status} site={site} body={body_text[:120]}")
                 return {"Response": f"site error! status: {resp.status}",
                         "Gateway": "", "Price": "0.00", "Currency": "USD"}
+
+            # 200 OK — parse JSON
             try:
-                data = await resp.json(content_type=None)
-                return data
-            except Exception:
-                raw = await resp.text()
-                return {"Response": raw[:200], "Gateway": "",
+                import json as _json
+                data = _json.loads(body_text)
+                if isinstance(data, dict):
+                    return data
+                return {"Response": body_text[:200], "Gateway": "",
                         "Price": "0.00", "Currency": "USD"}
+            except Exception:
+                return {"Response": body_text[:200], "Gateway": "",
+                        "Price": "0.00", "Currency": "USD"}
+
     except asyncio.TimeoutError:
         return {"Response": "timeout", "Gateway": "", "Price": "0.00", "Currency": "USD"}
     except asyncio.CancelledError:
