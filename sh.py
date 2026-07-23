@@ -1625,9 +1625,13 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
     if not effective_proxies:
         effective_proxies = _load_proxies()
 
-    # Always ensure we have sites — use built-ins as fallback
+    # Use probed working sites (no dead-site 404s).
+    # If probe hasn't run, fall back to full list then probe in background.
     if not all_sites:
-        all_sites = _load_sites()
+        all_sites = get_working_sites()
+    elif _WORKING_SITES:
+        # Prefer working-site cache over caller-supplied full list
+        all_sites = list(_WORKING_SITES)
 
     logging.info(f"[MSH] {sid} — {len(effective_proxies)} proxies "
                  f"{len(valid_cards)} cards concurrency={MAX_CONCURRENT}")
@@ -1840,7 +1844,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-    sites   = _load_sites()
     proxies = _load_proxies()
 
     if not proxies:
@@ -1848,6 +1851,19 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ <b>No proxies in px.txt</b>\n\n"
             "Add proxies to <code>px.txt</code> (one ip:port per line).",
             parse_mode="HTML"); return
+
+    # Use probed working sites; fall back to full list if probe hasn't run yet
+    sites = get_working_sites()
+
+    # If probe has never run and all sites look dead, warn user briefly
+    if not _WORKING_SITES:
+        await spin.edit_text(
+            f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
+            f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Finding live sites... please wait</b>',
+            parse_mode="HTML",
+        )
+        # Block until probe finishes (only for single check, to get real result)
+        sites = await probe_all_sites(_load_sites(), proxies)
 
     t0 = time.time()
     try:
@@ -1888,3 +1904,15 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_sh_handler() -> CommandHandler:
     return CommandHandler("sh", cmd_sh)
+
+__all__ = [
+    "get_sh_handler",
+    "_check_card_with_retry", "SITE_RETRIES", "SITE_TIMEOUT",
+    "MSH_SESSIONS", "run_mass_batch", "create_msh_session",
+    "cb_msh_result", "cb_msh_stop", "build_result_msg",
+    "_load_sites", "_load_proxies",
+    # Site prober exports
+    "probe_all_sites", "get_working_sites",
+    "start_probe_background",
+    "_WORKING_SITES", "_PROBE_IN_PROGRESS",
+]
