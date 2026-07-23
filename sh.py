@@ -437,7 +437,12 @@ async def _check_card_with_retry(
     if not sites:
         sites = ["aloracosmetics.myshopify.com"]
 
-    pool    = sites[:]
+    # Filter out sites already known to return 404/403 — saves time on every card
+    live_sites = [s for s in sites if s not in _DEAD_SITES]
+    if not live_sites:
+        live_sites = sites[:]           # if all are blacklisted, reset and retry
+        _DEAD_SITES.clear()
+    pool    = live_sites[:]
     random.shuffle(pool)
     px_pool = proxies if proxies else _ALL_PROXIES
 
@@ -483,26 +488,31 @@ async def _check_card_with_retry(
         logging.info(f"[SH] {card[:6]}** attempt={attempt+1} site={site} "
                      f"resp={resp!r} → {verdict}")
 
+        # ── Mark dead sites so future cards skip them ────────────────
+        # 404 = site not found / not a Shopify store — blacklist it
+        if "status: 404" in resp or "status: 403" in resp:
+            _DEAD_SITES.add(site)
+            logging.debug(f"[SH] Dead site added: {site}")
+
         # ── Final verdicts — stop here ───────────────────────────────
         if verdict in ("CHARGED", "TDS", "LIVE", "DEAD"):
             return verdict, resp, price, currency
 
         # ── Pause before trying the next site ───────────────────────
-        # Gives the gateway time to process and return real responses
-        # instead of timeouts. Longer on rate-limit signals.
         if attempt < max_sites - 1:
             if "429" in resp or "rate" in resp.lower():
                 await asyncio.sleep(random.uniform(2.0, 4.0))
             else:
                 await asyncio.sleep(random.uniform(0.8, 1.8))
 
-    # Exhausted all sites → card is effectively dead (no bank said LIVE/CHARGED)
+    # Exhausted all sites → card is effectively dead (no bank confirmed LIVE/CHARGED)
     return "DEAD", last_resp, price, currency
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MISC HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_BIN_CACHE: dict = {}
+_BIN_CACHE:   dict = {}
+_DEAD_SITES:  set  = set()   # sites that returned 404 — skipped on future cards
 
 def _te(eid: str, fb: str = "●") -> str:
     return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
@@ -543,20 +553,123 @@ def _get_ud(uid: int, ctx) -> dict:
 def _sid() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
+async def _fetch_bin_direct(bin6: str) -> dict:
+    """
+    Direct BIN lookup against public APIs — no dependency on config.get_bin_info.
+    Tries three sources in order; returns the first non-empty result.
+    """
+    COUNTRY_FLAGS = {
+        "US": "🇺🇸", "GB": "🇬🇧", "CA": "🇨🇦", "AU": "🇦🇺",
+        "DE": "🇩🇪", "FR": "🇫🇷", "IN": "🇮🇳", "BR": "🇧🇷",
+        "MX": "🇲🇽", "JP": "🇯🇵", "CN": "🇨🇳", "RU": "🇷🇺",
+        "IT": "🇮🇹", "ES": "🇪🇸", "NL": "🇳🇱", "SE": "🇸🇪",
+        "NG": "🇳🇬", "ZA": "🇿🇦", "EG": "🇪🇬", "PK": "🇵🇰",
+        "SG": "🇸🇬", "MY": "🇲🇾", "ID": "🇮🇩", "TH": "🇹🇭",
+        "PH": "🇵🇭", "VN": "🇻🇳", "AE": "🇦🇪", "SA": "🇸🇦",
+        "TR": "🇹🇷", "PL": "🇵🇱", "UA": "🇺🇦", "AR": "🇦🇷",
+        "CO": "🇨🇴", "CL": "🇨🇱", "NZ": "🇳🇿", "BO": "🇧🇴",
+        "HK": "🇭🇰", "TW": "🇹🇼", "KR": "🇰🇷", "IL": "🇮🇱",
+        "CH": "🇨🇭", "BE": "🇧🇪", "AT": "🇦🇹", "PT": "🇵🇹",
+        "GR": "🇬🇷", "CZ": "🇨🇿", "HU": "🇭🇺", "RO": "🇷🇴",
+        "BG": "🇧🇬", "HR": "🇭🇷", "SK": "🇸🇰", "FI": "🇫🇮",
+        "DK": "🇩🇰", "NO": "🇳🇴", "IE": "🇮🇪",
+    }
+
+    sources = [
+        # Source 1: binlist.net (most reliable, free, no key needed)
+        {
+            "url":  f"https://lookup.binlist.net/{bin6}",
+            "hdrs": {"Accept-Version": "3"},
+            "parse": lambda d: {
+                "scheme":        (d.get("scheme") or d.get("brand") or "").upper(),
+                "bank":          (d.get("bank")   or {}).get("name", ""),
+                "country":       (d.get("country") or {}).get("name", ""),
+                "country_code":  (d.get("country") or {}).get("alpha2", ""),
+                "type":          d.get("type", ""),
+                "prepaid":       d.get("prepaid", False),
+            },
+        },
+        # Source 2: handy.codes proxy (mirrors binlist)
+        {
+            "url":  f"https://api.handy.codes/bin/{bin6}",
+            "hdrs": {},
+            "parse": lambda d: {
+                "scheme":       (d.get("scheme") or d.get("brand") or d.get("type") or "").upper(),
+                "bank":         d.get("bank", ""),
+                "country":      d.get("country", ""),
+                "country_code": d.get("country_code", d.get("iso", "")),
+            },
+        },
+        # Source 3: bincodes.com
+        {
+            "url":  f"https://www.bincodes.com/api/bin/?hash=free&bin={bin6}",
+            "hdrs": {},
+            "parse": lambda d: {
+                "scheme":       (d.get("card") or d.get("scheme") or "").upper(),
+                "bank":         d.get("bank", ""),
+                "country":      d.get("country", ""),
+                "country_code": d.get("country_code", ""),
+            },
+        },
+    ]
+
+    _to = aiohttp.ClientTimeout(total=8, connect=5)
+    for src in sources:
+        try:
+            async with aiohttp.ClientSession(timeout=_to,
+                    headers={"User-Agent": "Mozilla/5.0"}) as sess:
+                async with sess.get(src["url"],
+                                    headers=src["hdrs"], ssl=False) as r:
+                    if r.status != 200:
+                        continue
+                    data = await r.json(content_type=None)
+                    info = src["parse"](data)
+                    if not info.get("scheme") and not info.get("bank"):
+                        continue
+                    # attach country flag
+                    cc = (info.get("country_code") or "").upper()[:2]
+                    info["country_emoji"] = COUNTRY_FLAGS.get(cc, "")
+                    return info
+        except Exception:
+            continue
+    return {}
+
+
 async def _bin_lookup(bin6: str) -> dict:
+    """Try config.get_bin_info first; fall back to direct public BIN APIs."""
     if bin6 in _BIN_CACHE:
         return _BIN_CACHE[bin6]
+
+    result: dict = {}
+
+    # Primary: config.py's get_bin_info (may use a paid/private API)
     try:
         result = await asyncio.wait_for(get_bin_info(bin6), timeout=8) or {}
     except Exception:
         result = {}
+
+    # If primary returned nothing useful, try public APIs directly
+    if not result or not result.get("scheme"):
+        try:
+            result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=10)
+        except Exception:
+            result = {}
+
     _BIN_CACHE[bin6] = result
     return result
 
 def _bin_str(bd: dict) -> str:
-    scheme  = escape(str(bd.get("scheme",  "N/A")).upper())
-    bank    = escape(str(bd.get("bank",    "N/A")))
-    country = escape(str(bd.get("country", "N/A")))
+    """Handles field names from config.get_bin_info AND all three fallback APIs."""
+    def _g(*keys):
+        for k in keys:
+            v = bd.get(k)
+            if v and str(v).strip() not in ("", "None", "N/A", "null"):
+                return str(v).strip()
+        return "N/A"
+
+    scheme  = escape(_g("scheme", "brand", "card_scheme", "network").upper())
+    bank    = escape(_g("bank", "bank_name", "issuer", "issuer_name"))
+    country = escape(_g("country", "country_name", "country_full"))
     flag    = bd.get("country_emoji", "")
     cstr    = f"{flag} {country}".strip() if flag else country
     return f"{scheme} - {bank} - {cstr}"
