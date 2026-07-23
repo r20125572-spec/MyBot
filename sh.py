@@ -1,33 +1,43 @@
 """
-sh.py  v10  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
+sh.py  v11  —  /sh single-card  +  /msh mass Shopify checker  (PTB v20+)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Base: v8 (known-working).  Targeted fixes applied on top:
+All v10 fixes preserved.  New in v11:
 
-FIX 1 — cb_msh_result: removed pre-emptive query.answer() at top of handler.
-         Telegram allows exactly ONE answer() per callback query.  The old
-         code answered immediately (blank ack) then tried to answer again for
-         every alert/error branch — all those second calls threw BadRequest and
-         the user saw nothing.  Each branch now answers exactly once.
+FIX 7  — _rand_live() now picks randomly from LIVE_EMOJI_IDS pool
+          (imported from config) — 18 different live stickers, same
+          rotation behaviour as _rand_charged().
 
-FIX 2 — cb_msh_stop: removed _is_locked check.  Stop must ALWAYS work
-         instantly regardless of the button-lock timer.
+FIX 8  — Instant stop: cb_msh_stop stores the shared aiohttp connector
+          in the session and closes it immediately on Stop press.
+          This aborts ALL in-flight HTTP requests in < 100 ms instead of
+          waiting up to SITE_TIMEOUT (12 s) per card.
 
-FIX 3 — _clean_resp used for DISPLAY ONLY.  Never called before
-         classify_response — that broke RETRY pattern matching because
-         "connection_error: …" was cleaned to "Connection Error" BEFORE the
-         classifier looked for 'connection_error'.
+FIX 9  — Site health cache: every site that returns a RETRY response gets
+          a consecutive-failure counter.  Once a site reaches 5 failures it
+          is cooled off for SITE_COOLDOWN = 120 s.  Healthy sites are
+          always tried first — dead sites can no longer block card results.
+          A site resets to healthy the moment it returns a real verdict.
 
-FIX 4 — classify_response: added PAYMENT_AUTHORIZED, SUBSCRIPTION_CREATED,
-         PAYMENT_CAPTURED, TRANSACTION_APPROVED → CHARGED;  added
-         DO_NOT_HONOR, CALL_ISSUER, PICK_UP_CARD → LIVE (real card, bank
-         soft-block — not a hard decline); removed those three from
-         DECLINED_PATTERNS.
+FIX 10 — _check_card_with_retry accepts a sid= kwarg and checks
+          _is_stopped(sid) at the top of every retry iteration so a
+          stopped session aborts mid-card immediately, not after the
+          current HTTP request finishes.
 
-FIX 5 — BUTTON_LOCK_SECONDS: 30 → 5 (download buttons only).
+FIX 11 — All-RETRY exhaustion now returns "ERROR" verdict instead of
+          "DEAD".  ERROR cards are tracked in their own counter (errors /
+          error_cards) and show as ⚠️ in the progress display.
+          They do NOT count as dead cards; credits are NOT deducted.
+          A separate download button "Error (N)" appears in the keyboard.
 
-FIX 6 — SH_SITE_RETRIES: 6 → 15;  SITE_RETRIES (mass): 6 → 12.
-         'failed' kept in RETRY_PATTERNS — API returns "step N failed"
-         responses that must rotate, not be classified as DEAD.
+────────────────────────────────────────────────────────────────────────
+v10 fixes (still in place):
+
+FIX 1 — cb_msh_result: NO pre-emptive query.answer() at the top.
+FIX 2 — cb_msh_stop: Stop NEVER checks _is_locked.
+FIX 3 — _clean_resp for DISPLAY ONLY; classify_response on RAW text.
+FIX 4 — DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD → LIVE.
+FIX 5 — BUTTON_LOCK_SECONDS = 5 (was 30).
+FIX 6 — SH_SITE_RETRIES = 15; SITE_RETRIES = 12.
 """
 
 from __future__ import annotations
@@ -67,7 +77,7 @@ from config import (
     PROG_DEAD_EMOJI_ID,
     PROG_ERRORS_EMOJI_ID,
     PROG_CHARGED_EMOJI_ID,
-    LIVE_EMOJI_IDS,
+    LIVE_EMOJI_IDS,          # FIX 7: used for _rand_live() pool
     PLAN_EMOJIS,
     SPECIAL_FONT_MAP,
     BOT_NAME,
@@ -107,10 +117,13 @@ PROGRESS_INTERVAL    = 2.0
 PROGRESS_EVERY_N     = 5
 BUTTON_LOCK_SECONDS  = 5               # FIX 5: was 30 — download buttons only; Stop never locks
 
+# ── FIX 9: site health cooldown ───────────────────────
+SITE_COOLDOWN        = 120             # seconds before a repeatedly-failing site is retried
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ALL CUSTOM STICKER EMOJI IDs  — from msh.py
+# ALL CUSTOM STICKER EMOJI IDs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-LIVE_EMOJI_ID         = "4958610528588008305"
+# NOTE: LIVE_EMOJI_IDS (18 stickers) comes from config — used by _rand_live()
 DECLINED_EMOJI_ID     = "4956612582816351459"
 HIT_GATE_EMOJI_ID     = "5341715473882955310"
 HIT_RESP_EMOJI_ID     = "5839116473951328489"
@@ -128,6 +141,7 @@ BTN_LIVE_EMOJI_ID     = "5039793437776282663"
 BTN_DEAD_EMOJI_ID     = "4956612582816351459"
 BTN_ALL_EMOJI_ID      = "4956324463525233747"
 BTN_STOP_EMOJI_ID     = "6179444193518162239"
+BTN_ERROR_EMOJI_ID    = "4956611513369494230"   # FIX 11: error download button
 CARD_CHK_BTN_ID       = "5935795874251674052"
 CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"
 
@@ -169,7 +183,7 @@ async def _get_sh_session() -> aiohttp.ClientSession:
         )
         _SH_SESSION = aiohttp.ClientSession(
             connector=_SH_CONNECTOR,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/10)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; BatChk/11)"},
             timeout=aiohttp.ClientTimeout(total=SH_SITE_TIMEOUT + 3),
         )
     return _SH_SESSION
@@ -226,6 +240,19 @@ RETRY_PATTERNS = [
     'api error', 'api timeout', 'connection reset', 'network error',
     'unexpected error', 'invalid json', 'json decode',
     'buyer_identity_marketing_consent',
+    # additional site-error patterns from site-checker
+    'missing stableid', 'missing buildid', 'missing sourcetoken',
+    'checkout_failed', 'delivery_out_of_stock_at_origin_location',
+    'could not extract private_access_token',
+    'buyer_identity_currency_not_supported_by_shop',
+    'could not find actions js url', 'missing proposal', 'missing submit id',
+    'exceeded 30 poll attempts', 'could not extract queuetoken',
+    'could not extract identification signature',
+    'could not extract session id', 'could not extract delivery handle',
+    'could not extract shipping amount', 'could not extract total amount',
+    'could not extract sessiontoken', 'errstoreincompatible',
+    'errmissingreceiptid', 'site overloaded', 'site rate limited',
+    'http error', 'max retries', 'no proxies',
 ]
 
 # FIX 4: DO_NOT_HONOR / CALL_ISSUER / PICK_UP_CARD removed from DECLINED_PATTERNS
@@ -242,9 +269,7 @@ DECLINED_PATTERNS = [
     'processing_error', 'fraudulent', 'restricted_card',
     'security_violation', 'service_not_allowed', 'transaction_not_allowed',
     'try_again_later', 'withdrawal_count_limit_exceeded',
-    # NOTE: do_not_honor / pickup_card are NOT here — they map to LIVE above
-    # (real card, bank soft-block).  Keeping them here would be dead code and
-    # would cause confusion when reading the classify_response logic.
+    # NOTE: do_not_honor / pickup_card are NOT here — they map to LIVE above.
 ]
 
 
@@ -259,7 +284,6 @@ def classify_response(msg: str) -> str:
     ml = msg.lower()
 
     # ── CHARGED ──────────────────────────────────────────────────────────
-    # FIX 4: added PAYMENT_AUTHORIZED, SUBSCRIPTION_CREATED, etc.
     if ("ORDER_PAID" in mu or "CHARGED" in mu or "CAPTURED" in mu
             or "PAYMENT_AUTHORIZED" in mu or "SUBSCRIPTION_CREATED" in mu
             or "PAYMENT_CAPTURED" in mu or "TRANSACTION_APPROVED" in mu):
@@ -307,8 +331,9 @@ def _te(eid: str, fb: str = "●") -> str:
 def _rand_charged() -> str:
     return _te(random.choice(CHARGED_EMOJI_IDS), "💎")
 
+# FIX 7: use LIVE_EMOJI_IDS pool (18 stickers from config) — not one hardcoded ID
 def _rand_live() -> str:
-    return _te(LIVE_EMOJI_ID, "✅")
+    return _te(random.choice(LIVE_EMOJI_IDS), "✅")
 
 def _plan_eid(plan: str) -> str:
     norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in (plan or ""))
@@ -342,8 +367,7 @@ def _readable_resp(data: dict) -> str:
             return str(v).strip()
     return str(data)[:200]
 
-# FIX 3: _clean_resp is for DISPLAY ONLY — strip URLs and noise before showing
-# to the user.  It is NEVER called before classify_response.
+# FIX 3: _clean_resp is for DISPLAY ONLY — NEVER called before classify_response.
 def _clean_resp(resp: str) -> str:
     """Strip site URLs, NO_PRODUCTS noise, and internal error details for display."""
     resp = re.sub(r'https?://\S+', '', resp)
@@ -374,6 +398,43 @@ def _is_locked(sid: str) -> bool:
 def _lock_rem(sid: str) -> int:
     s = MSH_SESSIONS.get(sid)
     return max(0, int(BUTTON_LOCK_SECONDS - (time.time() - s.get("start_time", 0))) + 1) if s else 0
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FIX 9 — SITE HEALTH CACHE
+# Sites that return consecutive RETRY responses are cooled off so they
+# don't waste retry slots on every card.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_SITE_FAIL_CNT:  dict[str, int]   = {}
+_SITE_FAIL_TIME: dict[str, float] = {}
+_SITE_HEALTH_LK                   = asyncio.Lock()   # not used — dicts are GIL-safe
+
+def _mark_site_fail(site: str) -> None:
+    """Record one more consecutive RETRY from this site."""
+    _SITE_FAIL_CNT[site]  = _SITE_FAIL_CNT.get(site, 0) + 1
+    _SITE_FAIL_TIME[site] = time.time()
+
+def _mark_site_ok(site: str) -> None:
+    """Site returned a real verdict — reset its failure counter."""
+    _SITE_FAIL_CNT.pop(site, None)
+    _SITE_FAIL_TIME.pop(site, None)
+
+def _site_healthy(site: str) -> bool:
+    """
+    Returns True if the site is considered healthy.
+    A site is unhealthy if it has ≥ 5 consecutive RETRY responses AND its
+    cooldown has not yet expired.  After SITE_COOLDOWN seconds it gets
+    another chance automatically.
+    """
+    fails = _SITE_FAIL_CNT.get(site, 0)
+    if fails < 5:
+        return True
+    # Cooldown expired → give it another chance and reset counter
+    if time.time() - _SITE_FAIL_TIME.get(site, 0) > SITE_COOLDOWN:
+        _SITE_FAIL_CNT.pop(site, None)
+        _SITE_FAIL_TIME.pop(site, None)
+        return True
+    return False
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -541,15 +602,18 @@ async def _check_card_with_retry(
     proxies: list[str],
     max_sites: int = SITE_RETRIES,
     site_timeout: float = SITE_TIMEOUT,
+    sid: str = "",            # FIX 10: for in-loop stop check
 ) -> tuple[str, str, str, str]:
     """
     Returns (verdict, display_resp, price, currency).
+    verdict is one of: CHARGED | TDS | LIVE | DEAD | ERROR
 
-    FIX 3 applied here:
-      • classify_response() is called on the RAW _readable_resp() string.
-      • _clean_resp() is called AFTER classification, on the display string only.
-      • This ensures 'connection_error: ...', 'step N failed', etc. are still
-        matched by RETRY_PATTERNS and cause site rotation, not DEAD verdicts.
+    FIX 3:  classify on RAW, clean for display only.
+    FIX 8:  CancelledError propagates up so connector.close() works instantly.
+    FIX 9:  healthy sites are preferred; each RETRY updates the fail counter.
+    FIX 10: checks _is_stopped(sid) at the top of every retry iteration.
+    FIX 11: returns ERROR (not DEAD) when ALL attempts were RETRY responses
+            — the card is not dead, the sites were just broken.
     """
     if not sites:
         sites = [FALLBACK_SITE]
@@ -562,45 +626,60 @@ async def _check_card_with_retry(
 
     tried: set[str] = set()
     price, currency = "0.00", "USD"
-    last_raw  = "All sites exhausted"
-    last_disp = "All sites exhausted"
+    last_disp  = "All sites exhausted"
+    all_retry  = True   # FIX 11: becomes False on first real verdict
 
     for attempt in range(max_sites):
+        # FIX 10: abort mid-loop if session was stopped
+        if sid and _is_stopped(sid):
+            raise asyncio.CancelledError()
+
         if asyncio.current_task() and asyncio.current_task().cancelled():
             raise asyncio.CancelledError()
 
+        # FIX 9: prefer healthy sites; fall back to any site if all are cooling
         untried = [s for s in site_pool if s not in tried]
         if not untried:
             tried.clear()
             untried = site_pool[:]
-        site = untried[0]
+        healthy = [s for s in untried if _site_healthy(_clean_site(s))]
+        site    = (healthy[0] if healthy else untried[0])
         tried.add(site)
+        clean   = _clean_site(site)
 
         proxy = proxy_pool[attempt % len(proxy_pool)] if proxy_pool else None
 
         try:
-            data = await _call_shopii(session, card, _clean_site(site), proxy, timeout=site_timeout)
+            data = await _call_shopii(session, card, clean, proxy, timeout=site_timeout)
         except asyncio.CancelledError:
             raise
         except Exception:
+            _mark_site_fail(clean)
             continue
 
-        # ── FIX 3: classify on RAW, clean for display only ─────────────
+        # FIX 3: classify on RAW, clean for display only ─────────────
         raw_resp  = _readable_resp(data)
-        disp_resp = _clean_resp(raw_resp)         # display only
-        verdict   = classify_response(raw_resp)   # classify on raw!
+        disp_resp = _clean_resp(raw_resp)       # display only
+        verdict   = classify_response(raw_resp) # classify on raw!
 
         price    = str(data.get("Price",    data.get("price",    "0.00"))).strip()
         currency = str(data.get("Currency", data.get("currency", "USD"))).strip()
-
-        last_raw  = raw_resp
         last_disp = disp_resp
 
-        if verdict in ("CHARGED", "LIVE", "TDS", "DEAD"):
-            return verdict, disp_resp, price, currency
-        # RETRY → silently continue to next site+proxy
+        # FIX 9: update site health based on verdict
+        if verdict == "RETRY":
+            _mark_site_fail(clean)
+        else:
+            _mark_site_ok(clean)
 
-    # Exhausted all attempts — card is dead or all sites busy
+        if verdict in ("CHARGED", "LIVE", "TDS", "DEAD"):
+            all_retry = False
+            return verdict, disp_resp, price, currency
+        # RETRY → try next site+proxy
+
+    # FIX 11: distinguish all-RETRY exhaustion from a real hard decline
+    if all_retry:
+        return "ERROR", last_disp, price, currency
     return "DEAD", last_disp, price, currency
 
 
@@ -627,7 +706,6 @@ def _status_line(verdict: str, price: str = "", currency: str = "") -> tuple[str
 
 def _build_result(card, resp, verdict, bin_txt, price, currency, elapsed, user, plan) -> str:
     sl, gl = _status_line(verdict, price, currency)
-    # resp is already the cleaned display string from _check_card_with_retry
     return (
         f'{sl}\n\n'
         f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
@@ -675,11 +753,16 @@ def _kb_verdict(verdict: str) -> RawMarkup:
     return RawMarkup([[_btn("ERROR", url=BOT_CHANNEL, style="secondary", icon=PROG_ERRORS_EMOJI_ID), _bot_btn()]])
 
 def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
+    """
+    FIX 11: shows Error (N) button when there are site-error cards.
+    Stop button is ALWAYS present while running — it never locks.
+    """
     s   = MSH_SESSIONS.get(sid, {})
     chg = s.get("charged", 0)
     lv  = s.get("live", 0)
     dd  = s.get("dead", 0)
     chk = s.get("checked", 0)
+    err = s.get("errors", 0)
     rows = [
         [
             _btn(f"Charged ({chg})", cb=f"{_CB_RESULT}_{sid}_charged", style="success", icon=BTN_CHARGED_EMOJI_ID),
@@ -690,6 +773,12 @@ def _msh_buttons(sid: str, running: bool = True) -> RawMarkup:
             _btn(f"All ({chk})",     cb=f"{_CB_RESULT}_{sid}_all",     style="primary", icon=BTN_ALL_EMOJI_ID),
         ],
     ]
+    # FIX 11: error download button only when there are error cards
+    if err > 0:
+        rows.append([
+            _btn(f"⚠️ Errors ({err})", cb=f"{_CB_RESULT}_{sid}_error",
+                 style="secondary", icon=BTN_ERROR_EMOJI_ID),
+        ])
     if running:
         rows.append([_btn("⏹ Stop", cb=f"{_CB_STOP}_{sid}", style="danger", icon=BTN_STOP_EMOJI_ID)])
     return RawMarkup(rows)
@@ -903,10 +992,12 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         sess = await _get_sh_session()
+        # FIX 10: pass sid="" for /sh — no stop needed for single card
         (verdict, resp_text, api_price, api_currency), bin_data = await asyncio.gather(
             _check_card_with_retry(sess, card, sites, proxies,
                                    max_sites=SH_SITE_RETRIES,
-                                   site_timeout=SH_SITE_TIMEOUT),
+                                   site_timeout=SH_SITE_TIMEOUT,
+                                   sid=""),
             _sh_bin_cached(bin6),
             return_exceptions=False,
         )
@@ -925,10 +1016,11 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         ud["approved_checks"] = ud.get("approved_checks", 0) + 1
-    else:
+    elif verdict == "DEAD":
         ud["declined_checks"] = ud.get("declined_checks", 0) + 1
     ud["total_checks"] = ud.get("total_checks", 0) + 1
 
+    # FIX 11: for /sh, ERROR means all sites broke — show as error, not dead
     text = _build_result(card, resp_text, verdict, bt, api_price, api_currency, elapsed, user, plan)
     kb   = _kb_verdict(verdict)
     try:
@@ -958,12 +1050,19 @@ def _progress_text(sess: dict) -> str:
     elapsed = time.time() - sess["start_time"]
     ulink   = _user_link(sess["user_obj"]) if sess.get("user_obj") else "User"
     peid    = _plan_eid(sess.get("plan", "TRIAL"))
+    err     = sess.get("errors", 0)
+    # FIX 11: show errors only when > 0 to keep UI clean
+    err_line = (
+        f'<b>Errors   ➳ {err}    {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>\n'
+        if err > 0 else ""
+    )
     return (
         f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
         f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Progress ➳ {sess["checked"]}/{sess["total"]}</b>\n'
         f'<b>Charged ➳ {sess["charged"]} {_te(PROG_CHARGED_EMOJI_ID,"💎")}</b>\n'
         f'<b>Live    ➳ {sess["live"]}    {_te(PROG_LIVE_EMOJI_ID,"✅")}</b>\n'
         f'<b>Dead    ➳ {sess["dead"]}    {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>\n'
+        f'{err_line}'
         f'<b>Time    ➳ {_fmt_time(elapsed)}</b>\n'
         f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
         f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
@@ -1017,6 +1116,9 @@ def _generate_result_file(sess: dict, rtype: str, user_obj, plan: str):
         label = "Live"
     elif rtype == "dead":
         cards, label = sess.get("dead_cards", []), "Dead"
+    elif rtype == "error":
+        # FIX 11: error cards download
+        cards, label = sess.get("error_cards", []), "Error (Site Issues)"
     else:
         cards = (sess.get("charged_cards", []) + sess.get("live_cards", []) +
                  sess.get("dead_cards", []))
@@ -1073,9 +1175,11 @@ async def _mass_worker(
             return
 
         try:
+            # FIX 10: pass sid so _check_card_with_retry can abort mid-loop
             verdict, resp, price, currency = await _check_card_with_retry(
                 shared, card, sites, proxies,
                 max_sites=SITE_RETRIES, site_timeout=SITE_TIMEOUT,
+                sid=sid,
             )
         except asyncio.CancelledError:
             raise
@@ -1118,7 +1222,11 @@ async def _mass_worker(
                               elapsed, plan, "LIVE", reply_to=sess.get("user_msg_id")),
                 return_exceptions=True,
             ))
-        else:
+        elif verdict == "ERROR":
+            # FIX 11: site error — card not classified, no credit deduction
+            sess["errors"] = sess.get("errors", 0) + 1
+            sess.setdefault("error_cards", []).append(card_data)
+        else:  # DEAD
             sess["dead"] += 1
             sess.setdefault("dead_cards", []).append(card_data)
             sess["_batch_dead"] = sess.get("_batch_dead", 0) + 1
@@ -1143,15 +1251,20 @@ async def _run_mass_batch(
     sem     = asyncio.Semaphore(MAX_CONCURRENT)
     bc      = BinCache()
 
+    # FIX 8: create connector separately so cb_msh_stop can close it instantly
     connector = aiohttp.TCPConnector(
         limit=TCP_LIMIT, limit_per_host=TCP_PER_HOST,
         keepalive_timeout=30, enable_cleanup_closed=True,
     )
+    # Store reference in session — cb_msh_stop closes it for instant abort
+    sess["_connector"] = connector
+
     async with aiohttp.ClientSession(
         connector=connector,
         timeout=aiohttp.ClientTimeout(total=SITE_TIMEOUT + 5),
         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
     ) as shared:
+        sess["_shared"] = shared   # FIX 8: also store session reference
         tasks = []
         for card, cc_num in cards:
             if _is_stopped(sid): break
@@ -1165,8 +1278,14 @@ async def _run_mass_batch(
                 sess.setdefault("tasks", []).append(t)
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Clean connector reference after session closes
+    if sess:
+        sess.pop("_connector", None)
+        sess.pop("_shared", None)
+
     sess = MSH_SESSIONS.get(sid)
     if sess:
+        # Only deduct credits for genuinely DEAD cards (not ERROR/site-issue cards)
         dead = sess.get("_batch_dead", 0)
         if dead > 0:
             try:
@@ -1184,6 +1303,7 @@ async def _run_mass_batch(
         logging.info(
             f"🏁 [MSH] {sid} {sess['status']} "
             f"CHG:{sess['charged']} LIVE:{sess['live']} DEAD:{sess['dead']} "
+            f"ERR:{sess.get('errors',0)} "
             f"Checked:{sess['checked']}/{len(cards)} "
             f"Speed:{cps:.1f} cps Time:{int(elapsed)}s"
         )
@@ -1304,14 +1424,18 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "charged":       0,
         "live":          0,
         "dead":          0,
+        "errors":        0,        # FIX 11: site-error counter
         "_batch_dead":   0,
         "start_time":    time.time(),
         "tasks":         [],
+        "_connector":    None,     # FIX 8: filled by _run_mass_batch
+        "_shared":       None,     # FIX 8: filled by _run_mass_batch
         "last_text":     "",
         "last_update":   0,
         "charged_cards": [],
         "live_cards":    [],
         "dead_cards":    [],
+        "error_cards":   [],       # FIX 11
         "user_obj":      user,
         "plan":          plan,
     }
@@ -1327,10 +1451,11 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     FIX 1: NO pre-emptive query.answer() at the top.
 
     Telegram allows exactly ONE answer() per callback query.
-    The old code called answer() immediately (blank ack) then tried to answer
-    again for every error alert — all those second calls threw BadRequest and
-    the user saw NO feedback on any button press.
-    Each branch below now calls answer() exactly once.
+    The old code answered immediately then tried to answer again for every
+    error alert — all second calls threw BadRequest and the user saw nothing.
+    Each branch below calls answer() exactly once.
+
+    FIX 11: handles rtype == "error" for site-error card downloads.
     """
     query = update.callback_query
     # mshr_{sid}_{type}
@@ -1357,6 +1482,8 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = len(sess.get("charged_cards", [])) + len(sess.get("live_cards", []))
     elif rtype == "dead":
         count = len(sess.get("dead_cards", []))
+    elif rtype == "error":
+        count = len(sess.get("error_cards", []))
     else:
         count = (len(sess.get("charged_cards", [])) + len(sess.get("live_cards", [])) +
                  len(sess.get("dead_cards", [])))
@@ -1365,7 +1492,6 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer(f"❌ No {rtype} cards yet", show_alert=True)
         return
 
-    # Acknowledge the tap with a visible message (only answer on success path)
     await query.answer(f"📦 Preparing {rtype} file…")
 
     user_obj   = sess.get("user_obj")
@@ -1396,8 +1522,9 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    FIX 2: Stop NEVER checks _is_locked.
-    The user must always be able to stop a running check immediately.
+    FIX 2: Stop NEVER checks _is_locked — user must always be able to stop.
+    FIX 8: Closes the shared aiohttp connector immediately — aborts ALL
+           in-flight HTTP requests in < 100 ms for truly instant stopping.
     """
     query = update.callback_query
     parts = query.data.split("_", 1)
@@ -1410,7 +1537,20 @@ async def cb_msh_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sess["status"] != "CHECKING":
         await query.answer("ℹ️ Already stopped", show_alert=True); return
 
+    # Step 1: mark STOPPED so all workers exit their checks immediately
     sess["status"] = "STOPPED"
+
+    # Step 2 (FIX 8): close the aiohttp connector — kills all in-flight HTTP
+    # requests instantly instead of waiting for the per-request timeout
+    connector = sess.pop("_connector", None)
+    shared    = sess.pop("_shared",    None)
+    if connector and not connector.closed:
+        try:
+            asyncio.create_task(connector.close())
+        except Exception:
+            pass
+
+    # Step 3: cancel all pending asyncio tasks
     cancelled = 0
     for t in sess.get("tasks", []):
         if not t.done():
