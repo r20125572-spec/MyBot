@@ -86,6 +86,15 @@ _BIN_CACHE:   dict  = {}
 _DEAD_SITES:  set   = set()
 _ALL_PROXIES: list  = []
 
+# Site-prober cache — populated by probe_all_sites(), used by get_working_sites()
+_WORKING_SITES:     list  = []
+_PROBE_IN_PROGRESS: bool  = False
+_PROBE_LAST_RUN:    float = 0.0
+PROBE_TTL:          float = 1800.0   # re-probe every 30 min
+PROBE_CARD:         str   = "4111111111111111|01|29|123"
+PROBE_TIMEOUT:      float = 8.0
+PROBE_CONCURRENCY:  int   = 60
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # EMOJI IDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
