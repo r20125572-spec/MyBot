@@ -76,7 +76,7 @@ EXTRA_CHARGED_GROUP_ID = -1003991915326
 
 SH_COOLDOWN    = 25      # free-user cooldown between /sh calls (seconds)
 
-SITE_RETRIES   = 8       # max different sites tried per card
+SITE_RETRIES   = 999     # try ALL sites from sites.txt until a real result
 SITE_TIMEOUT   = 90      # per-request timeout (seconds)
 MAX_CONCURRENT = 80      # parallel cards in mass check
 PROGRESS_EVERY = 3       # update progress bar every N cards
@@ -144,13 +144,12 @@ _ALL_PROXIES: list = []
 def _load_proxies() -> list:
     """
     Load ALL proxies from px.txt (priority) or proxies.txt.
-    No shuffle here — callers do random.choice() so every proxy
-    is equally available to every concurrent card worker.
-    Result is also stored in the global _ALL_PROXIES pool.
+    Proxies are stored RAW (ip:port or ip:port:user:pass) because the
+    API receives the proxy as a query-string value — NOT as an HTTP URL.
+    Sending 'http://ip:port' causes the API to return 404.
     """
     global _ALL_PROXIES
 
-    # Look in cwd AND one level up (handles bot run from subdirectory)
     import os
     search_paths = []
     for fname in ("px.txt", "proxies.txt"):
@@ -164,9 +163,15 @@ def _load_proxies() -> list:
                 raw = [l.strip() for l in f
                        if l.strip() and not l.startswith(("#", "//", ";"))]
             if raw:
-                # Normalise every proxy to http:// prefix
-                lines = [_norm_proxy(p) for p in raw]
-                _ALL_PROXIES = lines          # update global pool
+                # Strip any http:// / https:// / socks5:// prefix —
+                # the API wants the bare proxy string, e.g. "1.2.3.4:8080"
+                def _strip_proxy_scheme(p: str) -> str:
+                    for pfx in ("socks5://", "socks4://", "https://", "http://"):
+                        if p.startswith(pfx):
+                            return p[len(pfx):]
+                    return p
+                lines = [_strip_proxy_scheme(p) for p in raw]
+                _ALL_PROXIES = lines
                 logging.info(f"[SH] Loaded {len(lines)} proxies from {path}")
                 return lines
         except (FileNotFoundError, PermissionError):
@@ -188,16 +193,30 @@ def _strip_scheme(url: str) -> str:
     return url.rstrip("/")
 
 def _load_sites() -> list:
-    try:
-        with open("sites.txt", encoding="utf-8", errors="ignore") as f:
-            lines = [_strip_scheme(l) for l in f
-                     if l.strip() and not l.startswith("#")]
-        lines = [l for l in lines if l]
-        if lines:
-            random.shuffle(lines)
-            return lines
-    except FileNotFoundError:
-        pass
+    """
+    Load ALL sites from sites.txt (searched in cwd, parent dir, and
+    script dir). Strips https:// so the API gets bare domains.
+    Sites are shuffled so every card starts from a different position.
+    """
+    import os
+    search_paths = [
+        "sites.txt",
+        os.path.join("..", "sites.txt"),
+        os.path.join(os.path.dirname(__file__), "sites.txt"),
+    ]
+    for path in search_paths:
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                lines = [_strip_scheme(l) for l in f
+                         if l.strip() and not l.startswith("#")]
+            lines = [l for l in lines if l]
+            if lines:
+                random.shuffle(lines)
+                logging.info(f"[SH] Loaded {len(lines)} sites from {path}")
+                return lines
+        except (FileNotFoundError, PermissionError):
+            pass
+    logging.warning("[SH] sites.txt not found — using fallback site")
     return ["aloracosmetics.myshopify.com"]
 
 def _norm_proxy(p: str) -> str:
@@ -484,10 +503,11 @@ def _parse_api(data: dict) -> tuple:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CORE RETRY LOOP
-# Tries up to SITE_RETRIES different sites per card.
-# RETRY verdict → skip to next site (site broken, card untouched).
+# Tries every site from sites.txt (shuffled) per card.
+# RETRY verdict → skip to next site (site error, card untouched).
 # CHARGED/LIVE/DEAD/TDS → return immediately.
-# If ALL sites return RETRY → ERROR.
+# If ALL sites return RETRY → ERROR (no working site found).
+# max_sites caps how many sites to try (SITE_RETRIES=999 = all).
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _check_card_with_retry(
     session: aiohttp.ClientSession,
@@ -501,40 +521,41 @@ async def _check_card_with_retry(
     """
     Returns (verdict, raw_response, price, currency).
     verdict: CHARGED | TDS | LIVE | DEAD | ERROR
+
+    Tries every site in the pool (up to max_sites) with a fresh random
+    proxy each time.  Stops the moment a bank response is received.
+    Stops after all unique sites are exhausted (does NOT cycle back).
     """
     if not sites:
         sites = ["aloracosmetics.myshopify.com"]
 
+    # Shuffle a copy so each card gets a different starting site
     pool = sites[:]
     random.shuffle(pool)
 
-    # Use the passed-in list OR fall back to global pool.
-    # All workers share _ALL_PROXIES so every proxy is always reachable.
+    # Use passed-in list OR fall back to global pool.
     px_pool = proxies if proxies else _ALL_PROXIES
 
-    tried: set = set()
     price, currency = "0.00", "USD"
     last_resp = "All sites failed"
 
-    for attempt in range(max_sites):
-        # Stop check for mass sessions
+    # Iterate every site exactly once (capped at max_sites).
+    # No cycling — if all sites fail, card gets ERROR.
+    limit = min(max_sites, len(pool))
+    for attempt in range(limit):
+        # Check stop flag for mass sessions
         if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
             raise asyncio.CancelledError()
 
-        # Pick untried site
-        untried = [s for s in pool if s not in tried]
-        if not untried:
-            tried.clear()
-            untried = pool[:]
-        site = random.choice(untried)
-        tried.add(site)
+        site = pool[attempt]   # already shuffled; each index = unique site
 
-        # Pick a random proxy from the FULL pool every attempt
-        # (random.choice = every proxy has equal chance, not sequential)
+        # Random proxy from the FULL pool — raw "ip:port" string.
+        # The API receives proxy as a query param (NOT an HTTP proxy URL).
+        # Sending "http://ip:port" causes the API to return 404.
         if px_pool:
-            proxy = random.choice(px_pool)          # already normalised
+            proxy = random.choice(px_pool)
         else:
-            proxy = None   # WARNING: API requires proxy; will likely fail
+            proxy = None   # WARNING: API returns 404 without a proxy
 
         try:
             data = await _call_api(session, card, site, proxy, timeout=site_timeout)
@@ -547,12 +568,13 @@ async def _check_card_with_retry(
         verdict = classify_response(resp, gateway)
         last_resp = resp
 
-        logging.debug(f"[SH] {card[:6]}*** site={site} gw={gateway!r} "
+        logging.debug(f"[SH] {card[:6]}*** attempt={attempt+1}/{limit} "
+                      f"site={site} proxy={proxy} gw={gateway!r} "
                       f"resp={resp!r} → {verdict}")
 
         if verdict in ("CHARGED", "TDS", "LIVE", "DEAD"):
             return verdict, resp, price, currency
-        # RETRY → loop continues with next site
+        # RETRY → continue to next site
 
     return "ERROR", last_resp, price, currency
 
