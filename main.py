@@ -48,6 +48,8 @@ from sh import (
     get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
+    probe_all_sites, get_working_sites, start_probe_background,
+    _WORKING_SITES,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1012,6 +1014,59 @@ async def cmd_onpp(u, c):    await _gate_toggle(u, c, "pp",   True)
 async def cmd_offpp(u, c):   await _gate_toggle(u, c, "pp",   False)
 async def cmd_onsh(u, c):    await _gate_toggle(u, c, "sh",   True)
 async def cmd_offsh(u, c):   await _gate_toggle(u, c, "sh",   False)
+
+
+async def cmd_updatesites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /updatesites — Owner only.
+    Re-probe all sites and report how many are alive.
+    Useful after updating sites.txt or when all cards come back Dead.
+    """
+    user = update.effective_user
+    if user.id != OWNER_ID:
+        await update.message.reply_text("❌ Owner only.", parse_mode="HTML")
+        return
+
+    from sh import _PROBE_IN_PROGRESS, PROBE_CONCURRENCY, PROBE_TIMEOUT
+    if _PROBE_IN_PROGRESS:
+        await update.message.reply_text(
+            "⏳ <b>Site probe already running.</b> Please wait.", parse_mode="HTML")
+        return
+
+    all_sites = _load_sites()
+    proxies   = _load_proxies()
+
+    status_msg = await update.message.reply_text(
+        f"🔍 <b>Probing {len(all_sites)} sites...</b>\n"
+        f"Concurrency: {PROBE_CONCURRENCY} | Timeout: {PROBE_TIMEOUT}s per site\n"
+        f"This may take 30–60 seconds.",
+        parse_mode="HTML",
+    )
+
+    edit_count = [0]
+    async def on_progress(done, total):
+        edit_count[0] += 1
+        if edit_count[0] % 3 != 0:   # only edit every 3rd callback (~every 150 sites)
+            return
+        try:
+            await status_msg.edit_text(
+                f"🔍 <b>Probing sites...</b>\n"
+                f"Progress: {done}/{total}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+    working = await probe_all_sites(all_sites, proxies, on_progress=on_progress)
+
+    await status_msg.edit_text(
+        f"✅ <b>Site probe complete!</b>\n\n"
+        f"Total sites: <b>{len(all_sites)}</b>\n"
+        f"✅ Working: <b>{len(working)}</b>\n"
+        f"❌ Dead (404): <b>{len(all_sites) - len(working)}</b>\n\n"
+        f"Bot will now use only the {len(working)} working sites for checks.",
+        parse_mode="HTML",
+    )
 async def cmd_onmsh(u, c):   await _gate_toggle(u, c, "msh",  True)
 async def cmd_offmsh(u, c):  await _gate_toggle(u, c, "msh",  False)
 async def cmd_onb3(u, c):    await _gate_toggle(u, c, "b3",   True)
@@ -2883,6 +2938,7 @@ async def _post_init(app: Application) -> None:
        BOT_USERNAME is set to in config.py.
     2. Clear any existing webhook / long-poll session before polling starts.
        Sleep 5 s so Telegram can expire the old getUpdates session.
+    3. Start background site prober so /sh and /msh only use alive sites.
     """
     # ── Auto-detect real bot username ──────────────────────────────────────
     try:
@@ -2901,12 +2957,25 @@ async def _post_init(app: Application) -> None:
             await app.bot.delete_webhook(drop_pending_updates=True)
             logger.info("Webhook cleared — waiting 5 s for old session to expire...")
             await asyncio.sleep(5)
-            return
+            break
         except Exception as exc:
             logger.warning(f"delete_webhook attempt {attempt}/5 failed: {exc}")
             if attempt < 5:
                 await asyncio.sleep(attempt * 2)
-    logger.warning("Could not clear webhook after 5 attempts — continuing anyway.")
+    else:
+        logger.warning("Could not clear webhook after 5 attempts — continuing anyway.")
+
+    # ── Start background site prober ──────────────────────────────────────
+    # Runs in background: probes all sites, caches working ones, re-probes
+    # every 30 min. /sh and /msh will only use confirmed-live sites.
+    try:
+        all_sites = _load_sites()
+        proxies   = _load_proxies()
+        start_probe_background(all_sites, proxies)
+        logger.info(f"[PROBE] Background site prober started "
+                    f"({len(all_sites)} sites, {len(proxies)} proxies)")
+    except Exception as exc:
+        logger.warning(f"[PROBE] Could not start background prober: {exc}")
 
 
 def main():
@@ -2976,6 +3045,7 @@ def main():
         app.add_handler(CommandHandler("offchk",  cmd_offchk))
         app.add_handler(CommandHandler("onpp",    cmd_onpp))
         app.add_handler(CommandHandler("offpp",   cmd_offpp))
+        app.add_handler(CommandHandler("updatesites", cmd_updatesites))
         app.add_handler(CommandHandler("onsh",    cmd_onsh))
         app.add_handler(CommandHandler("offsh",   cmd_offsh))
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
