@@ -218,11 +218,21 @@ def _update_user_meta(ud: dict, user) -> None:
     if getattr(user, "language_code", None): ud["language_code"] = user.language_code
 
 def is_user_premium(ud: dict) -> bool:
+    """Returns True if the user has an active (non-expired) premium plan.
+
+    Side-effects on expiry:
+      • plan  → "TRIAL"
+      • credits → restored to pre_premium_credits (what they had before buying)
+      • pre_premium_credits → 0
+    Premium users NEVER have credits deducted — they get unlimited checks.
+    """
     raw_plan = ud.get("plan", "TRIAL").upper()
     is_prem  = raw_plan != "TRIAL"
     if is_prem and ud.get("expires", 0) <= time.time():
+        # Premium expired — restore saved credits
+        saved = ud.get("pre_premium_credits", 0)
         ud["plan"]                = "TRIAL"
-        ud["credits"]             = ud.get("pre_premium_credits", 150)
+        ud["credits"]             = max(saved, 0)   # never go negative
         ud["expires"]             = 0
         ud["pre_premium_credits"] = 0
         return False
@@ -913,11 +923,16 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not premium:
         credits = ud.get("credits", 0)
         if credits <= 0:
+            # Out of credits — invite to upgrade, don't hard-block the UI
             await update.message.reply_text(
-                f"<b>{E_DECLINED} {B('No Credits')}</b>\n──────────\n"
-                "You have <b>0 credits</b> remaining.\n\n"
-                f"{E_PRO} Upgrade to <b>Premium</b> for unlimited checks.\n"
-                "──────────",
+                f"<b>{E_PRO} {B('Credits Used Up!')}</b>\n──────────\n"
+                f"You've used all your free credits.\n\n"
+                f"<b>💎 Upgrade to Premium</b> for:\n"
+                f"• Unlimited checks — no credit limit\n"
+                f"• No cooldowns\n"
+                f"• Mass checking without daily caps\n"
+                f"──────────\n"
+                f"Tap <b>Buy Now</b> below to get a plan.",
                 reply_markup=kb_upgrade(), parse_mode="HTML"
             )
             return
@@ -934,7 +949,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
 
         set_cooldown(user.id, context)
-        ud["credits"] = credits - 1
+        ud["credits"] = credits - 1   # deduct 1 credit per single check
 
     api_url  = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
     site_url = GATE_SITES.get(gate_key, "example.com")
@@ -2149,12 +2164,16 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         if ud.get("credits", 0) <= 0:
+            # Trial user out of credits — friendly upgrade prompt
             await update.message.reply_text(
-                f"<b>{E_DECLINED} {B('No Credits')}</b>\n──────────\n"
-                "You have <b>0 credits</b> remaining.\n\n"
-                "💡 <b>1 credit = 1 card checked</b>\n"
-                "Contact the owner to buy more credits,\n"
-                "or upgrade to Premium for unlimited checks.\n──────────",
+                f"<b>{E_PRO} {B('Credits Used Up!')}</b>\n──────────\n"
+                f"You've used all your free credits.\n\n"
+                f"<b>💎 Upgrade to Premium</b> for:\n"
+                f"• Unlimited mass checking\n"
+                f"• No daily card caps\n"
+                f"• No credit limits ever\n"
+                f"──────────\n"
+                f"Tap <b>Buy Now</b> below to get a plan.",
                 parse_mode="HTML", reply_markup=kb_upgrade()
             )
             return
