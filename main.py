@@ -49,7 +49,7 @@ from sh import (
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background,
-    html_to_entities,
+    _send_sticker, get_random_live_emoji,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -921,10 +921,9 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         return
 
-    _sp_html  = (f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> '
-                 f'Scanning...</b>')
-    _sp_plain, _sp_ents = html_to_entities(_sp_html)
-    msg = await update.message.reply_text(_sp_plain, entities=_sp_ents)
+    _sp_html = (f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> '
+                f'Scanning...</b>')
+    msg = await update.message.reply_text(_sp_html, parse_mode="HTML")
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
     plan       = ud.get("plan", "TRIAL")
@@ -963,8 +962,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             bin_data=bin_data, username=uname, plan=plan,
             time_taken=time_taken, is_approved=is_approved,
         )
-        _rp, _re = html_to_entities(text)
-        await msg.edit_text(_rp, entities=_re,
+        await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
@@ -977,8 +975,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_timeout=True,
         )
-        _rp, _re = html_to_entities(text)
-        await msg.edit_text(_rp, entities=_re,
+        await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
     except Exception as e:
@@ -991,8 +988,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_error=True,
         )
-        _rp, _re = html_to_entities(text)
-        await msg.edit_text(_rp, entities=_re,
+        await msg.edit_text(text, parse_mode="HTML",
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
@@ -2236,9 +2232,12 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_obj=user,
         plan=plan,
     )
-    _ip, _ie  = _pt(sess)   # _progress_text now returns (plain, ents) via MsgBuilder
+    init_html = _pt(sess)   # _progress_text returns HTML string — parse_mode="HTML"
+    # Send animated sticker to command chat before progress bar — guaranteed animation
+    # for ALL users (send_sticker always animates, no Premium required).
+    await _send_sticker(context.bot, update.effective_chat.id, get_random_live_emoji())
     msg = await update.message.reply_text(
-        _ip, entities=_ie,
+        init_html, parse_mode="HTML",
         reply_markup=_msh_buttons(sid, running=True),
         disable_web_page_preview=True,
     )
