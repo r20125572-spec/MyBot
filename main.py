@@ -11,7 +11,7 @@ from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update, TelegramObject
+from telegram import Update, TelegramObject, MessageEntity
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -49,6 +49,7 @@ from sh import (
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background,
+    html_to_entities,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -920,10 +921,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         return
 
-    msg        = await update.message.reply_text(
-        f"<b><tg-emoji emoji-id=\"{PROG_PROGRESS_EMOJI_ID}\">🔄</tg-emoji> "
-        f"Scanning...</b>", parse_mode="HTML"
-    )
+    _sp_html  = (f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> '
+                 f'Scanning...</b>')
+    _sp_plain, _sp_ents = html_to_entities(_sp_html)
+    msg = await update.message.reply_text(_sp_plain, entities=_sp_ents)
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
     plan       = ud.get("plan", "TRIAL")
@@ -962,7 +963,8 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             bin_data=bin_data, username=uname, plan=plan,
             time_taken=time_taken, is_approved=is_approved,
         )
-        await msg.edit_text(text, parse_mode="HTML",
+        _rp, _re = html_to_entities(text)
+        await msg.edit_text(_rp, entities=_re,
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
@@ -975,7 +977,8 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_timeout=True,
         )
-        await msg.edit_text(text, parse_mode="HTML",
+        _rp, _re = html_to_entities(text)
+        await msg.edit_text(_rp, entities=_re,
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
     except Exception as e:
@@ -988,7 +991,8 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_error=True,
         )
-        await msg.edit_text(text, parse_mode="HTML",
+        _rp, _re = html_to_entities(text)
+        await msg.edit_text(_rp, entities=_re,
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
@@ -2233,9 +2237,9 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan=plan,
     )
     init_text = _pt(sess)
+    _ip, _ie  = html_to_entities(init_text)
     msg = await update.message.reply_text(
-        init_text,
-        parse_mode="HTML",
+        _ip, entities=_ie,
         reply_markup=_msh_buttons(sid, running=True),
         disable_web_page_preview=True,
     )
