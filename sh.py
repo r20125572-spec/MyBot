@@ -94,6 +94,7 @@ _ALL_PROXIES: list  = []
 _WORKING_SITES:     list  = []
 _PROBE_IN_PROGRESS: bool  = False
 _PROBE_LAST_RUN:    float = 0.0
+_PROBE_TASK:        "asyncio.Task | None" = None   # stored so shutdown can cancel it
 PROBE_TTL:          float = 1800.0   # re-probe every 30 min
 PROBE_CARD:         str   = "4000223372377978|05|29|651"   # same test card as sitechk.py
 PROBE_TIMEOUT:      float = 12.0
@@ -1157,6 +1158,9 @@ async def probe_all_sites(all_sites: list, proxies: list,
     Test every site concurrently. Returns confirmed-working sites.
     Falls back to all_sites if nothing is alive.
     on_progress(done, total) is called every 50 sites if provided.
+
+    Safe to cancel: all inner tasks are cancelled first so no
+    asyncio.Semaphore waiter is left trying to wake up on a closed loop.
     """
     global _WORKING_SITES, _PROBE_IN_PROGRESS, _PROBE_LAST_RUN
 
@@ -1172,23 +1176,41 @@ async def probe_all_sites(all_sites: list, proxies: list,
     working = []
     done_n  = 0
     total   = len(all_sites)
+    tasks: list = []
 
     async def _check_one(site):
         nonlocal done_n
-        async with sem:
-            result = await _probe_one_site(site, proxies)
-            done_n += 1
-            if result:
-                working.append(site)
-            if on_progress and done_n % 50 == 0:
+        try:
+            async with sem:
                 try:
-                    await on_progress(done_n, total)
+                    result = await _probe_one_site(site, proxies)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
-                    pass
+                    result = False
+                done_n += 1
+                if result:
+                    working.append(site)
+                if on_progress and done_n % 50 == 0:
+                    try:
+                        await on_progress(done_n, total)
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
+            raise          # let gather handle it
+        except RuntimeError:
+            pass           # event loop closed mid-release — exit silently
 
     try:
-        await asyncio.gather(*[_check_one(s) for s in all_sites],
-                             return_exceptions=True)
+        tasks = [asyncio.ensure_future(_check_one(s)) for s in all_sites]
+        await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        # Cancel every live probe task so their semaphore waiters never run
+        # on a loop that's already shutting down.
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     finally:
         _PROBE_IN_PROGRESS = False
 
@@ -1212,19 +1234,57 @@ def get_working_sites() -> list:
 
 
 async def _auto_probe_loop(all_sites: list, proxies: list):
-    """Background loop: probe now, then re-probe every PROBE_TTL seconds."""
-    await asyncio.sleep(5)          # let bot finish startup first
+    """Background loop: probe now, then re-probe every PROBE_TTL seconds.
+    Exits cleanly on CancelledError so the event loop can close without
+    leaving semaphore waiters dangling on a dead loop."""
+    try:
+        await asyncio.sleep(5)      # let bot finish startup first
+    except asyncio.CancelledError:
+        return
     while True:
         try:
             await probe_all_sites(all_sites, proxies)
+        except asyncio.CancelledError:
+            logging.info("[PROBE] background probe cancelled — shutting down")
+            return
         except Exception as exc:
             logging.error(f"[PROBE] background error: {exc}")
-        await asyncio.sleep(PROBE_TTL)
+        try:
+            await asyncio.sleep(PROBE_TTL)
+        except asyncio.CancelledError:
+            logging.info("[PROBE] background sleep cancelled — shutting down")
+            return
 
 
-def start_probe_background(all_sites: list, proxies: list):
-    """Schedule the background probe loop. Call once from _post_init."""
-    asyncio.ensure_future(_auto_probe_loop(all_sites, proxies))
+def start_probe_background(all_sites: list, proxies: list) -> None:
+    """Schedule the background probe loop. Call once from _post_init.
+    Stores the task so stop_probe_background() can cancel it on shutdown."""
+    global _PROBE_TASK
+    _PROBE_TASK = asyncio.ensure_future(_auto_probe_loop(all_sites, proxies))
+    # Log unexpected task failures (CancelledError is expected on shutdown)
+    def _on_done(t: asyncio.Task):
+        if not t.cancelled():
+            exc = t.exception()
+            if exc:
+                logging.error(f"[PROBE] background task died: {exc}")
+    _PROBE_TASK.add_done_callback(_on_done)
+
+
+async def stop_probe_background() -> None:
+    """Cancel the background probe loop and wait for it to finish.
+    Call from the PTB post_shutdown hook so all semaphore waiters are
+    torn down before the event loop closes."""
+    global _PROBE_TASK
+    task = _PROBE_TASK
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
+    _PROBE_TASK = None
+    logging.info("[PROBE] background prober stopped cleanly")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2603,9 +2663,8 @@ __all__ = [
     "_load_sites", "_load_proxies",
     # Site prober exports
     "probe_all_sites", "get_working_sites",
-    "start_probe_background",
+    "start_probe_background", "stop_probe_background",
     "_WORKING_SITES", "_PROBE_IN_PROGRESS",
-    # Sticker animation sender — shared with mst.py so both modules use one cache
+    # Message sender — shared with mst.py
     "_send_as_media", "_get_sticker_fid",
-    "_STICKER_CACHE", "_STICKER_OBJ_CACHE",
 ]
