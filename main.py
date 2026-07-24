@@ -7,6 +7,8 @@ import signal
 import os
 import fcntl
 import json
+import hmac
+import hashlib
 from io import BytesIO
 from html import escape
 from typing import Optional
@@ -246,8 +248,33 @@ def gen_code(length: int = 10) -> str:
 def gen_receipt() -> str:
     return f"Batamanchk{random.randint(100000, 999999)}-CHK"
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SECURE REFERRAL  — HMAC-signed tokens (no forgery)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_REF_SECRET: bytes = BOT_TOKEN.encode("utf-8")
+
+def _ref_token(user_id: int) -> str:
+    """Generate a short HMAC-SHA256 token for user_id.
+    Format: {user_id}_{16-char hex signature}
+    Anyone who guesses/modifies the user_id will get a bad signature."""
+    msg = str(user_id).encode("utf-8")
+    sig = hmac.new(_REF_SECRET, msg, hashlib.sha256).hexdigest()[:16]
+    return f"{user_id}_{sig}"
+
+def _verify_ref_token(token: str):
+    """Return referrer_id (int) if the token is authentic, else None."""
+    try:
+        uid_str, sig = token.rsplit("_", 1)
+        uid = int(uid_str)
+        expected = hmac.new(_REF_SECRET, str(uid).encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+        if hmac.compare_digest(sig, expected):
+            return uid
+    except Exception:
+        pass
+    return None
+
 def get_referral_link(user_id: int) -> str:
-    return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+    return f"https://t.me/{BOT_USERNAME}?start=ref_{_ref_token(user_id)}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UI — USER CONTROL HUB  (/start)
@@ -530,21 +557,27 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
                        bin_data: dict, username: str, plan: str,
                        time_taken: str, is_approved: bool,
                        is_timeout: bool = False, is_error: bool = False) -> str:
-    """Clean result card — new UI matching the target design.
-    No [❆] logo. Animation delivered separately via _send_as_media()."""
+    """Clean result card — mst.py style with [❆] status line and tg-emoji tags."""
+    from config import (CHANNEL_LINK, CARD_EMOJI_ID, TIME_EMOJI_ID, USER_EMOJI_ID,
+                        DEV_EMOJI_ID, PRO_EMOJI_ID, PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID)
+
+    ch_link  = f'<a href="{CHANNEL_LINK}">[❆]</a>'
+    live_eid = get_random_live_emoji()
 
     if is_timeout:
-        hit_line  = "TIMEOUT ⏱"
-        resp_icon = "⏱"
+        status_line = '<b>⏱ TIMEOUT</b>'
+        resp_te     = f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⏱</tg-emoji>'
     elif is_error:
-        hit_line  = "ERROR ⚠️"
-        resp_icon = "⚠️"
+        status_line = '<b>⚠️ ERROR</b>'
+        resp_te     = f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji>'
     elif is_approved:
-        hit_line  = "HIT ➛ LIVE ✅"
-        resp_icon = "✅"
+        status_line = (f'<b>{ch_link} HIT LIVE '
+                       f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
+        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     else:
-        hit_line  = "DEAD ➛ DECLINED ❌"
-        resp_icon = "❌"
+        status_line = (f'<b>{ch_link} DEAD DECLINED '
+                       f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
+        resp_te     = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
 
     plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
     plan_label = get_styled_plan(plan)
@@ -560,15 +593,21 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
     uname_display = escape(username)
 
     return (
-        f'<b>{hit_line}</b>\n'
+        f'{status_line}\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{card_raw}</code></b>\n'
         f'<b>Gate ➛ {gate_name}</b>\n'
         f'<b>──────────</b>\n'
-        f'<b>{resp_icon} {escape(raw_response)}</b>\n'
-        f'<b>💳 <code>{card_raw}</code></b>\n'
-        f'<b>🏦 {bin_txt}</b>\n'
+        f'<b>{resp_te} Resp ➛ {escape(raw_response)}</b>\n'
+        f'<b>Bin ➛ <code>{bin_txt}</code></b>\n'
         f'<b>──────────</b>\n'
-        f'<b>⏱ {time_taken}s  |  👤 {uname_display} {plan_emoji} ({plan_label})</b>\n'
-        f'<b>⚡ <a href="{DEV_LINK}">Batamanchk</a> ⭐</b>'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➛ {time_taken}s</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {uname_display} '
+        f'{plan_emoji} ({plan_label})</b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ '
+        f'<a href="{DEV_LINK}">Batmancardchk</a> '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2053,11 +2092,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         arg = context.args[0]
         if arg.startswith("ref_"):
-            try:
-                referrer_id = int(arg[4:])
+            # Secure HMAC token verification — prevents fake referral links
+            referrer_id = _verify_ref_token(arg[4:])
+            if referrer_id:
                 await process_referral(user.id, referrer_id, context)
-            except Exception:
-                pass
 
     if ud.get("banned", False) and user.id != OWNER_ID:
         await update.message.reply_text(
