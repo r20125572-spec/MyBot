@@ -1464,9 +1464,10 @@ async def _check_card_with_retry(
 # MISC HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _te(eid: str, fb: str = "●") -> str:
-    # Returns the plain fallback emoji — visible to ALL users (no Premium needed).
-    # Animated stickers are delivered via _send_sticker() calls instead.
-    return fb
+    """Wrap a custom emoji ID in a <tg-emoji> HTML tag.
+    Animates for Telegram Premium users; shows fallback glyph for others.
+    Requires parse_mode='HTML' on the containing message."""
+    return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
 
 
 def _u16len(s: str) -> int:
@@ -1675,98 +1676,53 @@ def _uurl(user) -> str:
 # animated stickers when the BOT ACCOUNT has Premium.
 # Without Premium the fallback glyph (plain "💎") shows instead.
 #
-# Bot API getCustomEmojiStickers() + send_sticker() requires NO
-# Premium on the bot — the sticker is delivered full-size and
-# animated for every user on every client version.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_STICKER_CACHE:     dict[str, str]    = {}   # emoji_id → file_id
-_STICKER_OBJ_CACHE: dict[str, object] = {}   # emoji_id → full Sticker object
-
+# STICKER / MEDIA HELPERS
+#
+# Telegram's Bot API rejects custom emoji sticker file_ids from
+# every send method (send_sticker, send_animation, send_document …)
+# with "Can't parse entities" or "Wrong file type" / "Bad Request".
+# The ONLY supported way to display premium animated emoji in bot
+# messages is <tg-emoji emoji-id="...">fallback</tg-emoji> inside
+# an HTML message.  That tag animates for Premium users and shows
+# the fallback glyph for everyone else — no Premium required to read.
+#
+# All sticker-send code below is therefore reduced to stubs / pure
+# send_message wrappers so the codebase compiles unchanged but never
+# triggers the Telegram 400 error.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def _get_sticker_fid(bot, emoji_id: str):
-    """Resolve a custom emoji ID → sendable file_id. Caches both the file_id
-    and the full Sticker object (for is_video / is_animated in _send_as_media)."""
-    if emoji_id in _STICKER_CACHE:
-        return _STICKER_CACHE[emoji_id]
-    try:
-        stickers = await bot.get_custom_emoji_stickers([emoji_id])
-        if stickers:
-            stk = stickers[0]
-            _STICKER_CACHE[emoji_id]     = stk.file_id
-            _STICKER_OBJ_CACHE[emoji_id] = stk
-            logging.info(f"[STICKER] resolved eid={emoji_id[:12]}… "
-                         f"video={stk.is_video} anim={stk.is_animated}")
-            return stk.file_id
-        else:
-            logging.warning(f"[STICKER] API empty for eid={emoji_id}")
-    except Exception as exc:
-        logging.warning(f"[STICKER] resolve FAILED eid={emoji_id}: {exc}")
+    """Stub — custom emoji sticker file_ids cannot be sent by bots.
+    Kept for API compatibility (imported by mst.py). Always returns None."""
     return None
 
 
 async def _send_sticker(bot, chat_id, emoji_id: str):
-    """Send a full-size animated sticker for the given custom emoji ID.
-    Uses disable_notification=True so it arrives silently (no ping sound).
-    Silently skips if the sticker cannot be resolved."""
-    fid = await _get_sticker_fid(bot, emoji_id)
-    if fid:
-        try:
-            await bot.send_sticker(chat_id=chat_id, sticker=fid,
-                                   disable_notification=True)
-            logging.info(f"[STICKER] ✓ sent eid={emoji_id[:12]}… to {chat_id}")
-        except Exception as exc:
-            logging.warning(f"[STICKER] send to {chat_id} failed: {exc}")
+    """No-op — custom emoji stickers cannot be sent via any Bot API method.
+    Animated emoji display is handled by <tg-emoji> tags in HTML messages."""
+    pass
 
 
 async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
                           parse_mode: str = "HTML", reply_markup=None,
                           disable_notification: bool = False):
-    """Send the sticker as a VISIBLE ANIMATION with caption — works for ALL users.
+    """Send a hit card as an HTML message.
 
-    send_animation(file_id, caption=caption) delivers the animated sticker as a
-    full-size video clip with the hit card beneath it.  This is a real file send —
-    no Telegram Premium is required to see the animation.
-
-    Fallback chain:
-      1. send_animation  — WebM video stickers (.webm) — most premium custom emoji
-      2. send_sticker + send_message — Lottie (.tgs) or static stickers
-      3. send_message only — if sticker cannot be resolved at all
+    emoji_id is accepted for API compatibility but ignored — custom emoji
+    sticker file_ids are rejected by Telegram's Bot API for all send methods.
+    Animated emoji are embedded directly in the caption via <tg-emoji> tags,
+    which animate for Premium users and show fallback glyphs for everyone else.
     """
-    fid = await _get_sticker_fid(bot, emoji_id)
-    if not fid:
-        try:
-            await bot.send_message(chat_id=chat_id, text=caption,
-                                   parse_mode=parse_mode, reply_markup=reply_markup,
-                                   disable_web_page_preview=True,
-                                   disable_notification=disable_notification)
-        except Exception as e:
-            logging.warning(f"[MEDIA] text-only fallback to {chat_id}: {e}")
-        return
-
-    # ── Primary: send_animation (works for .webm video stickers) ──────────────
     try:
-        await bot.send_animation(
-            chat_id=chat_id, animation=fid,
-            caption=caption, parse_mode=parse_mode,
-            reply_markup=reply_markup,
+        await bot.send_message(
+            chat_id=chat_id, text=caption,
+            parse_mode=parse_mode, reply_markup=reply_markup,
+            disable_web_page_preview=True,
             disable_notification=disable_notification,
         )
-        logging.info(f"[MEDIA] ✓ animation+caption → {chat_id}")
-        return
-    except Exception as e1:
-        logging.debug(f"[MEDIA] send_animation failed ({e1}), fallback sticker+text")
-
-    # ── Fallback: send_sticker (silent) + send_message ────────────────────────
-    try:
-        await bot.send_sticker(chat_id=chat_id, sticker=fid,
-                               disable_notification=True)
-        await bot.send_message(chat_id=chat_id, text=caption,
-                               parse_mode=parse_mode, reply_markup=reply_markup,
-                               disable_web_page_preview=True,
-                               disable_notification=disable_notification)
-        logging.info(f"[MEDIA] ✓ sticker+text → {chat_id}")
-    except Exception as e2:
-        logging.warning(f"[MEDIA] all attempts failed for {chat_id}: {e2}")
+    except Exception as exc:
+        logging.warning(f"[MEDIA] send_message to {chat_id} failed: {exc}")
 
 
 def _plan_eid(plan: str) -> str:
@@ -2047,30 +2003,30 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     if verdict == "CHARGED":
         hit_line  = "HIT ➛ CHARGED 💎"
         gate_line = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
-        resp_icon = "💎"
+        resp_te   = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
     elif verdict == "TDS":
         hit_line  = "HIT ➛ LIVE [3DS] ✅"
         gate_line = "Gate ➛ Shopify"
-        resp_icon = "✅"
+        resp_te   = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     elif verdict == "LIVE":
         hit_line  = "HIT ➛ LIVE ✅"
         gate_line = "Gate ➛ Shopify"
-        resp_icon = "✅"
+        resp_te   = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     else:
         hit_line  = "DEAD ➛ DECLINED ❌"
         gate_line = "Gate ➛ Shopify"
-        resp_icon = "❌"
+        resp_te   = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
 
     return (
         f"<b>{hit_line}</b>\n"
         f"<b>{gate_line}</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>{resp_icon} {safe_resp}</b>\n"
-        f"<b>💳 <code>{escape(card)}</code></b>\n"
+        f"<b>{resp_te} {safe_resp}</b>\n"
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji> <code>{escape(card)}</code></b>\n'
         f"<b>🏦 {bin_s}</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>⏱ {ts}  |  👤 {ulink} ⭐</b>\n"
-        f"<b>⚡ {DEV_LINK_HTML} ⭐</b>"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> {ts}  |  <tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ulink} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {DEV_LINK_HTML} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
 
@@ -2087,16 +2043,16 @@ def _progress_text(sess: dict) -> str:
     uobj  = sess.get("user_obj")
     ulink = _user_link(uobj) if uobj else "User"
     return (
-        f"<b>🛒 Gate ➛ Shopify</b>\n"
-        f"<b>🔄 Progress ➛ {sess['checked']}/{sess['total']}</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Shopify</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ {sess["checked"]}/{sess["total"]}</b>\n'
         f"<b>──────────</b>\n"
-        f"<b>💎 Charged ➛ {sess['charged']}</b>\n"
-        f"<b>✅ Live    ➛ {sess['approved']}</b>\n"
-        f"<b>❌ Dead    ➛ {sess['dead']}</b>\n"
-        f"<b>⚠️ Errors  ➛ {sess['errors']}</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji> Charged ➛ {sess["charged"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> Live    ➛ {sess["approved"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji> Dead    ➛ {sess["dead"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji> Errors  ➛ {sess["errors"]}</b>\n'
         f"<b>──────────</b>\n"
-        f"<b>⏱ Time ➛ {ts}</b>\n"
-        f"<b>👤 {ulink} ⭐  |  ⚡ {DEV_LINK_HTML}</b>"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> Time ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ulink} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji>  |  <tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {DEV_LINK_HTML}</b>'
     )
 
 
@@ -2369,9 +2325,6 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             if verdict == "CHARGED":
                 sess["charged"] += 1
                 sess["charged_cards"].append(rec)
-                # ── Animated sticker to the MSH chat (where user watches) ──
-                asyncio.create_task(
-                    _send_sticker(bot, sess["chat_id"], get_random_charged_emoji()))
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2385,9 +2338,6 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
                 sess["tds_cards"].append(rec)
-                # ── Animated sticker to the MSH chat ──────────────────────
-                asyncio.create_task(
-                    _send_sticker(bot, sess["chat_id"], get_random_live_emoji()))
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2400,9 +2350,6 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             elif verdict == "LIVE":
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
-                # ── Animated sticker to the MSH chat ──────────────────────
-                asyncio.create_task(
-                    _send_sticker(bot, sess["chat_id"], get_random_live_emoji()))
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2444,12 +2391,6 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
     if MSH_SESSIONS.get(sid, {}).get("status") == "CHECKING":
         MSH_SESSIONS[sid]["status"] = "FINISHED"
     await _update_progress(bot, sid, force=True)
-
-    # ── Completion sticker: animated finale in the MSH chat ──────────────────
-    # Pick a charged emoji if any hits, else a live emoji for a clean finish.
-    _fin_eid = (get_random_charged_emoji() if sess.get("charged", 0) > 0
-                else get_random_live_emoji())
-    asyncio.create_task(_send_sticker(bot, sess["chat_id"], _fin_eid))
 
     logging.info(f"[MSH] {sid} done  C:{sess['charged']} L:{sess['approved']} "
                  f"D:{sess['dead']} E:{sess['errors']}")
