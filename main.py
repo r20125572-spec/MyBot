@@ -530,29 +530,24 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
                        bin_data: dict, username: str, plan: str,
                        time_taken: str, is_approved: bool,
                        is_timeout: bool = False, is_error: bool = False) -> str:
+    """Clean result card — new UI matching the target design.
+    No [❆] logo. Animation delivered separately via _send_as_media()."""
 
     if is_timeout:
-        status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Timeout '
-            f'{tg_emoji(DECLINED_EMOJI_ID, "⏱")}</b>'
-        )
+        hit_line  = "TIMEOUT ⏱"
+        resp_icon = "⏱"
     elif is_error:
-        status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Error '
-            f'{tg_emoji(DECLINED_EMOJI_ID, "⚠️")}</b>'
-        )
+        hit_line  = "ERROR ⚠️"
+        resp_icon = "⚠️"
     elif is_approved:
-        status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live ✅</b>'
-        )
+        hit_line  = "HIT ➛ LIVE ✅"
+        resp_icon = "✅"
     else:
-        status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Declined ❌</b>'
-        )
+        hit_line  = "DEAD ➛ DECLINED ❌"
+        resp_icon = "❌"
 
-    plan_emoji_id = get_plan_emoji_id(plan)
-    plan_emoji    = tg_emoji(plan_emoji_id, "⭐")
-    plan_label    = get_styled_plan(plan)
+    plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
+    plan_label = get_styled_plan(plan)
 
     bin_txt = "N/A"
     if bin_data and not bin_data.get("error"):
@@ -565,18 +560,15 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
     uname_display = escape(username)
 
     return (
-        f'{status_line}\n'
-        f'\n'
-        f'<b>💳</b>\n'
-        f'<b>   ⤷ <code>{card_raw}</code></b>\n'
-        f'<b>Gate ➳ {gate_name}</b>\n'
+        f'<b>{hit_line}</b>\n'
+        f'<b>Gate ➛ {gate_name}</b>\n'
         f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {escape(raw_response)}</b>\n'
-        f'<b>Info ➳ {bin_txt}</b>\n'
+        f'<b>{resp_icon} {escape(raw_response)}</b>\n'
+        f'<b>💳 <code>{card_raw}</code></b>\n'
+        f'<b>🏦 {bin_txt}</b>\n'
         f'<b>──────────</b>\n'
-        f'<b>⏱ ➳ {time_taken}s</b>\n'
-        f'<b>👤 ➳ {uname_display} {plan_emoji} ({plan_label})</b>\n'
-        f'<b>⚡ ➳ <a href="{DEV_LINK}">Batamanchk</a> ⭐</b>'
+        f'<b>⏱ {time_taken}s  |  👤 {uname_display} {plan_emoji} ({plan_label})</b>\n'
+        f'<b>⚡ <a href="{DEV_LINK}">Batamanchk</a> ⭐</b>'
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2226,9 +2218,6 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan=plan,
     )
     init_html = _pt(sess)   # _progress_text returns HTML string — parse_mode="HTML"
-    # Send animated sticker to command chat before progress bar — guaranteed animation
-    # for ALL users (send_sticker always animates, no Premium required).
-    await _send_sticker(context.bot, update.effective_chat.id, get_random_live_emoji())
     msg = await update.message.reply_text(
         init_html, parse_mode="HTML",
         reply_markup=_msh_buttons(sid, running=True),
