@@ -19,10 +19,10 @@ OWNER_ID  = int(os.environ.get("OWNER_ID", "5502877086"))  # @lucifer2600
 # 🤖  BOT IDENTITY
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VERSION  = "V4.3"
-BOT_NAME = "Batmancardchk"          # fixed: was "Batamanchk"
-DEV_LINK = "https://t.me/Batcardchk"
+BOT_NAME = "Batmancardchk"
+DEV_LINK = "https://t.me/Batxchk_bot"
 
-BOT_USERNAME  = "batcardchk29_bot"
+BOT_USERNAME  = "Batxchk_bot"
 BOT_LINK      = f"https://t.me/{BOT_USERNAME}"
 
 
@@ -50,7 +50,7 @@ FORCE_CHANNELS = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ⚙️  GENERAL SETTINGS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-API_TIMEOUT      = 120
+API_TIMEOUT      = 240
 REFERRAL_CREDITS = 150
 LOCK_FILE        = "/tmp/batman_bot.lock"
 
@@ -222,39 +222,165 @@ def _btn(text: str, *, cb: str = None, url: str = None,
     return d
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🔍  BIN LOOKUP
+# 🔍  BIN LOOKUP  — 5-API waterfall + in-memory cache
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+_BIN_CACHE: dict = {}   # bin6 → result dict (populated on first successful hit)
+
+def _flag(alpha2: str) -> str:
+    """Convert ISO 2-letter country code to flag emoji."""
+    a = (alpha2 or "").strip().upper()
+    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in a) if len(a) == 2 else ""
+
+def _bin_has_data(r: dict) -> bool:
+    """Accept a BIN result if at least one meaningful field is non-N/A."""
+    if not r:
+        return False
+    for k in ("scheme", "bank", "country"):
+        v = r.get(k, "N/A")
+        if v and str(v).strip().upper() not in ("", "N/A", "NONE", "NULL", "UNKNOWN"):
+            return True
+    return False
+
+
+async def _bin_binlist(session: aiohttp.ClientSession, bin6: str) -> dict:
+    """Primary: lookup.binlist.net"""
+    async with session.get(
+        f"https://lookup.binlist.net/{bin6}",
+        headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
+        timeout=aiohttp.ClientTimeout(total=6),
+    ) as r:
+        if r.status != 200:
+            return {}
+        d       = await r.json(content_type=None)
+        country = d.get("country") or {}
+        bank    = d.get("bank")    or {}
+        alpha2  = (country.get("alpha2") or "").upper()
+        name    = country.get("name", "")
+        return {
+            "scheme":        (d.get("scheme") or "N/A").upper(),
+            "type":          (d.get("type")   or "N/A").upper(),
+            "bank":          bank.get("name", "N/A") or "N/A",
+            "country":       name or "N/A",
+            "country_emoji": _flag(alpha2),
+        }
+
+
+async def _bin_handyapi(session: aiohttp.ClientSession, bin6: str) -> dict:
+    """Fallback 1: data.handyapi.com (free, no key)"""
+    async with session.get(
+        f"https://data.handyapi.com/bin/{bin6}",
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=aiohttp.ClientTimeout(total=6),
+    ) as r:
+        if r.status != 200:
+            return {}
+        d = await r.json(content_type=None)
+        if d.get("Status", "").upper() != "SUCCESS":
+            return {}
+        co = d.get("Country") or {}
+        return {
+            "scheme":        (d.get("Scheme") or "N/A").upper(),
+            "type":          (d.get("Type")   or "N/A").upper(),
+            "bank":          d.get("Issuer", "N/A") or "N/A",
+            "country":       co.get("Name", "N/A") or "N/A",
+            "country_emoji": _flag(co.get("A2", "")),
+        }
+
+
+async def _bin_bincodes(session: aiohttp.ClientSession, bin6: str) -> dict:
+    """Fallback 2: api.bincodes.com (free tier, no key needed for basic)"""
+    async with session.get(
+        f"https://api.bincodes.com/bin/?format=json&api_key=free&bin={bin6}",
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=aiohttp.ClientTimeout(total=6),
+    ) as r:
+        if r.status != 200:
+            return {}
+        d = await r.json(content_type=None)
+        if str(d.get("valid", "false")).lower() != "true":
+            return {}
+        return {
+            "scheme":        (d.get("brand",   "N/A") or "N/A").upper(),
+            "type":          (d.get("type",    "N/A") or "N/A").upper(),
+            "bank":          d.get("issuer",   "N/A") or "N/A",
+            "country":       d.get("country",  "N/A") or "N/A",
+            "country_emoji": _flag(d.get("country_code", "")),
+        }
+
+
+async def _bin_bincheck(session: aiohttp.ClientSession, bin6: str) -> dict:
+    """Fallback 3: api.bincheck.io (free, no key)"""
+    async with session.get(
+        f"https://api.bincheck.io/api/{bin6}",
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=aiohttp.ClientTimeout(total=7),
+    ) as r:
+        if r.status != 200:
+            return {}
+        d = await r.json(content_type=None)
+        if not d or d.get("valid") is False:
+            return {}
+        country = d.get("country_name") or d.get("country") or "N/A"
+        alpha2  = d.get("country_code", "")
+        return {
+            "scheme":        (d.get("scheme") or d.get("brand") or "N/A").upper(),
+            "type":          (d.get("type")   or "N/A").upper(),
+            "bank":          d.get("bank") or d.get("bank_name") or "N/A",
+            "country":       country,
+            "country_emoji": _flag(alpha2),
+        }
+
+
+async def _bin_antipublic(session: aiohttp.ClientSession, bin6: str) -> dict:
+    """Fallback 4: bins.antipublic.one (free, no key)"""
+    async with session.get(
+        f"https://bins.antipublic.one/bins/{bin6}",
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=aiohttp.ClientTimeout(total=7),
+    ) as r:
+        if r.status != 200:
+            return {}
+        d = await r.json(content_type=None)
+        if not d:
+            return {}
+        alpha2 = d.get("country_alpha2") or d.get("country") or ""
+        return {
+            "scheme":        (d.get("scheme") or d.get("brand") or "N/A").upper(),
+            "type":          (d.get("type")   or "N/A").upper(),
+            "bank":          d.get("bank") or d.get("bank_name") or "N/A",
+            "country":       d.get("country_name") or d.get("country") or "N/A",
+            "country_emoji": _flag(alpha2[:2] if alpha2 else ""),
+        }
+
+
 async def get_bin_info(bin_num: str) -> dict:
-    """Fetch card BIN details from binlist.net (no API key needed)."""
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=8)
-        ) as session:
-            async with session.get(
-                f"https://lookup.binlist.net/{str(bin_num)[:6]}",
-                headers={"Accept-Version": "3", "User-Agent": "Mozilla/5.0"},
-            ) as resp:
-                if resp.status != 200:
-                    return {"error": True}
-                data    = await resp.json(content_type=None)
-                country = data.get("country") or {}
-                bank    = data.get("bank")    or {}
-                alpha2  = (country.get("alpha2") or "").upper()
-                emoji   = (
-                    "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in alpha2)
-                    if len(alpha2) == 2 else ""
-                )
-                return {
-                    "scheme":        data.get("scheme", "N/A"),
-                    "type":          data.get("type",   "N/A"),
-                    "bank":          bank.get("name",   "N/A"),
-                    "country":       country.get("name", "N/A"),
-                    "country_emoji": emoji,
-                    "error":         False,
-                }
-    except Exception:
+    """Fetch BIN details — 5-API waterfall with cache. Returns first usable hit."""
+    bin6 = str(bin_num).strip()[:6]
+    if not bin6.isdigit() or len(bin6) < 6:
         return {"error": True}
+
+    # Return cached result if available
+    if bin6 in _BIN_CACHE:
+        return _BIN_CACHE[bin6]
+
+    _empty = {"scheme": "N/A", "type": "N/A", "bank": "N/A",
+              "country": "N/A", "country_emoji": "", "error": False}
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        for _fn in (_bin_binlist, _bin_handyapi, _bin_bincodes,
+                    _bin_bincheck, _bin_antipublic):
+            try:
+                result = await _fn(session, bin6)
+                if _bin_has_data(result):
+                    result["error"] = False
+                    _BIN_CACHE[bin6] = result  # cache successful result
+                    return result
+            except Exception:
+                continue
+
+    return _empty
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ⌨️  SHARED RESULT KEYBOARD  — coloured (mst.py style)
@@ -268,11 +394,11 @@ def kb_result(is_premium: bool = False) -> RawMarkup:
     if is_premium:
         return RawMarkup([
             [
-                _btn("🤖 Open Bot", url=BOT_LINK,     style="primary"),
-                _btn("📢 Channel",  url=CHANNEL_LINK, style="primary"),
+                _btn("Open Bot", url=BOT_LINK,     style="primary"),
+                _btn("Channel",  url=CHANNEL_LINK, style="primary"),
             ],
         ])
     return RawMarkup([
-        [_btn("💎 BUY PREMIUM — Unlimited Checks", cb="mprice", style="primary")],
-        [_btn("📢 @Batcardchk", url=CHANNEL_LINK)],
+        [_btn("BUY PREMIUM", cb="mprice", style="primary")],
+        [_btn("@Batcardchk", url=CHANNEL_LINK)],
     ])
