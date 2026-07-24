@@ -1530,19 +1530,36 @@ async def _fetch_bin_direct(bin6: str) -> dict:
     return {}
 
 
+def _bin_empty(r: dict) -> bool:
+    """True if the result has no usable BIN data (N/A, error, or missing)."""
+    if not r or r.get("error"):
+        return True
+    bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None"}
+    scheme  = str(r.get("scheme",  "") or "").strip().upper()
+    bank    = str(r.get("bank",    "") or "").strip().upper()
+    country = str(r.get("country", "") or "").strip().upper()
+    # Need at least scheme OR (bank + country) to be useful
+    return scheme in bad and (bank in bad or country in bad)
+
+
 async def _bin_lookup(bin6: str) -> dict:
     if bin6 in _BIN_CACHE:
         return _BIN_CACHE[bin6]
     result: dict = {}
+
+    # 1. Try multi-source direct lookup first (fastest, no rate limit)
     try:
-        result = await asyncio.wait_for(get_bin_info(bin6), timeout=8) or {}
+        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=10)
     except Exception:
         result = {}
-    if not result or not result.get("scheme"):
+
+    # 2. Fall back to config.py binlist.net helper if direct failed
+    if _bin_empty(result):
         try:
-            result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=10)
+            result = await asyncio.wait_for(get_bin_info(bin6), timeout=8) or {}
         except Exception:
             result = {}
+
     _BIN_CACHE[bin6] = result
     return result
 
@@ -1565,60 +1582,54 @@ def _bin_str(bd: dict) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESULT MESSAGE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _resp_display(resp: str) -> str:
-    """Clean raw API response for display — keep real bank text, sanitize site errors."""
-    if not resp:
-        return "Unknown"
-    rl = resp.lower()
-    if "site error! status:" in rl:
-        m = re.search(r"status:\s*(\d+)", rl)
-        return f"Site Error {m.group(1)}" if m else "Site Error"
-    if "not shopify" in rl or "site not supported" in rl:
-        return "Site Not Supported"
-    if "application not found" in rl or "store not found" in rl:
-        return "Store Not Found"
-    return resp
-
-
 def build_result_msg(card, resp, verdict, bin_data, price, currency,
                      elapsed, user, plan) -> str:
-    """Build the result card shown to the user — styled like the HIT card in the image."""
     ulink    = _user_link(user)
     peid     = _plan_eid(plan)
     ts       = _fmt_time(elapsed)
     bin_s    = _bin_str(bin_data)
-    safe_r   = escape(_resp_display(resp))
+    ch_link  = f'<a href="{BOT_CHANNEL}">[❆]</a>'
 
-    # ── Status line & gate line ───────────────────────────────────────────────
-    if verdict == "CHARGED":
-        eid      = random.choice(CHARGED_EMOJI_IDS)
-        hit_line = (f'<b>HIT ➳ CHARGED {_te(eid,"💎")}</b>')
-        gate_ln  = f'<b>Gate ➳ Shopify • {_fmt_price(price, currency)}</b>'
-        resp_ico = "🔴"
-    elif verdict == "TDS":
-        hit_line = f'<b>HIT ➳ LIVE {_te(LIVE_EMOJI_ID,"✅")} [3DS]</b>'
-        gate_ln  = "<b>Gate ➳ Shopify • 0-20$</b>"
-        resp_ico = "🔵"
-    elif verdict == "LIVE":
-        hit_line = f'<b>HIT ➳ LIVE {_te(LIVE_EMOJI_ID,"✅")}</b>'
-        gate_ln  = "<b>Gate ➳ Shopify • 0-20$</b>"
-        resp_ico = "🔵"
+    # Sanitise display response — keep real bank text, clean site errors
+    raw_resp = resp or "Unknown"
+    rl = raw_resp.lower()
+    if "site error! status:" in rl:
+        m = re.search(r"status:\s*(\d+)", rl)
+        display_resp = f"Site Error {m.group(1)}" if m else "Site Error"
+    elif "not shopify" in rl or "site not supported" in rl:
+        display_resp = "Site Not Supported"
+    elif "application not found" in rl or "store not found" in rl:
+        display_resp = "Store Not Found"
     else:
-        hit_line = f'<b>Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
-        gate_ln  = "<b>Gate ➳ Shopify • 0-20$</b>"
-        resp_ico = "⚫"
+        display_resp = raw_resp
+    safe_resp = escape(display_resp)
+
+    if verdict == "CHARGED":
+        eid       = random.choice(CHARGED_EMOJI_IDS)
+        status_ln = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
+        gate_ln   = f'<b>Gate ➳ Shopify | {_fmt_price(price, currency)}</b>'
+    elif verdict == "TDS":
+        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")} [3DS]</b>'
+        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+    elif verdict == "LIVE":
+        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")}</b>'
+        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+    else:
+        status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
+        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
 
     return (
-        f"{hit_line}\n"
+        f"{status_ln}\n\n"
+        f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
+        f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
         f"{gate_ln}\n"
-        f"<b>{resp_ico} {safe_r}</b>\n"
-        f"<b>──────────────</b>\n"
-        f'<b>{_te(CARD_EMOJI_ID,"💳")} Card  ➳ <code>{escape(card)}</code></b>\n'
-        f"<b>🏦 Bin   ➳ {bin_s}</b>\n"
-        f"<b>──────────────</b>\n"
-        f'<b>{_te(TIME_EMOJI_ID,"⏱")} Time  ➳ {ts}</b>\n'
-        f'<b>{_te(USER_EMOJI_ID,"👤")} User  ➳ {ulink} {_te(peid,"⭐")}</b>\n'
-        f'<b>{_te(DEV_EMOJI_ID,"⚡")} Dev   ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
+        f"<b>──────────</b>\n"
+        f"<b>Resp ➳ {safe_resp}</b>\n"
+        f"<b>Bin  ➳ {bin_s}</b>\n"
+        f"<b>──────────</b>\n"
+        f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {ts}</b>\n'
+        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
+        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
 
 
