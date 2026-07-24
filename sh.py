@@ -76,10 +76,13 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES   = 40    # sites tried per card — matches msh.py MAX_RETRIES
-SITE_TIMEOUT   = 12    # live sites respond in 7-8s; must be above that
-MAX_CONCURRENT = 15    # cards checked in parallel
-CARD_STAGGER   = 0.3   # stagger between card launches (seconds)
+SITE_RETRIES      = 40   # max site attempts per card
+SITE_TIMEOUT      = 10   # seconds per API call (was 12 — trimmed 2s off each miss)
+MAX_CONCURRENT    = 15   # cards checked in parallel
+CARD_STAGGER      = 0.3  # stagger between card launches (seconds)
+SITE_BATCH        = 3    # sites raced in parallel within each retry round
+CONSEC_TIMEOUT_MAX = 12  # abort card after this many consecutive timeouts
+                         # (12 × 10s = 120s max before giving up on dead proxies)
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -1420,100 +1423,157 @@ async def _check_card_with_retry(
     """
     Try up to max_sites Shopify stores for this card.
 
-    Decision tree per attempt:
-      1. HTTP non-200                  → skip site (add to local dead)
-      2. Rate-limited (429)            → sleep 3-5s, retry same site
-      3. Response in DEAD_ERRORS       → skip site (infrastructure error, not a bank response)
-      4. Response in SUCCESS_RESPONSES → REAL bank response → classify card → return
-      5. Unknown response              → skip site
+    Sites are raced SITE_BATCH at a time — the first definitive bank
+    response (CHARGED / TDS / LIVE / DEAD) wins and all other in-flight
+    requests are cancelled.  This cuts worst-case time from
+    max_sites × timeout  to  ceil(max_sites/SITE_BATCH) × timeout.
+
+    Early-exit: if CONSEC_TIMEOUT_MAX consecutive attempts all time out
+    the proxies are clearly dead — return DEAD immediately rather than
+    grinding through every remaining site.
 
     Returns: (verdict, raw_resp, price, currency)
-      verdict: CHARGED | TDS | LIVE | DEAD
     """
     if not sites:
         sites = get_working_sites()
         if not sites:
             sites = list(BUILTIN_SITES)
 
-    # Per-card local dead set only — each card tries sites independently.
-    # We intentionally do NOT share the global _DEAD_SITES here so that
-    # parallel cards don't block each other from trying the same sites.
     local_dead: set = set()
-
-    # Shuffle a fresh copy of the site pool for this card
-    pool    = list(sites)
+    pool            = list(sites)
     random.shuffle(pool)
-    px_pool = list(proxies) if proxies else list(_ALL_PROXIES)
-    tried: set        = set()
+    px_pool         = list(proxies) if proxies else list(_ALL_PROXIES)
+    tried: set      = set()
     price, currency = "0.00", "USD"
     last_resp       = "No sites responded"
+    consec_timeouts = 0
+    attempt         = 0   # total slots consumed
 
-    for attempt in range(max_sites):
+    # ── helpers ───────────────────────────────────────────────────────
+    async def _try_one(site: str, proxy: Optional[str]):
+        """Wrap _call_api so exceptions become an error-tuple instead of raising."""
+        try:
+            return site, await _call_api(card, site, proxy, timeout=site_timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            return site, (f"connection error: {str(e)[:60]}",
+                          "Shopify Payments", "0.00", "USD", None)
 
-        # ── Stop signal (mass check) ──────────────────────────────────
-        if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
-            raise asyncio.CancelledError()
-
-        # ── Pick next untried site for THIS card ──────────────────────
+    def _pick_site() -> Optional[str]:
+        nonlocal pool
         skip      = tried | local_dead
         available = [s for s in pool if s not in skip]
-        if not available:
-            # Tried everything in pool once — reset and go again
+        if not available:          # exhausted pool once — reset and try again
             local_dead.clear()
             tried.clear()
             pool      = list(sites)
             random.shuffle(pool)
             available = pool[:]
+        if not available:
+            return None
+        s = random.choice(available)
+        tried.add(s)
+        return s
 
-        site  = random.choice(available)
-        tried.add(site)
-        proxy = random.choice(px_pool) if px_pool else None
+    # ── main loop — one round = SITE_BATCH parallel attempts ─────────
+    while attempt < max_sites:
 
-        # ── API call ──────────────────────────────────────────────────
-        try:
-            resp, gw, price, currency, http_st = await _call_api(
-                card, site, proxy, timeout=site_timeout
+        # Stop signal (mass check)
+        if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
+            raise asyncio.CancelledError()
+
+        # Pick up to SITE_BATCH distinct untried sites for this round
+        batch: list[str] = []
+        for _ in range(min(SITE_BATCH, max_sites - attempt)):
+            s = _pick_site()
+            if s and s not in batch:
+                batch.append(s)
+        if not batch:
+            break
+
+        attempt += len(batch)
+
+        # Race all sites in the batch simultaneously
+        tasks = [
+            asyncio.ensure_future(
+                _try_one(s, random.choice(px_pool) if px_pool else None)
             )
+            for s in batch
+        ]
+
+        winner        = None
+        batch_timeouts = 0
+
+        try:
+            for fut in asyncio.as_completed(tasks):
+                try:
+                    site, (resp, gw, price, currency, http_st) = await fut
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    batch_timeouts += 1
+                    continue
+
+                logging.info(f"[API] {card[:6]}** #{attempt}/{max_sites} "
+                             f"site={site} → {resp!r}")
+
+                # Timeout → mark dead, tally for early-exit
+                if resp == "timeout" or resp == "Timeout":
+                    batch_timeouts += 1
+                    local_dead.add(site)
+                    last_resp = resp
+                    continue
+
+                # HTTP-level error
+                if http_st and http_st not in (200,):
+                    local_dead.add(site)
+                    last_resp = f"HTTP {http_st}"
+                    continue
+
+                # Rate-limited → put site back and let next round retry it
+                if http_st == 429 or (resp and "status: 429" in resp.lower()):
+                    tried.discard(site)
+                    continue
+
+                classification = classify_response(resp)
+                last_resp      = resp
+
+                logging.info(f"[RESULT] {card[:6]}** #{attempt}/{max_sites} "
+                             f"→ {classification}  resp={resp!r}  site={site}")
+
+                if classification in ("CHARGED", "TDS", "LIVE", "DEAD"):
+                    winner = (classification, resp, price, currency)
+                    break   # cancel remaining in this batch
+
+                # RETRY / ERROR — site gave a non-bank response
+                local_dead.add(site)
+
         except asyncio.CancelledError:
+            for t in tasks: t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             raise
-        except Exception as exc:
-            logging.debug(f"[SH] {card[:6]}** {site} exception: {exc}")
-            local_dead.add(site)
-            continue
+        finally:
+            # Always cancel any still-running tasks from this batch
+            for t in tasks: t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-        logging.info(f"[API] {card[:6]}** #{attempt+1}/{max_sites} "
-                     f"site={site} proxy={proxy or 'none'} → {resp!r}")
+        if winner:
+            return winner
 
-        # ── 1. HTTP-level error ───────────────────────────────────────
-        if http_st and http_st not in (200,):
-            local_dead.add(site)
-            last_resp = f"HTTP {http_st}"
-            continue
-
-        # ── 2. Rate limited ───────────────────────────────────────────
-        if http_st == 429 or (resp and "status: 429" in resp.lower()):
-            tried.discard(site)
-            await asyncio.sleep(random.uniform(2.0, 4.0))
-            continue
-
-        # ── 3. Classify response — exact msh.py logic ────────────────
-        classification = classify_response(resp)
-        last_resp      = resp
-
-        logging.info(f"[RESULT] {card[:6]}** #{attempt+1}/{max_sites} "
-                     f"→ {classification}  resp={resp!r}  site={site}")
-
-        # CHARGED / TDS / LIVE / DEAD → final verdict, stop immediately
-        if classification in ("CHARGED", "TDS", "LIVE", "DEAD"):
-            return classification, resp, price, currency
-
-        # RETRY / ERROR → site is broken, try a different site
-        local_dead.add(site)
-        if classification == "RETRY":
-            logging.debug(f"[SH] RETRY site error: {site} → {resp!r}")
+        # ── Early-exit on dead proxies ────────────────────────────────
+        if batch_timeouts == len(batch):
+            consec_timeouts += batch_timeouts
         else:
-            logging.debug(f"[SH] ERROR unknown resp: {site} → {resp!r}")
-        continue
+            consec_timeouts = 0   # a real response resets the counter
+
+        if consec_timeouts >= CONSEC_TIMEOUT_MAX:
+            logging.warning(
+                f"[SH] {card[:6]}** {consec_timeouts} consecutive timeouts "
+                f"({consec_timeouts * site_timeout:.0f}s wasted) — "
+                f"proxies likely dead, aborting early"
+            )
+            return "DEAD", "timeout", price, currency
 
     # ── All attempts exhausted ────────────────────────────────────────
     logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites  last={last_resp!r}")
