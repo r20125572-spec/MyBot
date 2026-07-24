@@ -144,9 +144,10 @@ SPECIAL_FONT_MAP = {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
-    """Returns the plain fallback emoji — visible to ALL users (no Premium needed).
-    Animated stickers are delivered via send_sticker() calls instead."""
-    return fallback
+    """Returns a <tg-emoji> HTML tag for Telegram Premium custom emoji.
+    Animates for Premium users; shows the fallback glyph for non-Premium users.
+    Always use parse_mode='HTML' when sending messages that contain these tags."""
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 def get_random_live_emoji() -> str:
     """Return a random live-hit emoji ID (string, not rendered tag)."""
