@@ -1571,6 +1571,141 @@ def _send_ents(html: str):
     return html_to_entities(html)
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# DIRECT MESSAGE ENTITY BUILDER
+# Builds Telegram messages with entities directly — ZERO HTML involved.
+# This is the only guaranteed way to show animated custom emoji stickers
+# for ALL users in python-telegram-bot.  No HTML → entities conversion
+# required; MessageEntity objects are injected straight into the API call.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class MsgBuilder:
+    """Fluent builder that accumulates plain text + MessageEntity objects."""
+    __slots__ = ("_txt", "_ents")
+
+    def __init__(self):
+        self._txt  = ""
+        self._ents = []
+
+    @staticmethod
+    def _u16(s: str) -> int:
+        """UTF-16 code-unit length — what Telegram uses for entity offsets."""
+        return len(s.encode("utf-16-le")) // 2
+
+    # ── primitive appenders ──────────────────────────────────────────────
+    def raw(self, s: str) -> "MsgBuilder":
+        if s: self._txt += s
+        return self
+
+    def bold(self, s: str) -> "MsgBuilder":
+        if not s: return self
+        o = self._u16(self._txt); l = self._u16(s); self._txt += s
+        if l: self._ents.append(MessageEntity(type="bold", offset=o, length=l))
+        return self
+
+    def code(self, s: str) -> "MsgBuilder":
+        if not s: return self
+        o = self._u16(self._txt); l = self._u16(s); self._txt += s
+        if l: self._ents.append(MessageEntity(type="code", offset=o, length=l))
+        return self
+
+    def link(self, display: str, url: str) -> "MsgBuilder":
+        if not display: return self
+        o = self._u16(self._txt); l = self._u16(display); self._txt += display
+        if l: self._ents.append(MessageEntity(type="text_link", offset=o, length=l, url=url))
+        return self
+
+    def emoji(self, eid: str, fb: str) -> "MsgBuilder":
+        """Animated custom emoji sticker inline (no bold wrapper)."""
+        if not fb: return self
+        o = self._u16(self._txt); l = self._u16(fb); self._txt += fb
+        if l: self._ents.append(
+            MessageEntity(type="custom_emoji", offset=o, length=l, custom_emoji_id=eid))
+        return self
+
+    def bold_emoji(self, eid: str, fb: str) -> "MsgBuilder":
+        """Bold text + animated custom emoji sticker overlapped on the same glyph."""
+        if not fb: return self
+        o = self._u16(self._txt); l = self._u16(fb); self._txt += fb
+        if l:
+            self._ents.append(MessageEntity(type="bold", offset=o, length=l))
+            self._ents.append(MessageEntity(
+                type="custom_emoji", offset=o, length=l, custom_emoji_id=eid))
+        return self
+
+    def bold_link(self, display: str, url: str) -> "MsgBuilder":
+        """Bold + hyperlink on the same text."""
+        if not display: return self
+        o = self._u16(self._txt); l = self._u16(display); self._txt += display
+        if l:
+            self._ents.append(MessageEntity(type="bold",      offset=o, length=l))
+            self._ents.append(MessageEntity(type="text_link", offset=o, length=l, url=url))
+        return self
+
+    def nl(self, n: int = 1) -> "MsgBuilder":
+        self._txt += "\n" * n
+        return self
+
+    # ── finalise ─────────────────────────────────────────────────────────
+    def build(self):
+        """Return (plain_text, entities_or_None) ready for send_message/edit_text."""
+        return self._txt, self._ents if self._ents else None
+
+
+def _uname(user) -> str:
+    """Plain display name (no HTML)."""
+    return getattr(user, "first_name", None) or "User"
+
+
+def _uurl(user) -> str:
+    """Telegram profile URL."""
+    if getattr(user, "username", None):
+        return f"https://t.me/{user.username}"
+    return f"tg://user?id={user.id}"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# STICKER RESOLVER  —  the ONLY approach that works for ALL
+# users regardless of whether the bot has Telegram Premium.
+#
+# custom_emoji entities in text messages only display as
+# animated stickers when the BOT ACCOUNT has Premium.
+# Without Premium the fallback glyph (plain "💎") shows instead.
+#
+# Bot API getCustomEmojiStickers() + send_sticker() requires NO
+# Premium on the bot — the sticker is delivered full-size and
+# animated for every user on every client version.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_STICKER_CACHE: dict[str, str] = {}    # emoji_id  →  sticker file_id
+
+
+async def _get_sticker_fid(bot, emoji_id: str):
+    """Resolve a custom emoji ID to a sendable sticker file_id (in-process cache).
+    Returns the file_id string, or None if the API call fails."""
+    if emoji_id in _STICKER_CACHE:
+        return _STICKER_CACHE[emoji_id]
+    try:
+        stickers = await bot.get_custom_emoji_stickers([emoji_id])
+        if stickers:
+            fid = stickers[0].file_id
+            _STICKER_CACHE[emoji_id] = fid
+            return fid
+    except Exception as exc:
+        logging.debug(f"[STICKER] resolve {emoji_id}: {exc}")
+    return None
+
+
+async def _send_sticker(bot, chat_id, emoji_id: str):
+    """Send a full-size animated sticker for the given custom emoji ID.
+    Silently skips if the sticker cannot be resolved."""
+    fid = await _get_sticker_fid(bot, emoji_id)
+    if fid:
+        try:
+            await bot.send_sticker(chat_id=chat_id, sticker=fid)
+        except Exception as exc:
+            logging.debug(f"[STICKER] send to {chat_id}: {exc}")
+
+
 def _plan_eid(plan: str) -> str:
     norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in (plan or ""))
     if norm in PLAN_EMOJIS:
@@ -1800,17 +1935,37 @@ def _bin_str(bd: dict) -> str:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BIN STRING — plain-text version for MsgBuilder
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _bin_str_plain(bd: dict) -> str:
+    """Like _bin_str but WITHOUT HTML escaping — for use inside MsgBuilder."""
+    def _g(*keys):
+        for k in keys:
+            v = bd.get(k)
+            if v and str(v).strip() not in ("", "None", "N/A", "null", "UNKNOWN"):
+                return str(v).strip()
+        return "N/A"
+    scheme  = _g("scheme", "brand", "card_scheme", "network").upper()
+    bank    = _g("bank", "bank_name", "issuer", "issuer_name")
+    country = _clean_country(_g("country", "country_name", "country_full"))
+    flag    = bd.get("country_emoji", "")
+    cstr    = f"{flag} {country}".strip() if flag else country
+    return f"{scheme} - {bank} - {cstr}"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESULT MESSAGE
+# Returns (plain_text, entities_or_None) via MsgBuilder —
+# no HTML parsing required; animated stickers guaranteed.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def build_result_msg(card, resp, verdict, bin_data, price, currency,
-                     elapsed, user, plan) -> str:
-    ulink    = _user_link(user)
-    peid     = _plan_eid(plan)
-    ts       = _fmt_time(elapsed)
-    bin_s    = _bin_str(bin_data)
-    ch_link  = f'<a href="{SECRET_CHANNEL_LINK}">[❆]</a>'
+                     elapsed, user, plan):
+    """Build the full result card. Returns (plain_text, entities_or_None)."""
+    peid = _plan_eid(plan)
+    ts   = _fmt_time(elapsed)
+    bin_s = _bin_str_plain(bin_data)
 
-    # Sanitise display response — keep real bank text, clean site errors
+    # Sanitise display response (plain text — no HTML escaping for MsgBuilder)
     raw_resp = resp or "Unknown"
     rl = raw_resp.lower()
     if "site error! status:" in rl:
@@ -1821,38 +1976,44 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     elif "application not found" in rl or "store not found" in rl:
         display_resp = "Store Not Found"
     else:
-        display_resp = raw_resp
-    safe_resp = escape(display_resp)
+        display_resp = _clean_resp(raw_resp)
 
+    mb = MsgBuilder()
+
+    # ── Status line: [❆] Charged/Live/Dead [animated emoji] ──────────────
     if verdict == "CHARGED":
-        eid       = get_random_charged_emoji()
-        status_ln = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
-        gate_ln   = f'<b>Gate ➳ Shopify | {_fmt_price(price, currency)}</b>'
+        eid = get_random_charged_emoji()
+        mb.bold_link("[❆]", SECRET_CHANNEL_LINK).bold(" Charged ").bold_emoji(eid, "💎")
+        gate_txt = f"Gate ➳ Shopify | {_fmt_price(price, currency)}"
     elif verdict == "TDS":
-        eid       = get_random_live_emoji()
-        status_ln = f'<b>{ch_link} Live {_te(eid,"✅")} [3DS]</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        eid = get_random_live_emoji()
+        mb.bold_link("[❆]", SECRET_CHANNEL_LINK).bold(" Live ").bold_emoji(eid, "✅").bold(" [3DS]")
+        gate_txt = "Gate ➳ Shopify | 0-20$"
     elif verdict == "LIVE":
-        eid       = get_random_live_emoji()
-        status_ln = f'<b>{ch_link} Live {_te(eid,"✅")}</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        eid = get_random_live_emoji()
+        mb.bold_link("[❆]", SECRET_CHANNEL_LINK).bold(" Live ").bold_emoji(eid, "✅")
+        gate_txt = "Gate ➳ Shopify | 0-20$"
     else:
-        status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        mb.bold_link("[❆]", SECRET_CHANNEL_LINK).bold(" Dead ").bold_emoji(DECLINED_EMOJI_ID, "❌")
+        gate_txt = "Gate ➳ Shopify | 0-20$"
 
-    return (
-        f"{status_ln}\n\n"
-        f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
-        f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
-        f"{gate_ln}\n"
-        f"<b>──────────</b>\n"
-        f"<b>Resp ➳ {safe_resp}</b>\n"
-        f"<b>Bin  ➳ {bin_s}</b>\n"
-        f"<b>──────────</b>\n"
-        f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {ts}</b>\n'
-        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
-        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
-    )
+    mb.nl(2)
+
+    # ── Card + details block ──────────────────────────────────────────────
+    mb.bold_emoji(CARD_EMOJI_ID, "💳").nl()
+    mb.bold("   ⤷ ").code(card).nl()
+    mb.bold(gate_txt).nl()
+    mb.bold("──────────").nl()
+    mb.bold(f"Resp ➳ {display_resp}").nl()
+    mb.bold(f"Bin  ➳ {bin_s}").nl()
+    mb.bold("──────────").nl()
+
+    # ── Footer ────────────────────────────────────────────────────────────
+    mb.bold_emoji(TIME_EMOJI_ID, "⏱").bold(f" ➳ {ts}").nl()
+    mb.bold_emoji(USER_EMOJI_ID, "👤").bold(" ➳ ").link(_uname(user), _uurl(user)).bold(" ").bold_emoji(peid, "⭐").nl()
+    mb.bold_emoji(DEV_EMOJI_ID, "⚡").bold(" ➳ ").link(BOT_NAME, BOT_CHANNEL).bold(" ").bold_emoji(PRO_EMOJI_ID, "⭐")
+
+    return mb.build()
 
 
 _build_result_msg = build_result_msg
@@ -1860,23 +2021,31 @@ _build_result_msg = build_result_msg
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PROGRESS UI
+# Returns (plain_text, entities_or_None) via MsgBuilder.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _progress_text(sess: dict) -> str:
-    ts    = _fmt_time(time.time() - sess["start_time"])
-    uobj  = sess.get("user_obj")
-    ulink = _user_link(uobj) if uobj else "User"
-    peid  = sess.get("plan_eid", PRO_EMOJI_ID)
-    return (
-        f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-        f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Progress ➳ {sess["checked"]}/{sess["total"]}</b>\n'
-        f'<b>Charged ➳ {sess["charged"]} {_te(PROG_CHARGED_EMOJI_ID,"💎")}</b>\n'
-        f'<b>Live    ➳ {sess["approved"]} {_te(PROG_LIVE_EMOJI_ID,"✅")}</b>\n'
-        f'<b>Dead    ➳ {sess["dead"]} {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>\n'
-        f'<b>Errors  ➳ {sess["errors"]} {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>\n'
-        f"<b>Time    ➳ {ts}</b>\n"
-        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
-        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
-    )
+def _progress_text(sess: dict):
+    ts   = _fmt_time(time.time() - sess["start_time"])
+    uobj = sess.get("user_obj")
+    peid = sess.get("plan_eid", PRO_EMOJI_ID)
+
+    mb = MsgBuilder()
+    mb.bold_emoji(PROG_GATE_EMOJI_ID, "🛒").bold(" Gate ➳ Shopify").nl()
+    mb.bold_emoji(PROG_PROGRESS_EMOJI_ID, "🔄").bold(
+        f" Progress ➳ {sess['checked']}/{sess['total']}").nl()
+    mb.bold(f"Charged ➳ {sess['charged']} ").bold_emoji(PROG_CHARGED_EMOJI_ID, "💎").nl()
+    mb.bold(f"Live    ➳ {sess['approved']} ").bold_emoji(PROG_LIVE_EMOJI_ID, "✅").nl()
+    mb.bold(f"Dead    ➳ {sess['dead']} ").bold_emoji(PROG_DEAD_EMOJI_ID, "❌").nl()
+    mb.bold(f"Errors  ➳ {sess['errors']} ").bold_emoji(PROG_ERRORS_EMOJI_ID, "⚠️").nl()
+    mb.bold(f"Time    ➳ {ts}").nl()
+    if uobj:
+        mb.bold_emoji(USER_EMOJI_ID, "👤").bold(" ➳ ").link(
+            _uname(uobj), _uurl(uobj)).bold(" ").bold_emoji(peid, "⭐").nl()
+    else:
+        mb.bold_emoji(USER_EMOJI_ID, "👤").bold(" ➳ User ").bold_emoji(peid, "⭐").nl()
+    mb.bold_emoji(DEV_EMOJI_ID, "⚡").bold(" ➳ ").link(
+        BOT_NAME, BOT_CHANNEL).bold(" ").bold_emoji(PRO_EMOJI_ID, "⭐")
+
+    return mb.build()
 
 
 def _msh_buttons(sid: str, running: bool) -> RawMarkup:
@@ -1901,19 +2070,18 @@ async def _update_progress(bot, sid: str, force: bool = False):
     now = time.time()
     if not force and (now - sess.get("last_update", 0)) < 1.0:
         return
-    text    = _progress_text(sess)
+    _plain, _ents = _progress_text(sess)   # MsgBuilder — no HTML conversion needed
     running = sess["status"] == "CHECKING"
-    if text == sess.get("last_text") and not force:
+    if _plain == sess.get("last_text") and not force:
         return
     try:
-        _plain, _ents = html_to_entities(text)
         await bot.edit_message_text(
             chat_id=sess["chat_id"], message_id=sess["msg_id"],
             text=_plain, entities=_ents,
             reply_markup=_msh_buttons(sid, running),
             disable_web_page_preview=True,
         )
-        sess["last_text"]   = text
+        sess["last_text"]   = _plain
         sess["last_update"] = now
     except Exception:
         pass
@@ -1971,103 +2139,120 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HIT NOTIFICATIONS
+# Each destination receives the animated sticker FIRST
+# (full-size, like a photo — works for ALL users regardless
+# of bot Premium), then the compact text message below it.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
-                    bin_data: dict = None, price: str = "0.00", currency: str = "USD",
+async def _send_hit(bot, user, dm_plain: str, verdict: str,
+                    dm_ents=None,
+                    card: str = "", bin_data: dict = None,
+                    price: str = "0.00", currency: str = "USD",
                     plan: str = "TRIAL", resp: str = ""):
     bin_data = bin_data or {}
 
-    # ── 1. DM the user who ran the check ────────────────────────────────────
+    # Pick ONE hit emoji used consistently across DM + hit-log
+    eid  = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
+    peid = _plan_eid(plan)
+
+    # ── 1. DM the user — animated sticker first, then full result card ────────
     try:
-        _dm_plain, _dm_ents = html_to_entities(text)
-        await bot.send_message(chat_id=user.id, text=_dm_plain,
-                               entities=_dm_ents, disable_web_page_preview=True)
+        await _send_sticker(bot, user.id, eid)          # full-size animated sticker
+        await bot.send_message(chat_id=user.id, text=dm_plain,
+                               entities=dm_ents, disable_web_page_preview=True)
     except Exception as e:
         logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
-    # ── 2. Public hit-log group — compact card UI with bot name button ───────
+    # ── 2. Public hit-log group — animated sticker + compact 4-line card ──────
+    #
+    #  [full-size animated sticker]
+    #  HIT ➛ CHARGED 💎
+    #  Gate ➛ Shopify • 1.99 USD
+    #  ✅ ORDER_PAID
+    #  User ➛ username ⭐
+    #
     if HIT_LOG_GROUP_ID:
         try:
-            eid     = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
-            peid    = _plan_eid(plan)
-            ulink   = _user_link(user)
-            safe_r  = escape(resp or "Unknown")
-
             if verdict == "CHARGED":
-                hit_icon   = _te(eid, "💎")
-                hit_label  = "CHARGED"
-                gate_line  = f"<b>Gate ➛ Shopify • {_fmt_price(price, currency)}</b>"
+                hit_label = "CHARGED"
+                hit_fb    = "💎"
+                gate_txt  = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
             elif verdict == "TDS":
-                hit_icon   = _te(eid, "✅")
-                hit_label  = "LIVE [3DS]"
-                gate_line  = "<b>Gate ➛ Shopify</b>"
+                hit_label = "LIVE [3DS]"
+                hit_fb    = "✅"
+                gate_txt  = "Gate ➛ Shopify"
             else:
-                hit_icon   = _te(eid, "✅")
-                hit_label  = "LIVE"
-                gate_line  = "<b>Gate ➛ Shopify</b>"
+                hit_label = "LIVE"
+                hit_fb    = "✅"
+                gate_txt  = "Gate ➛ Shopify"
 
-            grp = (
-                f'<b>HIT ➛ {hit_label} {hit_icon}</b>\n'
-                f'{gate_line}\n'
-                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {safe_r}</b>\n'
-                f'<b>{_te(USER_EMOJI_ID,"👤")} User ➛ {ulink} {_te(peid,"⭐")}</b>'
-            )
+            resp_disp = _clean_resp(resp) if resp else "Unknown"
+
+            grp_mb = MsgBuilder()
+            grp_mb.bold(f"HIT ➛ {hit_label} ").bold_emoji(eid, hit_fb).nl()
+            grp_mb.bold(gate_txt).nl()
+            grp_mb.bold_emoji(HIT_RESP_EMOJI_ID, "✅").bold(f" {resp_disp}").nl()
+            grp_mb.bold("User ➛ ").link(_uname(user), _uurl(user)).bold(" ").bold_emoji(peid, "⭐")
+            _grp_plain, _grp_ents = grp_mb.build()
+
             grp_kb = RawMarkup([[
-                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,   style="primary"),
-                _btn("📢 Channel",  url=MY_CHANNEL_LINK,  style="primary"),
+                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,  style="primary"),
+                _btn("📢 Channel",  url=MY_CHANNEL_LINK, style="primary"),
             ]])
-            _grp_plain, _grp_ents = html_to_entities(grp)
+            await _send_sticker(bot, HIT_LOG_GROUP_ID, eid)   # full-size animated sticker
             await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=_grp_plain,
                                    entities=_grp_ents, disable_web_page_preview=True,
                                    reply_markup=grp_kb)
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
 
-    # ── 3. Extra charged group — same compact UI as hit-log ──────────────────
+    # ── 3. Extra charged group — animated sticker + compact card ─────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
             await asyncio.sleep(0.3)
-            eid_x    = get_random_charged_emoji()
-            peid_x   = _plan_eid(plan)
-            ulink_x  = _user_link(user)
-            safe_r_x = escape(resp or "ORDER_PAID")
+            eid_x  = get_random_charged_emoji()          # different emoji for variety
+            peid_x = _plan_eid(plan)
+            resp_x = _clean_resp(resp) if resp else "ORDER_PAID"
 
-            ext_grp = (
-                f'<b>HIT ➛ CHARGED {_te(eid_x,"💎")}</b>\n'
-                f'<b>Gate ➛ Shopify • {_fmt_price(price, currency)}</b>\n'
-                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {safe_r_x}</b>\n'
-                f'<b>{_te(USER_EMOJI_ID,"👤")} User ➛ {ulink_x} {_te(peid_x,"⭐")}</b>'
-            )
+            ext_mb = MsgBuilder()
+            ext_mb.bold("HIT ➛ CHARGED ").bold_emoji(eid_x, "💎").nl()
+            ext_mb.bold(f"Gate ➛ Shopify • {_fmt_price(price, currency)}").nl()
+            ext_mb.bold_emoji(HIT_RESP_EMOJI_ID, "✅").bold(f" {resp_x}").nl()
+            ext_mb.bold("User ➛ ").link(_uname(user), _uurl(user)).bold(" ").bold_emoji(peid_x, "⭐")
+            _ext_plain, _ext_ents = ext_mb.build()
+
             ext_kb = RawMarkup([[
-                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,   style="primary"),
-                _btn("📢 Channel",  url=MY_CHANNEL_LINK,  style="primary"),
+                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,  style="primary"),
+                _btn("📢 Channel",  url=MY_CHANNEL_LINK, style="primary"),
             ]])
-            _ext_plain, _ext_ents = html_to_entities(ext_grp)
+            await _send_sticker(bot, EXTRA_CHARGED_GROUP_ID, eid_x)  # full-size sticker
             await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=_ext_plain,
                                    entities=_ext_ents, disable_web_page_preview=True,
                                    reply_markup=ext_kb)
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
-    # ── 4. Secret channel — full card details, silent, every CHARGED+LIVE ────
+    # ── 4. Secret channel — full card details, no sticker needed ─────────────
     if SECRET_CHANNEL_ID and verdict in ("CHARGED", "LIVE", "TDS"):
         try:
-            bin_s   = _bin_str(bin_data)
+            bin_s  = _bin_str_plain(bin_data)
+            sc_lbl  = ("CHARGED" if verdict == "CHARGED"
+                       else "LIVE [3DS]" if verdict == "TDS" else "LIVE")
             sc_icon = "💎" if verdict == "CHARGED" else "✅"
-            sc_lbl  = "CHARGED" if verdict == "CHARGED" else ("LIVE [3DS]" if verdict == "TDS" else "LIVE")
-            sc_msg  = (
-                f"<b>{sc_icon} {sc_lbl} — Shopify</b>\n"
-                f"<b>Gate ➳ Shopify • {_fmt_price(price, currency)}</b>\n"
-                f"<b>━━━━━━━━━━━━━━</b>\n"
-                f'<b>💳 Card ➳ <code>{escape(card)}</code></b>\n'
-                f"<b>🏦 Bin  ➳ {bin_s}</b>\n"
-                f"<b>━━━━━━━━━━━━━━</b>\n"
-                f'<b>👤 User ➳ {_user_link(user)}</b>\n'
-                f'<b>⚡ {DEV_LINK_HTML}</b>'
-            )
+
+            sc_mb = MsgBuilder()
+            sc_mb.bold(f"{sc_icon} {sc_lbl} — Shopify").nl()
+            sc_mb.bold(f"Gate ➳ Shopify • {_fmt_price(price, currency)}").nl()
+            sc_mb.bold("━━━━━━━━━━━━━━").nl()
+            sc_mb.bold("💳 Card ➳ ").code(card).nl()
+            sc_mb.bold(f"🏦 Bin  ➳ {bin_s}").nl()
+            sc_mb.bold("━━━━━━━━━━━━━━").nl()
+            sc_mb.bold("👤 User ➳ ").link(_uname(user), _uurl(user)).nl()
+            sc_mb.bold_emoji(DEV_EMOJI_ID, "⚡").bold(" ➳ ").link(BOT_NAME, BOT_CHANNEL)
+            _sc_plain, _sc_ents = sc_mb.build()
+
             await asyncio.sleep(0.2)
-            await bot.send_message(chat_id=SECRET_CHANNEL_ID, text=sc_msg,
-                                   parse_mode="HTML", disable_web_page_preview=True)
+            await bot.send_message(chat_id=SECRET_CHANNEL_ID, text=_sc_plain,
+                                   entities=_sc_ents, disable_web_page_preview=True)
         except Exception as e:
             logging.debug(f"[HIT] secret channel: {e}")
 
@@ -2149,10 +2334,10 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             if verdict == "CHARGED":
                 sess["charged"] += 1
                 sess["charged_cards"].append(rec)
-                msg = build_result_msg(card_fmt, resp, verdict, bin_data,
-                                       price, currency, elapsed, user, plan)
+                _dm_p, _dm_e = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                                price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
-                    bot, user, msg, "CHARGED",
+                    bot, user, _dm_p, "CHARGED", dm_ents=_dm_e,
                     card=card_fmt, bin_data=bin_data, price=price, currency=currency,
                     plan=plan, resp=raw_resp,
                 ))
@@ -2162,10 +2347,10 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
                 sess["tds_cards"].append(rec)
-                msg = build_result_msg(card_fmt, resp, verdict, bin_data,
-                                       price, currency, elapsed, user, plan)
+                _dm_p, _dm_e = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                                price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
-                    bot, user, msg, "TDS",
+                    bot, user, _dm_p, "TDS", dm_ents=_dm_e,
                     card=card_fmt, bin_data=bin_data, price=price, currency=currency,
                     plan=plan, resp=raw_resp,
                 ))
@@ -2174,10 +2359,10 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             elif verdict == "LIVE":
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
-                msg = build_result_msg(card_fmt, resp, verdict, bin_data,
-                                       price, currency, elapsed, user, plan)
+                _dm_p, _dm_e = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                                price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
-                    bot, user, msg, "LIVE",
+                    bot, user, _dm_p, "LIVE", dm_ents=_dm_e,
                     card=card_fmt, bin_data=bin_data, price=price, currency=currency,
                     plan=plan, resp=raw_resp,
                 ))
@@ -2337,9 +2522,12 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["credits"]   = max(0, ud.get("credits", 1) - 1)
 
     plan = ud.get("plan", "TRIAL")
-    _sp_html  = (f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-                 f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Checking...</b>')
-    _sp_plain, _sp_ents = html_to_entities(_sp_html)
+
+    # ── Spinner (initial "Checking..." message) ───────────────────────────────
+    _sp_mb = MsgBuilder()
+    _sp_mb.bold_emoji(PROG_GATE_EMOJI_ID, "🛒").bold(" Gate ➳ Shopify").nl()
+    _sp_mb.bold_emoji(PROG_PROGRESS_EMOJI_ID, "🔄").bold(" Checking...")
+    _sp_plain, _sp_ents = _sp_mb.build()
     spin = await update.message.reply_text(_sp_plain, entities=_sp_ents)
 
     proxies = _load_proxies()
@@ -2355,9 +2543,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # If probe has never run and all sites look dead, warn user briefly
     if not _WORKING_SITES:
-        _wt_html  = (f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-                     f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Finding live sites... please wait</b>')
-        _wt_plain, _wt_ents = html_to_entities(_wt_html)
+        _wt_mb = MsgBuilder()
+        _wt_mb.bold_emoji(PROG_GATE_EMOJI_ID, "🛒").bold(" Gate ➳ Shopify").nl()
+        _wt_mb.bold_emoji(PROG_PROGRESS_EMOJI_ID, "🔄").bold(" Finding live sites... please wait")
+        _wt_plain, _wt_ents = _wt_mb.build()
         await spin.edit_text(_wt_plain, entities=_wt_ents)
         # Block until probe finishes (only for single check, to get real result)
         sites = await probe_all_sites(_load_sites(), proxies)
@@ -2374,8 +2563,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bin_data = {}
 
     elapsed = time.time() - t0
-    text    = build_result_msg(card, resp, verdict, bin_data,
-                               price, currency, elapsed, user, plan)
+    _res_plain, _res_ents = build_result_msg(card, resp, verdict, bin_data,
+                                             price, currency, elapsed, user, plan)
 
     # Two buttons on every result card: main channel + logs channel
     kb = RawMarkup([[
@@ -2383,7 +2572,6 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _btn("📋 Hit Logs",     url=LOGS_CHANNEL_LINK, style="primary"),
     ]])
 
-    _res_plain, _res_ents = html_to_entities(text)
     try:
         await spin.edit_text(_res_plain, entities=_res_ents,
                              disable_web_page_preview=True, reply_markup=kb)
@@ -2393,7 +2581,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         asyncio.create_task(_send_hit(
-            context.bot, user, text, verdict,
+            context.bot, user, _res_plain, verdict, dm_ents=_res_ents,
             card=card, bin_data=bin_data, price=price, currency=currency,
             plan=plan, resp=resp,
         ))
