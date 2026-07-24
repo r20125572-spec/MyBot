@@ -76,13 +76,13 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 40   # max site attempts per card
-SITE_TIMEOUT      = 10   # seconds per API call (was 12 — trimmed 2s off each miss)
+SITE_RETRIES      = 60   # max site attempts per card
+SITE_TIMEOUT      = 15   # seconds per API call — gives slow sites more room
 MAX_CONCURRENT    = 15   # cards checked in parallel
 CARD_STAGGER      = 0.3  # stagger between card launches (seconds)
 SITE_BATCH        = 3    # sites raced in parallel within each retry round
-CONSEC_TIMEOUT_MAX = 12  # abort card after this many consecutive timeouts
-                         # (12 × 10s = 120s max before giving up on dead proxies)
+CONSEC_TIMEOUT_MAX = 30  # abort card after 30 consecutive timeouts
+                         # (10 rounds × 3 × 15s = 150s before giving up)
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
