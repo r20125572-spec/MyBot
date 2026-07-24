@@ -407,7 +407,7 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     access   = get_styled_plan(raw_plan)
 
     return (
-        f"<b><a href='{CHANNEL_LINK}'>[❆]</a> Welcome to CardXChk Bot 💎</b>\n"
+        f"<b><a href='{CHANNEL_LINK}'>[❆]</a> Welcome to Batmancardchk Bot 💎</b>\n"
         f"────────────\n"
         f"<b>User</b>    ➳ {uname}\n"
         f"<b>User ID</b> ➳ <code>{user.id}</code>\n"
@@ -417,7 +417,7 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"────────────\n"
         f"Choose an option below.\n"
         f"────────────\n"
-        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}\n"
+        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batmancardchk</a> {E_PRO}\n"
         f"<b>Version</b> ➳ {VERSION}"
     )
 
