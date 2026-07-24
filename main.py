@@ -2983,17 +2983,17 @@ def main():
         _request = HTTPXRequest(
             connection_pool_size=64,
             connect_timeout=10.0,
-            read_timeout=30.0,
-            write_timeout=30.0,
-            pool_timeout=60.0,
+            read_timeout=60.0,
+            write_timeout=60.0,
+            pool_timeout=120.0,
         )
         # Long-poll getUpdates — separate pool, generous read timeout
         _get_updates_request = HTTPXRequest(
             connection_pool_size=8,
             connect_timeout=10.0,
             read_timeout=65.0,   # PTB polls for 30 s + 35 s buffer
-            write_timeout=30.0,
-            pool_timeout=60.0,
+            write_timeout=60.0,
+            pool_timeout=120.0,
         )
         app = (
             Application.builder()
