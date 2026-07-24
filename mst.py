@@ -943,4 +943,3 @@ def get_mst_handlers():
 def get_bin_handler():
     """Returns the /bin CommandHandler — imported by main.py as get_bin_lookup_handler."""
     return CommandHandler("bin", cmd_bin)
-
