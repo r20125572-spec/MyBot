@@ -13,7 +13,7 @@ from telegram import TelegramObject
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8229923654:AAHxFHr5wDNqFXCD3O65xtVPVdggN4efdQg")
-OWNER_ID  = int(os.environ.get("OWNER_ID", "8283904645"))
+OWNER_ID  = int(os.environ.get("OWNER_ID", "5502877086"))  # @lucifer2600
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🤖  BOT IDENTITY
@@ -144,9 +144,9 @@ SPECIAL_FONT_MAP = {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
-    """Render a Telegram custom emoji tag (HTML parse_mode).
-    All users — including non-Premium — see the animated sticker."""
-    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+    """Returns the plain fallback emoji — visible to ALL users (no Premium needed).
+    Animated stickers are delivered via send_sticker() calls instead."""
+    return fallback
 
 def get_random_live_emoji() -> str:
     """Return a random live-hit emoji ID (string, not rendered tag)."""
