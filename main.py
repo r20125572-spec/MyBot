@@ -542,15 +542,12 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
             f'{tg_emoji(DECLINED_EMOJI_ID, "⚠️")}</b>'
         )
     elif is_approved:
-        live_eid    = get_random_live_emoji()
         status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live '
-            f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>'
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Live ✅</b>'
         )
     else:
         status_line = (
-            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Declined '
-            f'<tg-emoji emoji-id="{DECLINED_EMOJI_ID}">❌</tg-emoji></b>'
+            f'<b><a href="{CHANNEL_LINK}">[❆]</a> Declined ❌</b>'
         )
 
     plan_emoji_id = get_plan_emoji_id(plan)
@@ -570,19 +567,16 @@ def build_check_result(card_raw: str, gate_name: str, raw_response: str,
     return (
         f'{status_line}\n'
         f'\n'
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>💳</b>\n'
         f'<b>   ⤷ <code>{card_raw}</code></b>\n'
         f'<b>Gate ➳ {gate_name}</b>\n'
         f'<b>──────────</b>\n'
         f'<b>Resp ➳ {escape(raw_response)}</b>\n'
         f'<b>Info ➳ {bin_txt}</b>\n'
         f'<b>──────────</b>\n'
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {time_taken}s</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {uname_display} '
-        f'{plan_emoji} ({plan_label})</b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ '
-        f'<a href="{DEV_LINK}">Batamanchk</a> '
-        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+        f'<b>⏱ ➳ {time_taken}s</b>\n'
+        f'<b>👤 ➳ {uname_display} {plan_emoji} ({plan_label})</b>\n'
+        f'<b>⚡ ➳ <a href="{DEV_LINK}">Batamanchk</a> ⭐</b>'
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -921,8 +915,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         return
 
-    _sp_html = (f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> '
-                f'Scanning...</b>')
+    _sp_html = '<b>🔄 Scanning...</b>'
     msg = await update.message.reply_text(_sp_html, parse_mode="HTML")
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
@@ -2314,14 +2307,14 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_membership(update, context): return
     t   = time.time()
     msg = await update.message.reply_text(
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Pinging...</b>',
+        '<b>🔄 Pinging...</b>',
         parse_mode="HTML"
     )
     ms  = int((time.time() - t) * 1000)
     await msg.edit_text(
-        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> {B("Pong")}</b>\n'
+        f'<b>✅ {B("Pong")}</b>\n'
         f'──────────\n'
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {ms}ms</b>\n'
+        f'<b>⏱ ➳ {ms}ms</b>\n'
         f'──────────',
         parse_mode="HTML"
     )
