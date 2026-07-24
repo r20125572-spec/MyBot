@@ -1679,23 +1679,26 @@ def _uurl(user) -> str:
 # Premium on the bot — the sticker is delivered full-size and
 # animated for every user on every client version.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_STICKER_CACHE: dict[str, str] = {}    # emoji_id  →  sticker file_id
+_STICKER_CACHE:     dict[str, str]    = {}   # emoji_id → file_id
+_STICKER_OBJ_CACHE: dict[str, object] = {}   # emoji_id → full Sticker object
 
 
 async def _get_sticker_fid(bot, emoji_id: str):
-    """Resolve a custom emoji ID to a sendable sticker file_id (in-process cache).
-    Returns the file_id string, or None if the API call fails."""
+    """Resolve a custom emoji ID → sendable file_id. Caches both the file_id
+    and the full Sticker object (for is_video / is_animated in _send_as_media)."""
     if emoji_id in _STICKER_CACHE:
         return _STICKER_CACHE[emoji_id]
     try:
         stickers = await bot.get_custom_emoji_stickers([emoji_id])
         if stickers:
-            fid = stickers[0].file_id
-            _STICKER_CACHE[emoji_id] = fid
-            logging.info(f"[STICKER] resolved eid={emoji_id[:12]}… → fid={fid[:20]}…")
-            return fid
+            stk = stickers[0]
+            _STICKER_CACHE[emoji_id]     = stk.file_id
+            _STICKER_OBJ_CACHE[emoji_id] = stk
+            logging.info(f"[STICKER] resolved eid={emoji_id[:12]}… "
+                         f"video={stk.is_video} anim={stk.is_animated}")
+            return stk.file_id
         else:
-            logging.warning(f"[STICKER] API returned empty for eid={emoji_id}")
+            logging.warning(f"[STICKER] API empty for eid={emoji_id}")
     except Exception as exc:
         logging.warning(f"[STICKER] resolve FAILED eid={emoji_id}: {exc}")
     return None
@@ -1713,6 +1716,57 @@ async def _send_sticker(bot, chat_id, emoji_id: str):
             logging.info(f"[STICKER] ✓ sent eid={emoji_id[:12]}… to {chat_id}")
         except Exception as exc:
             logging.warning(f"[STICKER] send to {chat_id} failed: {exc}")
+
+
+async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
+                          parse_mode: str = "HTML", reply_markup=None,
+                          disable_notification: bool = False):
+    """Send the sticker as a VISIBLE ANIMATION with caption — works for ALL users.
+
+    send_animation(file_id, caption=caption) delivers the animated sticker as a
+    full-size video clip with the hit card beneath it.  This is a real file send —
+    no Telegram Premium is required to see the animation.
+
+    Fallback chain:
+      1. send_animation  — WebM video stickers (.webm) — most premium custom emoji
+      2. send_sticker + send_message — Lottie (.tgs) or static stickers
+      3. send_message only — if sticker cannot be resolved at all
+    """
+    fid = await _get_sticker_fid(bot, emoji_id)
+    if not fid:
+        try:
+            await bot.send_message(chat_id=chat_id, text=caption,
+                                   parse_mode=parse_mode, reply_markup=reply_markup,
+                                   disable_web_page_preview=True,
+                                   disable_notification=disable_notification)
+        except Exception as e:
+            logging.warning(f"[MEDIA] text-only fallback to {chat_id}: {e}")
+        return
+
+    # ── Primary: send_animation (works for .webm video stickers) ──────────────
+    try:
+        await bot.send_animation(
+            chat_id=chat_id, animation=fid,
+            caption=caption, parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_notification=disable_notification,
+        )
+        logging.info(f"[MEDIA] ✓ animation+caption → {chat_id}")
+        return
+    except Exception as e1:
+        logging.debug(f"[MEDIA] send_animation failed ({e1}), fallback sticker+text")
+
+    # ── Fallback: send_sticker (silent) + send_message ────────────────────────
+    try:
+        await bot.send_sticker(chat_id=chat_id, sticker=fid,
+                               disable_notification=True)
+        await bot.send_message(chat_id=chat_id, text=caption,
+                               parse_mode=parse_mode, reply_markup=reply_markup,
+                               disable_web_page_preview=True,
+                               disable_notification=disable_notification)
+        logging.info(f"[MEDIA] ✓ sticker+text → {chat_id}")
+    except Exception as e2:
+        logging.warning(f"[MEDIA] all attempts failed for {chat_id}: {e2}")
 
 
 def _plan_eid(plan: str) -> str:
@@ -1963,17 +2017,17 @@ def _bin_str_plain(bd: dict) -> str:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESULT MESSAGE
-# Uses parse_mode="HTML" + <tg-emoji> tags — the same
-# approach as the working aiogram mst.py reference.
-# Custom emoji IDs are ALWAYS resolved as animated stickers
-# by the Telegram client regardless of bot Premium status.
+# RESULT MESSAGE  — clean UI, matches the target design:
+#   HIT ➛ CHARGED 💎
+#   Gate ➛ Shopify • 1.99 USD
+#   ✅ ORDER_PAID
+#   User ➛ @username ⭐
+# Animation delivered via _send_as_media() at send time.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def build_result_msg(card, resp, verdict, bin_data, price, currency,
                      elapsed, user, plan) -> str:
     """Build the full result card. Returns HTML string (parse_mode='HTML')."""
     ulink = _user_link(user)
-    peid  = _plan_eid(plan)
     ts    = _fmt_time(elapsed)
     bin_s = _bin_str(bin_data)
 
@@ -1990,36 +2044,33 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
         display_resp = _clean_resp(raw_resp)
     safe_resp = escape(display_resp)
 
-    ch_link = f'<a href="{SECRET_CHANNEL_LINK}">[❆]</a>'
-
     if verdict == "CHARGED":
-        eid       = get_random_charged_emoji()
-        status_ln = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
-        gate_ln   = f'<b>Gate ➳ Shopify | {_fmt_price(price, currency)}</b>'
+        hit_line  = "HIT ➛ CHARGED 💎"
+        gate_line = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        resp_icon = "💎"
     elif verdict == "TDS":
-        eid       = get_random_live_emoji()
-        status_ln = f'<b>{ch_link} Live {_te(eid,"✅")} [3DS]</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        hit_line  = "HIT ➛ LIVE [3DS] ✅"
+        gate_line = "Gate ➛ Shopify"
+        resp_icon = "✅"
     elif verdict == "LIVE":
-        eid       = get_random_live_emoji()
-        status_ln = f'<b>{ch_link} Live {_te(eid,"✅")}</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        hit_line  = "HIT ➛ LIVE ✅"
+        gate_line = "Gate ➛ Shopify"
+        resp_icon = "✅"
     else:
-        status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        hit_line  = "DEAD ➛ DECLINED ❌"
+        gate_line = "Gate ➛ Shopify"
+        resp_icon = "❌"
 
     return (
-        f"{status_ln}\n\n"
-        f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
-        f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
-        f"{gate_ln}\n"
+        f"<b>{hit_line}</b>\n"
+        f"<b>{gate_line}</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>Resp ➳ {safe_resp}</b>\n"
-        f"<b>Bin  ➳ <code>{bin_s}</code></b>\n"
+        f"<b>{resp_icon} {safe_resp}</b>\n"
+        f"<b>💳 <code>{escape(card)}</code></b>\n"
+        f"<b>🏦 {bin_s}</b>\n"
         f"<b>──────────</b>\n"
-        f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {ts}</b>\n'
-        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
-        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
+        f"<b>⏱ {ts}  |  👤 {ulink} ⭐</b>\n"
+        f"<b>⚡ {DEV_LINK_HTML} ⭐</b>"
     )
 
 
@@ -2035,17 +2086,17 @@ def _progress_text(sess: dict) -> str:
     ts    = _fmt_time(time.time() - sess["start_time"])
     uobj  = sess.get("user_obj")
     ulink = _user_link(uobj) if uobj else "User"
-    peid  = sess.get("plan_eid", PRO_EMOJI_ID)
     return (
-        f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-        f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Progress ➳ {sess["checked"]}/{sess["total"]}</b>\n'
-        f'<b>Charged ➳ {sess["charged"]} {_te(PROG_CHARGED_EMOJI_ID,"💎")}</b>\n'
-        f'<b>Live    ➳ {sess["approved"]} {_te(PROG_LIVE_EMOJI_ID,"✅")}</b>\n'
-        f'<b>Dead    ➳ {sess["dead"]} {_te(PROG_DEAD_EMOJI_ID,"❌")}</b>\n'
-        f'<b>Errors  ➳ {sess["errors"]} {_te(PROG_ERRORS_EMOJI_ID,"⚠️")}</b>\n'
-        f"<b>Time    ➳ {ts}</b>\n"
-        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
-        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
+        f"<b>🛒 Gate ➛ Shopify</b>\n"
+        f"<b>🔄 Progress ➛ {sess['checked']}/{sess['total']}</b>\n"
+        f"<b>──────────</b>\n"
+        f"<b>💎 Charged ➛ {sess['charged']}</b>\n"
+        f"<b>✅ Live    ➛ {sess['approved']}</b>\n"
+        f"<b>❌ Dead    ➛ {sess['dead']}</b>\n"
+        f"<b>⚠️ Errors  ➛ {sess['errors']}</b>\n"
+        f"<b>──────────</b>\n"
+        f"<b>⏱ Time ➛ {ts}</b>\n"
+        f"<b>👤 {ulink} ⭐  |  ⚡ {DEV_LINK_HTML}</b>"
     )
 
 
@@ -2145,120 +2196,98 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HIT NOTIFICATIONS
-# Strategy:
-#   • Full-size animated sticker via send_sticker() FIRST
-#     — guaranteed to animate for ALL users (no Premium needed).
-#   • Then the text card with parse_mode="HTML" + <tg-emoji>
-#     — same approach as the working aiogram mst.py reference.
+# Strategy: _send_as_media() sends the sticker as a visible
+# ANIMATION with the card as caption — ONE message per
+# destination, animated for ALL users (no Premium needed).
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _send_hit(bot, user, text: str, verdict: str,
                     card: str = "", bin_data: dict = None,
                     price: str = "0.00", currency: str = "USD",
                     plan: str = "TRIAL", resp: str = ""):
     """Send hit notifications to DM, hit-log group, extra charged group, and secret channel.
-    `text` is an HTML string (parse_mode='HTML') — the full result card."""
-    bin_data = bin_data or {}
+    `text` = full result card HTML (used as DM caption).
+    Each destination gets ONE message: animated sticker + card as caption."""
+    bin_data  = bin_data or {}
+    eid       = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
+    ulink     = _user_link(user)
+    resp_disp = escape(_clean_resp(resp)) if resp else "ORDER_PAID"
 
-    eid   = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
-    peid  = _plan_eid(plan)
-    ulink = _user_link(user)
+    # Build compact log card — matches the target UI exactly:
+    #   HIT ➛ CHARGED 💎
+    #   Gate ➛ Shopify • 1.99 USD
+    #   💎 ORDER_PAID
+    #   User ➛ @username ⭐
+    if verdict == "CHARGED":
+        hit_line  = "HIT ➛ CHARGED 💎"
+        gate_txt  = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        resp_icon = "💎"
+    elif verdict == "TDS":
+        hit_line  = "HIT ➛ LIVE [3DS] ✅"
+        gate_txt  = "Gate ➛ Shopify"
+        resp_icon = "✅"
+    else:
+        hit_line  = "HIT ➛ LIVE ✅"
+        gate_txt  = "Gate ➛ Shopify"
+        resp_icon = "✅"
 
-    # ── 1. DM the user — animated sticker first, then full result card ────────
+    compact_html = (
+        f"<b>{hit_line}</b>\n"
+        f"<b>{gate_txt}</b>\n"
+        f"<b>{resp_icon} {resp_disp}</b>\n"
+        f"<b>User ➛ {ulink} ⭐</b>"
+    )
+
+    grp_kb = RawMarkup([[
+        _btn("🤖 Open Bot", url=BOT_PLANS_LINK,  style="primary"),
+        _btn("📢 Channel",  url=MY_CHANNEL_LINK, style="primary"),
+    ]])
+
+    # ── 1. DM — animation + full result card as caption ───────────────────────
     try:
-        await _send_sticker(bot, user.id, eid)           # full-size animated sticker
-        await bot.send_message(chat_id=user.id, text=text,
-                               parse_mode="HTML", disable_web_page_preview=True)
+        await _send_as_media(bot, user.id, eid, caption=text, parse_mode="HTML")
     except Exception as e:
         logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
-    # ── 2. Public hit-log group — animated sticker + compact 4-line card ──────
-    #  [full-size animated sticker]
-    #  HIT ➛ CHARGED 💎
-    #  Gate ➛ Shopify • 1.99 USD
-    #  ✅ ORDER_PAID
-    #  User ➛ username ⭐
+    # ── 2. Hit-log group — animation + compact card ───────────────────────────
     if HIT_LOG_GROUP_ID:
         try:
-            if verdict == "CHARGED":
-                hit_label = "CHARGED"
-                hit_fb    = "💎"
-                gate_txt  = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
-            elif verdict == "TDS":
-                hit_label = "LIVE [3DS]"
-                hit_fb    = "✅"
-                gate_txt  = "Gate ➛ Shopify"
-            else:
-                hit_label = "LIVE"
-                hit_fb    = "✅"
-                gate_txt  = "Gate ➛ Shopify"
-
-            resp_disp = escape(_clean_resp(resp)) if resp else "Unknown"
-
-            grp_html = (
-                f'<b>HIT ➛ {hit_label} {_te(eid, hit_fb)}</b>\n'
-                f'<b>{gate_txt}</b>\n'
-                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {resp_disp}</b>\n'
-                f'<b>User ➛ {ulink} {_te(peid,"⭐")}</b>'
-            )
-            grp_kb = RawMarkup([[
-                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,  style="primary"),
-                _btn("📢 Channel",  url=MY_CHANNEL_LINK, style="primary"),
-            ]])
-            await _send_sticker(bot, HIT_LOG_GROUP_ID, eid)
-            await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=grp_html,
-                                   parse_mode="HTML", disable_web_page_preview=True,
-                                   reply_markup=grp_kb)
+            await _send_as_media(bot, HIT_LOG_GROUP_ID, eid,
+                                 caption=compact_html, parse_mode="HTML",
+                                 reply_markup=grp_kb)
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
 
-    # ── 3. Extra charged group — animated sticker + compact card ─────────────
+    # ── 3. Extra charged group — animation + compact card ────────────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
             await asyncio.sleep(0.3)
-            eid_x  = get_random_charged_emoji()
-            peid_x = _plan_eid(plan)
-            resp_x = escape(_clean_resp(resp)) if resp else "ORDER_PAID"
-
-            ext_html = (
-                f'<b>HIT ➛ CHARGED {_te(eid_x,"💎")}</b>\n'
-                f'<b>Gate ➛ Shopify • {_fmt_price(price, currency)}</b>\n'
-                f'<b>{_te(HIT_RESP_EMOJI_ID,"✅")} {resp_x}</b>\n'
-                f'<b>User ➛ {ulink} {_te(peid_x,"⭐")}</b>'
-            )
-            ext_kb = RawMarkup([[
-                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,  style="primary"),
-                _btn("📢 Channel",  url=MY_CHANNEL_LINK, style="primary"),
-            ]])
-            await _send_sticker(bot, EXTRA_CHARGED_GROUP_ID, eid_x)
-            await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=ext_html,
-                                   parse_mode="HTML", disable_web_page_preview=True,
-                                   reply_markup=ext_kb)
+            eid_x = get_random_charged_emoji()
+            await _send_as_media(bot, EXTRA_CHARGED_GROUP_ID, eid_x,
+                                 caption=compact_html, parse_mode="HTML",
+                                 reply_markup=grp_kb)
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
-    # ── 4. Secret channel — full card details + sticker ──────────────────────
+    # ── 4. Secret channel — animation + detailed card with card number ────────
     if SECRET_CHANNEL_ID and verdict in ("CHARGED", "LIVE", "TDS"):
         try:
-            bin_s   = _bin_str(bin_data)
-            sc_lbl  = ("CHARGED" if verdict == "CHARGED"
-                       else "LIVE [3DS]" if verdict == "TDS" else "LIVE")
-            sc_eid  = eid  # reuse same animated sticker emoji chosen above
-
+            bin_s  = _bin_str(bin_data)
+            sc_lbl = ("CHARGED 💎" if verdict == "CHARGED"
+                      else "LIVE [3DS] ✅" if verdict == "TDS" else "LIVE ✅")
             sc_html = (
-                f'<b>{_te(sc_eid, "💎" if verdict == "CHARGED" else "✅")} '
-                f'{sc_lbl} — Shopify</b>\n'
-                f"<b>Gate ➳ Shopify • {_fmt_price(price, currency)}</b>\n"
-                f"<b>━━━━━━━━━━━━━━</b>\n"
-                f'<b>💳 Card ➳ <code>{escape(card)}</code></b>\n'
-                f"<b>🏦 Bin  ➳ <code>{bin_s}</code></b>\n"
-                f"<b>━━━━━━━━━━━━━━</b>\n"
-                f"<b>👤 User ➳ {ulink}</b>\n"
-                f"<b>{DEV_LINK_HTML}</b>"
+                f"<b>HIT ➛ {sc_lbl}</b>\n"
+                f"<b>{gate_txt}</b>\n"
+                f"<b>──────────</b>\n"
+                f"<b>💳 <code>{escape(card)}</code></b>\n"
+                f"<b>🏦 {bin_s}</b>\n"
+                f"<b>──────────</b>\n"
+                f"<b>👤 {ulink} ⭐</b>\n"
+                f"<b>⚡ {DEV_LINK_HTML}</b>"
             )
             await asyncio.sleep(0.2)
-            await _send_sticker(bot, SECRET_CHANNEL_ID, sc_eid)
-            await bot.send_message(chat_id=SECRET_CHANNEL_ID, text=sc_html,
-                                   parse_mode="HTML", disable_web_page_preview=True)
+            await _send_as_media(bot, SECRET_CHANNEL_ID, eid,
+                                 caption=sc_html, parse_mode="HTML",
+                                 disable_notification=True)
         except Exception as e:
             logging.warning(f"[HIT] secret channel: {e}")
 
@@ -2546,11 +2575,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan = ud.get("plan", "TRIAL")
 
     # ── Spinner (initial "Checking..." message) ───────────────────────────────
-    sp_html = (
-        f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-        f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Checking...</b>'
+    spin = await update.message.reply_text(
+        "<b>🛒 Gate ➛ Shopify</b>\n<b>🔄 Checking...</b>",
+        parse_mode="HTML"
     )
-    spin = await update.message.reply_text(sp_html, parse_mode="HTML")
 
     proxies = _load_proxies()
 
@@ -2565,11 +2593,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # If probe has never run and all sites look dead, warn user briefly
     if not _WORKING_SITES:
-        wt_html = (
-            f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-            f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Finding live sites... please wait</b>'
+        await spin.edit_text(
+            "<b>🛒 Gate ➛ Shopify</b>\n<b>🔄 Finding live sites... please wait</b>",
+            parse_mode="HTML"
         )
-        await spin.edit_text(wt_html, parse_mode="HTML")
         # Block until probe finishes (only for single check, to get real result)
         sites = await probe_all_sites(_load_sites(), proxies)
 
@@ -2588,32 +2615,30 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     res_html = build_result_msg(card, resp, verdict, bin_data,
                                 price, currency, elapsed, user, plan)
 
-    # ── Send verdict sticker to the command chat FIRST ─────────────────────────
-    # send_sticker() resolves emoji_id → file_id via get_custom_emoji_stickers()
-    # and sends it as a standalone animated sticker message.  This is the ONLY
-    # approach that guarantees animated display for ALL users regardless of
-    # bot or user Telegram Premium status.
+    # ── Send result as animation+caption (sticker AS photo) ───────────────────
+    # _send_as_media() resolves emoji_id → file_id, then:
+    #   send_animation(file_id, caption=result_html) → animated clip + card
+    # Works for ALL users regardless of Telegram Premium status.
     if verdict == "CHARGED":
         _cmd_eid = get_random_charged_emoji()
     elif verdict in ("LIVE", "TDS"):
         _cmd_eid = get_random_live_emoji()
     else:
         _cmd_eid = DECLINED_EMOJI_ID
-    # await (not create_task) — guarantees sticker lands BEFORE the result card edit
-    await _send_sticker(context.bot, update.effective_chat.id, _cmd_eid)
 
-    # Two buttons on every result card: main channel + logs channel
     kb = RawMarkup([[
         _btn(f"📢 {BOT_NAME}",  url=MY_CHANNEL_LINK,  style="primary"),
         _btn("📋 Hit Logs",     url=LOGS_CHANNEL_LINK, style="primary"),
     ]])
 
+    # Delete the spinner first — then send the result as animation+caption
     try:
-        await spin.edit_text(res_html, parse_mode="HTML",
-                             disable_web_page_preview=True, reply_markup=kb)
+        await spin.delete()
     except Exception:
-        await update.message.reply_text(res_html, parse_mode="HTML",
-                                        disable_web_page_preview=True, reply_markup=kb)
+        pass
+
+    await _send_as_media(context.bot, update.effective_chat.id, _cmd_eid,
+                         caption=res_html, parse_mode="HTML", reply_markup=kb)
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         asyncio.create_task(_send_hit(
@@ -2639,4 +2664,7 @@ __all__ = [
     "probe_all_sites", "get_working_sites",
     "start_probe_background",
     "_WORKING_SITES", "_PROBE_IN_PROGRESS",
+    # Sticker animation sender — shared with mst.py so both modules use one cache
+    "_send_as_media", "_get_sticker_fid",
+    "_STICKER_CACHE", "_STICKER_OBJ_CACHE",
 ]
