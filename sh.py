@@ -91,7 +91,7 @@ _WORKING_SITES:     list  = []
 _PROBE_IN_PROGRESS: bool  = False
 _PROBE_LAST_RUN:    float = 0.0
 PROBE_TTL:          float = 1800.0   # re-probe every 30 min
-PROBE_CARD:         str   = "4111111111111111|01|29|123"
+PROBE_CARD:         str   = "4000223372377978|05|29|651"   # same test card as sitechk.py
 PROBE_TIMEOUT:      float = 8.0
 PROBE_CONCURRENCY:  int   = 60
 
@@ -795,114 +795,99 @@ BUILTIN_SITES = [
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESPONSE SIGNAL SETS
+# RESPONSE CLASSIFICATION  (ported from sitechk.py)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# These mean the site is PERMANENTLY unsupported — blacklist it, zero-sleep skip
-_DEAD_SITE_SIGNALS = (
-    "site error! status: 404",
-    "site error! status: 403",
-    "not shopify!",
-    "site not supported for now!",
-    "site not supported",
-    "application not found",
-    "app not found",
-    "store not found",
-    "site requires login!",
-)
+# DEAD_ERRORS = site/infrastructure errors → skip this site, try another
+# A site that returns any of these is broken/unsupported — not a bank response.
+DEAD_ERRORS = [
+    'site error! status: 404', 'site error! status: 500', 'site error! status: 402',
+    'site error! status: 502', 'site error! 503', 'site error! status: 503',
+    'site not supported for now!', 'connection error', 'connection error!',
+    'error processing card', 'failed to get token', 'failed to get checkout',
+    'failed to add to cart', 'site overloaded', 'site rate limited',
+    'delivery_delivery_line_detail_changed',
+    'failed to get session token', 'unable to get payment token', 'no valid products',
+    'site error! status: 403', 'payment method is not shopify!', 'not shopify!',
+    'site error! status: 401', 'site requires login!', 'validation_custom',
+    'timeout', 'http error', 'json', 'proxy', 'curl error', 'could not resolve',
+    'connect tunnel failed', 'max retries', 'amount_too_small',
+    'buyer_identity_marketing_consent_phone_number_does_not_match_expected_pattern',
+    # Step failures (Site Broken/Dead)
+    'step 1 failed', 'step 0 failed', 'step 2 failed', 'step 3 failed', 'step 4 failed',
+    'step 5 failed', 'step 6 failed', 'step 7 failed', 'step 9 failed', 'step 10 failed',
+    'missing stableid', 'missing buildid', 'missing sourcetoken', 'checkout_failed',
+    'delivery_out_of_stock_at_origin_location',
+    'could not extract private_access_token', 'no_products',
+    'buyer_identity_currency_not_supported_by_shop',
+    'could not find actions js url', 'session_error', 'delivery_zone_not_found',
+    'missing proposal', 'missing submit id', 'delivery_strategy_conditions_not_satisfied',
+    'retryable: inventory reservation failure', 'inventory_failure',
+    'exceeded 30 poll attempts',
+    'delivery_no_delivery_strategy_available_for_merchandise_line',
+    'could not extract queuetoken', 'delivery_no_delivery_strategy_available',
+    'could not extract identification signature',
+    'could not extract session id', 'payments_credit_card_brand_not_supported',
+    'could not extract delivery handle', 'could not extract signedhandles',
+    'could not extract shipping amount', 'could not extract total amount',
+    'could not extract receiptid', 'could not extract sessiontoken',
+    'errstoreincompatible', 'errmissingreceiptid',
+    'application not found', 'store not found', 'app not found',
+    'site not supported', 'site error',
+]
 
-# These mean a transient failure — try another site (short sleep)
-_RETRY_SIGNALS = (
-    "site error! status: 500",
-    "site error! status: 429",
-    "site error! status: 502",
-    "site error! status: 503",
-    "site error! status: 504",
-    "http error",
-    "timeout",
-    "connection error",
-    "proxy error",
-    "r4 token empty",
-    "r2 id empty",
-    "product not found",
-    "hcaptcha detected",
-    "hcaptcha_detected",
-    "tax ammount empty",
-    "del ammount empty",
-    "product id is empty",
-    "clinte token",
-    "failed to get token",
-    "no valid products",
-    "no available products found",
-    "validation_custom",
-    "error processing card",
-    "delivery_zone_not_found",
-    "delivery_no_delivery_strategy_available",
-    "delivery_delivery_line_detail_changed",
-    "delivery_strategy_conditions_not_satisfied",
-    "delivery_no_delivery_strategy_available_for_merchandise_line",
-    "session_error",
-    "token not found",
-    "invalid_response",
-    "curl error",
-    "payments_credit_card_brand_not_supported",
-    "buyer_identity_currency_not_supported_by_shop",
-    "could not resolve host",
-    "connect tunnel failed",
-    "receipt_empty",
-    "could not extract receiptid",
-    "receiptid missing",
-    "response missing receiptid",
-    "could not extract signedhandles",
-    "extract signedhandles",
-    "missing receiptid",
-    "inventory_failure",
-    "no_products",
-    "no_product",
-    "vault_failed",
-    "merchandise_out_of_stock",
-    "products.json",
-    "store incompatible",
-    "buyer_identity_marketing_consent",
-    "step 0 failed", "step 1 failed", "step 2 failed", "step 3 failed",
-    "step 4 failed", "step 5 failed", "step 6 failed", "step 7 failed",
-    "step 8 failed", "step 9 failed", "step 10 failed",
-    "returned status 429",
-    "returned status 500", "returned status 502",
-    "returned status 503", "returned status 504",
-    "no proxies", "no available proxies",
-    # NOTE: "na", "server error", "client error" removed — too broad as substrings
-)
+# SUCCESS_RESPONSES = real bank decline responses → site IS alive, card result is real
+# NOTE: GENERIC_ERROR is a success response (site alive) — not a dead-site error!
+SUCCESS_RESPONSES = [
+    'CARD_DECLINED', 'INVALID_CVC', 'INCORRECT_CVV', 'INSUFFICIENT_FUNDS',
+    'GENERIC_ERROR', 'GENERIC_DECLINE', 'DO NOT HONOR', 'UNKNOWN_ERROR',
+    'Processing Error', 'EXPIRED_CARD', 'PICK_UP_CARD', 'DECISION_RULE_BLOCK',
+    'FRAUD_SUSPECTED', '3DS_REQUIRED', 'AMOUNT_TOO_SMALL',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'INCORRECT_NUMBER',
+    'DO_NOT_HONOR', 'INCORRECT_CVC', 'INVALID_CVC', 'SECURITY_VIOLATION',
+    'TRANSACTION_NOT_ALLOWED', 'RESTRICTED_CARD', 'STOLEN_CARD', 'LOST_CARD',
+    'CALL_ISSUER', 'TEST_MODE_LIVE_CARD', 'PROCESSING_ERROR',
+    '3D_SECURE', '3DS', 'AUTHENTICATION_REQUIRED', 'SCA_REQUIRED',
+    'ORDER_PAID', 'PAYMENT_AUTHORIZED', 'PAYMENT_ACCEPTED', 'CHARGED', 'APPROVED',
+]
 
 
 def _is_dead_site_response(resp: str) -> bool:
+    """True if the response is a site/infrastructure error (not a bank response)."""
     r = resp.lower().strip()
-    return any(sig in r for sig in _DEAD_SITE_SIGNALS)
+    return any(err.lower() in r for err in DEAD_ERRORS)
 
 
-def _is_retry_response(resp: str) -> bool:
-    r = resp.lower().strip()
-    return any(sig in r for sig in _RETRY_SIGNALS)
+def _is_success_response(resp: str) -> bool:
+    """True if the response is a real bank response (site is alive)."""
+    ru = resp.upper().strip()
+    return any(s.upper() in ru for s in SUCCESS_RESPONSES)
 
 
 def classify_response(resp: str) -> str:
-    """Returns CHARGED | TDS | LIVE | DEAD | RETRY."""
+    """
+    Classify a REAL bank response (only call this after _is_dead_site_response = False).
+    Returns: CHARGED | TDS | LIVE | DEAD
+    """
     if not resp:
-        return "RETRY"
+        return "DEAD"
     mu = resp.upper().strip()
 
+    # ── CHARGED (real money moved) ───────────────────────────────────────────
     if any(k in mu for k in (
-        "ORDER_PAID", "CHARGED", "PAYMENT_AUTHORIZED",
-        "PAYMENT_ACCEPTED", "APPROVED", "SUCCESSFUL",
+        "ORDER_PAID", "PAYMENT_AUTHORIZED", "PAYMENT_ACCEPTED",
+        "APPROVED", "CHARGED", "SUCCESSFUL",
     )):
         return "CHARGED"
 
+    # ── TDS (3-D Secure redirect) ────────────────────────────────────────────
     if any(k in mu for k in (
         "3DS_REQUIRED", "3D_SECURE", "AUTHENTICATION_REQUIRED",
-        "SECURE_AUTHENTICATION", "SCA_REQUIRED",
-        "REDIRECT_3D", "3DS", "3D SECURE",
+        "SECURE_AUTHENTICATION", "SCA_REQUIRED", "REDIRECT_3D",
+        "3DS", "3D SECURE",
     )):
         return "TDS"
 
+    # ── LIVE (card is real — bank gave a proper decline) ────────────────────
     if any(k in mu for k in (
         "INSUFFICIENT_FUNDS", "INSUFFICIENT FUNDS",
         "INCORRECT_CVV", "INCORRECT_CVC", "INVALID_CVC",
@@ -912,33 +897,34 @@ def classify_response(resp: str) -> str:
     )):
         return "LIVE"
 
+    # ── DEAD (card is bad / bank hard-declined) ──────────────────────────────
     if any(k in mu for k in (
-        "CARD_DECLINED", "DECLINED", "GENERIC_ERROR", "GENERIC_DECLINE",
-        "PROCESSING_ERROR", "FRAUD_SUSPECTED", "DECISION_RULE_BLOCK",
-        "PICK_UP_CARD", "INVALID_PURCHASE_TYPE", "INVALID_PAYMENT_METHOD",
+        "CARD_DECLINED", "GENERIC_DECLINE", "GENERIC_ERROR",
+        "DECLINED", "PROCESSING_ERROR", "FRAUD_SUSPECTED",
+        "DECISION_RULE_BLOCK", "PICK_UP_CARD",
+        "INVALID_PURCHASE_TYPE", "INVALID_PAYMENT_METHOD",
         "TRANSACTION_NOT_ALLOWED", "RESTRICTED_CARD",
         "STOLEN_CARD", "LOST_CARD", "EXPIRED_CARD",
         "INCORRECT_NUMBER", "AMOUNT_TOO_SMALL",
         "CALL_ISSUER", "TEST_MODE_LIVE_CARD", "UNKNOWN_ERROR",
+        "PROCESSING ERROR",
     )):
         return "DEAD"
 
-    if _is_retry_response(resp) or _is_dead_site_response(resp):
-        return "RETRY"
-
+    # Unknown response — treat as dead
     return "DEAD"
 
 
 def _clean_resp(resp: str) -> str:
-    """Sanitize before showing to the user — never expose 'site error!' strings."""
+    """For display only — make site errors human-readable."""
     if not resp:
         return "Dead"
     r = resp.lower()
-    if "site error!" in r:
+    if "site error!" in r or "site error" in r:
         m = re.search(r"status:\s*(\d+)", r)
         if m:
             code = int(m.group(1))
-            return "Dead" if code in (404, 403) else f"Server Error {code}"
+            return "Dead" if code in (404, 403, 401) else f"Server Error {code}"
         return "Server Error"
     if "not shopify" in r or "site not supported" in r:
         return "Dead"
@@ -946,8 +932,6 @@ def _clean_resp(resp: str) -> str:
         return "Connection Error"
     if "timeout" in r:
         return "Timeout"
-    if "unknown error" in r:
-        return "Dead"
     return resp
 
 
@@ -1023,17 +1007,64 @@ def _load_sites() -> list:
 # SITE PROBER  — finds which sites the API actually supports
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _probe_one_site(site: str, proxies: list) -> bool:
-    """Return True if the API can reach this site (anything except 404/403)."""
-    px = random.choice(proxies) if proxies else None
-    try:
-        resp, _gw, _price, _currency, http_st = await _call_api(
-            PROBE_CARD, site, px, timeout=PROBE_TIMEOUT
-        )
-        if http_st in (404, 403):
+    """
+    Return True if this site is alive and usable for real card checks.
+    Uses the same criteria as sitechk.py:
+      1. Gateway must be "SHOPIFY PAYMENTS"
+      2. Response must be in SUCCESS_RESPONSES (real bank decline)
+      3. Price must be $0.50–$6.00  (too low = store blocks test; too high = risky)
+      4. ORDER_PAID on probe card = block (don't want accidental charges)
+    """
+    MAX_PROBE_RETRIES = 3
+    for attempt in range(MAX_PROBE_RETRIES):
+        px = random.choice(proxies) if proxies else None
+        try:
+            resp, gw, price, currency, http_st = await _call_api(
+                PROBE_CARD, site, px, timeout=PROBE_TIMEOUT
+            )
+        except Exception:
+            await asyncio.sleep(0.3)
+            continue
+
+        # HTTP errors → dead
+        if http_st and http_st not in (200,):
             return False
-        return not _is_dead_site_response(resp)
-    except Exception:
-        return False
+
+        # Gateway MUST be Shopify Payments
+        if gw.upper().strip() != "SHOPIFY PAYMENTS":
+            return False
+
+        resp_upper = resp.upper().strip()
+
+        # ORDER_PAID on probe card = site actually charged test card → block
+        if "ORDER_PAID" in resp_upper or resp_upper == "PAID":
+            logging.warning(f"[PROBE] BLOCKED {site}: ORDER_PAID on test card")
+            return False
+
+        # Dead-site error → this site is broken, try again with different proxy
+        if _is_dead_site_response(resp):
+            await asyncio.sleep(0.3)
+            continue
+
+        # Real bank response → site is alive!
+        if _is_success_response(resp):
+            # Price constraint: $0.50–$6.00
+            try:
+                p = float(re.sub(r"[^\d.]", "", str(price)))
+                if 0.50 < p <= 6.00:
+                    logging.info(f"[PROBE] ✅ {site} alive: {resp!r} ${p:.2f}")
+                    return True
+                else:
+                    logging.debug(f"[PROBE] ❌ {site} price ${p:.2f} out of range")
+                    return False
+            except Exception:
+                return False
+
+        # Unknown response → try another attempt
+        await asyncio.sleep(0.2)
+        continue
+
+    return False
 
 
 async def probe_all_sites(all_sites: list, proxies: list,
@@ -1226,63 +1257,61 @@ async def _check_card_with_retry(
 ) -> tuple:
     """
     Try up to max_sites Shopify stores for this card.
+    Uses the same decision logic as sitechk.py:
 
-    Decision tree per attempt
-    ─────────────────────────
-    1. resp body contains "site error! status: 404/403", "not shopify!" etc.
-       → local_dead.add(site) + tiny sleep (0.1s) — skip, try another site.
-       Global _DEAD_SITES is also updated but capped at 200 entries to prevent
-       cascade where all sites blacklisted → every card returns DEAD instantly.
-    2. HTTP 404/403 from server (rare — API almost always returns 200)
-       → same as above
-    3. HTTP 429 / "status: 429" in body
-       → longer sleep, retry same site
-    4. resp body is a transient failure (timeout, 5xx, step N failed …)
-       → short sleep, try next site
-    5. classify_response → CHARGED/TDS/LIVE/DEAD
-       → return immediately with REAL raw response (not sanitised)
-    6. All sites exhausted
-       → return DEAD with last real response text
+    For each site attempt:
+      1. Gateway != "SHOPIFY PAYMENTS" → skip site (not a Shopify payment processor)
+      2. Response in DEAD_ERRORS       → skip site (site infrastructure error)
+      3. Rate-limited (429)            → sleep, retry same site
+      4. Response in SUCCESS_RESPONSES → got a real bank response → classify card
+      5. Unknown response              → skip site
+
+    CHARGED → ORDER_PAID / PAYMENT_AUTHORIZED / APPROVED
+    LIVE    → INSUFFICIENT_FUNDS / DO NOT HONOR / INCORRECT_CVV / INVALID_CVC
+    TDS     → 3DS_REQUIRED / 3D_SECURE
+    DEAD    → CARD_DECLINED / GENERIC_ERROR / GENERIC_DECLINE / etc.
     """
     if not sites:
-        sites = list(BUILTIN_SITES)
+        sites = get_working_sites()
+        if not sites:
+            sites = list(BUILTIN_SITES)
 
-    # ── Per-call local dead set — avoids poisoning global across parallel cards ──
+    # Per-call local dead set — never let one card's dead sites poison others
     local_dead: set = set()
 
-    # Global blacklist: auto-clear if overgrown (prevents cascade across calls)
-    if len(_DEAD_SITES) > 200:
+    # Cap global blacklist so it never cascades to kill all sites
+    if len(_DEAD_SITES) > 150:
         _DEAD_SITES.clear()
-        logging.warning("[SH] _DEAD_SITES cleared (> 200 entries) to prevent cascade")
 
-    pool    = sites[:]
+    pool    = list(sites)
     random.shuffle(pool)
     px_pool = proxies if proxies else _ALL_PROXIES
-    tried: list     = []
+    tried: set      = set()
     price, currency = "0.00", "USD"
-    last_raw_resp   = "Dead"
+    last_resp       = "Dead"
 
     for attempt in range(max_sites):
 
-        # Stop signal
+        # ── Stop signal (mass check) ──────────────────────────────────
         if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
             raise asyncio.CancelledError()
 
-        # Refresh untried pool — use local_dead (not global) to decide what to skip
-        all_dead = local_dead | _DEAD_SITES
-        untried  = [s for s in pool if s not in tried and s not in all_dead]
-        if not untried:
-            # All locally-known dead sites tried — reset local_dead and retry
+        # ── Pick next untried site ────────────────────────────────────
+        skip = tried | local_dead | _DEAD_SITES
+        available = [s for s in pool if s not in skip]
+        if not available:
+            # All sites tried this round — reset and try again
             local_dead.clear()
-            tried   = []
-            pool    = sites[:]
+            tried.clear()
+            pool = list(sites)
             random.shuffle(pool)
-            untried = pool[:]
+            available = pool[:]
 
-        site  = random.choice(untried)
-        tried.append(site)
+        site  = random.choice(available)
+        tried.add(site)
         proxy = random.choice(px_pool) if px_pool else None
 
+        # ── API call ──────────────────────────────────────────────────
         try:
             resp, gw, price, currency, http_st = await _call_api(
                 card, site, proxy, timeout=site_timeout
@@ -1291,51 +1320,58 @@ async def _check_card_with_retry(
             raise
         except Exception as exc:
             logging.debug(f"[SH] {card[:6]}** {site} exception: {exc}")
-            await asyncio.sleep(random.uniform(0.3, 0.8))
+            await asyncio.sleep(0.3)
             continue
 
-        logging.info(f"[API RESP] {card[:6]}** #{attempt+1} site={site} "
-                     f"proxy={proxy or 'none'} → {resp!r}")
+        logging.info(f"[API] {card[:6]}** #{attempt+1} site={site} "
+                     f"proxy={proxy or 'none'} gw={gw!r} → {resp!r}")
 
-        # ── Decision 1: DEAD SITE in response body ───────────────────
-        if _is_dead_site_response(resp):
+        # ── 1. Gateway filter (must be Shopify Payments) ──────────────
+        if gw.upper().strip() != "SHOPIFY PAYMENTS":
             local_dead.add(site)
-            _DEAD_SITES.add(site)
-            logging.debug(f"[SH] Dead site skipped: {site} ({resp!r})")
-            last_raw_resp = resp          # keep so we can show something if all fail
-            await asyncio.sleep(0.05)    # tiny sleep — don't hammer API, don't block
+            logging.debug(f"[SH] Skip {site}: gateway={gw!r}")
+            await asyncio.sleep(0.05)
             continue
 
-        # ── Decision 2: HTTP-level 404/403 (rare — API usually returns 200) ──
-        if http_st in (404, 403):
+        # ── 2. HTTP-level error ───────────────────────────────────────
+        if http_st and http_st not in (200,):
             local_dead.add(site)
             _DEAD_SITES.add(site)
             await asyncio.sleep(0.05)
             continue
 
-        # ── Decision 3: Rate limited ──────────────────────────────────
-        if http_st == 429 or "status: 429" in resp.lower():
-            tried.pop()   # allow retry on same site
+        # ── 3. Rate limited ───────────────────────────────────────────
+        if http_st == 429 or (resp and "429" in resp):
+            tried.discard(site)          # allow retry same site
             await asyncio.sleep(random.uniform(3.0, 5.0))
             continue
 
-        # ── Decision 4: Transient failure ────────────────────────────
-        if _is_retry_response(resp):
-            last_raw_resp = resp
-            await asyncio.sleep(random.uniform(0.5, 1.2))
+        # ── 4. Site infrastructure error (DEAD_ERRORS) ───────────────
+        if _is_dead_site_response(resp):
+            local_dead.add(site)
+            _DEAD_SITES.add(site)
+            last_resp = resp
+            logging.debug(f"[SH] Dead site: {site} → {resp!r}")
+            await asyncio.sleep(0.05)
             continue
 
-        # ── Decision 5: Real bank response — return RAW text ─────────
-        last_raw_resp = resp
-        verdict = classify_response(resp)
-        if verdict in ("CHARGED", "TDS", "LIVE", "DEAD"):
+        # ── 5. Real bank response (SUCCESS_RESPONSES) — classify card ─
+        if _is_success_response(resp):
+            last_resp = resp
+            verdict   = classify_response(resp)
+            logging.info(f"[RESULT] {card[:6]}** {verdict} via {site} → {resp!r}")
             return verdict, resp, price, currency
 
-        # classify returned RETRY — try another site
-        await asyncio.sleep(random.uniform(0.8, 1.8))
+        # ── 6. Unknown response — log and skip ────────────────────────
+        logging.debug(f"[SH] Unknown resp from {site}: {resp!r}")
+        last_resp = resp
+        local_dead.add(site)
+        await asyncio.sleep(0.2)
 
-    # Exhausted all attempts — return last raw response so user sees real text
-    return "DEAD", last_raw_resp, price, currency
+    # All attempts exhausted
+    logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites, "
+                    f"last_resp={last_resp!r}")
+    return "DEAD", last_resp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
