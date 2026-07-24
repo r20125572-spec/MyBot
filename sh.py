@@ -70,8 +70,8 @@ EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 SECRET_CHANNEL_ID   = -1004499920555
 SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
 # ── Result card buttons ─────────────────────────────────────────────────────
-BOT_USERNAME_LINK   = "https://t.me/batcardchk29_bot"
-BOT_PLANS_LINK      = "https://t.me/batcardchk29_bot?start=plans"  # deep-links → /plans
+BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
+BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
 MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channel
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
@@ -2126,33 +2126,45 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
         display_resp = _clean_resp(raw_resp)
     safe_resp = escape(display_resp)
 
+    ch_link   = f'<a href="{CHANNEL_LINK}">[❆]</a>'
+    live_eid  = get_random_live_emoji()
+
     if verdict == "CHARGED":
-        hit_line  = "HIT ➛ CHARGED 💎"
-        gate_line = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
-        resp_te   = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
+        status_line = (f'<b>{ch_link} HIT CHARGED '
+                       f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
+        gate_line   = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
     elif verdict == "TDS":
-        hit_line  = "HIT ➛ LIVE [3DS] ✅"
-        gate_line = "Gate ➛ Shopify"
-        resp_te   = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+        status_line = (f'<b>{ch_link} HIT LIVE [3DS] '
+                       f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
+        gate_line   = "Gate ➛ Shopify"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     elif verdict == "LIVE":
-        hit_line  = "HIT ➛ LIVE ✅"
-        gate_line = "Gate ➛ Shopify"
-        resp_te   = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+        status_line = (f'<b>{ch_link} HIT LIVE '
+                       f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
+        gate_line   = "Gate ➛ Shopify"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     else:
-        hit_line  = "DEAD ➛ DECLINED ❌"
-        gate_line = "Gate ➛ Shopify"
-        resp_te   = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
+        status_line = (f'<b>{ch_link} DEAD DECLINED '
+                       f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
+        gate_line   = "Gate ➛ Shopify"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
 
     return (
-        f"<b>{hit_line}</b>\n"
-        f"<b>{gate_line}</b>\n"
-        f"<b>──────────</b>\n"
-        f"<b>{resp_te} {safe_resp}</b>\n"
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji> <code>{escape(card)}</code></b>\n'
-        f"<b>🏦 {bin_s}</b>\n"
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> {ts}  |  <tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ulink} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {DEV_LINK_HTML} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+        f'{status_line}\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
+        f'<b>{gate_line}</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b>{resp_te} Resp ➛ {safe_resp}</b>\n'
+        f'<b>Bin ➛ <code>{bin_s}</code></b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ulink} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ {DEV_LINK_HTML} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
 
@@ -2299,29 +2311,36 @@ async def _send_hit(bot, user, text: str, verdict: str,
     #   Gate ➛ Shopify • 1.99 USD
     #   💎 ORDER_PAID
     #   User ➛ @username ⭐
+    ch_link_g  = f'<a href="{MY_CHANNEL_LINK}">[❆]</a>'
+    live_eid_g = get_random_live_emoji()
+
     if verdict == "CHARGED":
-        hit_line  = "HIT ➛ CHARGED 💎"
+        status_line_g = (f'<b>{ch_link_g} HIT CHARGED '
+                         f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
         gate_txt  = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
-        resp_icon = "💎"
+        resp_te_g = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
     elif verdict == "TDS":
-        hit_line  = "HIT ➛ LIVE [3DS] ✅"
+        status_line_g = (f'<b>{ch_link_g} HIT LIVE [3DS] '
+                         f'<tg-emoji emoji-id="{live_eid_g}">✅</tg-emoji></b>')
         gate_txt  = "Gate ➛ Shopify"
-        resp_icon = "✅"
+        resp_te_g = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     else:
-        hit_line  = "HIT ➛ LIVE ✅"
+        status_line_g = (f'<b>{ch_link_g} HIT LIVE '
+                         f'<tg-emoji emoji-id="{live_eid_g}">✅</tg-emoji></b>')
         gate_txt  = "Gate ➛ Shopify"
-        resp_icon = "✅"
+        resp_te_g = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
 
     compact_html = (
-        f"<b>{hit_line}</b>\n"
-        f"<b>{gate_txt}</b>\n"
-        f"<b>{resp_icon} {resp_disp}</b>\n"
-        f"<b>User ➛ {ulink} ⭐</b>"
+        f"{status_line_g}\n"
+        f"<b>──────────</b>\n"
+        f"<b>{resp_te_g} Resp ➛ {resp_disp}</b>\n"
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ulink} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
     grp_kb = RawMarkup([[
-        _btn("🤖 Open Bot", url=BOT_PLANS_LINK,  style="primary"),
-        _btn("📢 Channel",  url=MY_CHANNEL_LINK, style="primary"),
+        _btn("Open Bot", url=BOT_PLANS_LINK,  style="primary"),
+        _btn("Channel",  url=MY_CHANNEL_LINK, style="primary"),
     ]])
 
     # ── 1. DM — animation + full result card as caption ───────────────────────
