@@ -2236,8 +2236,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_obj=user,
         plan=plan,
     )
-    init_text = _pt(sess)
-    _ip, _ie  = html_to_entities(init_text)
+    _ip, _ie  = _pt(sess)   # _progress_text now returns (plain, ents) via MsgBuilder
     msg = await update.message.reply_text(
         _ip, entities=_ie,
         reply_markup=_msh_buttons(sid, running=True),
