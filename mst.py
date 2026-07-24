@@ -281,16 +281,17 @@ def _prog_text(sess: dict) -> str:
     ts      = _fmt_time(elapsed)
     ul      = _user_link(sess["user_obj"]) if sess.get("user_obj") else "User"
     dev_url = f'<a href="{DEV_LINK}">{BOT_NAME}</a>'
+    pe      = sess.get("plan_eid", PRO_EMOJI_ID)
     return (
-        f"<b>🛒 Gate ➛ Stripe | 0$</b>\n"
-        f"<b>🔄 Progress ➛ {sess['checked']}/{sess['total']}</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Stripe | 0$</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ {sess["checked"]}/{sess["total"]}</b>\n'
         f"<b>──────────</b>\n"
-        f"<b>✅ Live ➛ {sess['live']}</b>\n"
-        f"<b>❌ Dead ➛ {sess['dead']}</b>\n"
-        f"<b>⚠️ Errors ➛ {sess['errors']}</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> Live ➛ {sess["live"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji> Dead ➛ {sess["dead"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji> Errors ➛ {sess["errors"]}</b>\n'
         f"<b>──────────</b>\n"
-        f"<b>⏱ Time ➛ {ts}</b>\n"
-        f"<b>👤 {ul} ⭐  |  ⚡ {dev_url}</b>"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> Time ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{pe}">⭐</tg-emoji>  |  <tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {dev_url}</b>'
     )
 
 async def _update_progress(bot, sid: str, force: bool = False):
@@ -349,18 +350,22 @@ async def _send_hit_notifications(bot, sess: dict, card: str, verdict: str,
     bin_s    = _safe(_bin_str(bin_data))
     verdict_line = "CHARGED 💎" if verdict == "CHARGED" else "LIVE ✅"
 
+    resp_te = (
+        f'<tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
+    )
+
     # ── Full card for DM ─────────────────────────────────────
     dm_html = (
         f"<b>HIT ➛ {verdict_line}</b>\n"
         f"<b>Gate ➛ Stripe | 0$</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>✅ {safe_r}</b>\n"
-        f"<b>💳 <code>{html_escape(card)}</code></b>\n"
+        f"<b>{resp_te} {safe_r}</b>\n"
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji> <code>{html_escape(card)}</code></b>\n'
         f"<b>🏦 {bin_s}</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>⏱ {ts}</b>\n"
-        f"<b>👤 {ul} ⭐</b>\n"
-        f"<b>⚡ {dev_url} ⭐</b>"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {dev_url} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
     # ── Compact card for log groups ──────────────────────────
@@ -368,10 +373,10 @@ async def _send_hit_notifications(bot, sess: dict, card: str, verdict: str,
         f"<b>HIT ➛ {verdict_line}</b>\n"
         f"<b>Gate ➛ Stripe | 0$</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>✅ {safe_r}</b>\n"
-        f"<b>💳 <code>{html_escape(card)}</code></b>\n"
+        f"<b>{resp_te} {safe_r}</b>\n"
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji> <code>{html_escape(card)}</code></b>\n'
         f"<b>──────────</b>\n"
-        f"<b>👤 {ul} ⭐</b>"
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>'
     )
 
     # 1. DM → animation + full card
@@ -727,15 +732,15 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dev_url  = f'<a href="{DEV_LINK}">{BOT_NAME}</a>'
 
     init_text = (
-        f"<b>🛒 Gate ➛ Stripe | 0$</b>\n"
-        f"<b>🔄 Progress ➛ 0/{total}</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Stripe | 0$</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ 0/{total}</b>\n'
         f"<b>──────────</b>\n"
-        f"<b>✅ Live ➛ 0</b>\n"
-        f"<b>❌ Dead ➛ 0</b>\n"
-        f"<b>⚠️ Errors ➛ 0</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> Live ➛ 0</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji> Dead ➛ 0</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji> Errors ➛ 0</b>\n'
         f"<b>──────────</b>\n"
-        f"<b>⏱ Time ➛ 0s</b>\n"
-        f"<b>👤 {ul} ⭐  |  ⚡ {dev_url}</b>"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> Time ➛ 0s</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji>  |  <tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {dev_url}</b>'
     )
 
     prog_msg = await msg.reply_text(
@@ -938,3 +943,4 @@ def get_mst_handlers():
 def get_bin_handler():
     """Returns the /bin CommandHandler — imported by main.py as get_bin_lookup_handler."""
     return CommandHandler("bin", cmd_bin)
+
