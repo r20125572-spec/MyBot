@@ -78,7 +78,7 @@ SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
 BTN_LABEL           = "⚡ Batmanchk"      # button shown on all result cards
 
 SH_COOLDOWN    = 25
-SITE_RETRIES   = 5     # sites tried per card
+SITE_RETRIES   = 20    # sites tried per card (keep trying until CHARGED/LIVE/TDS or exhausted)
 SITE_TIMEOUT   = 12    # live sites respond in 7-8s; must be above that
 MAX_CONCURRENT = 15    # cards checked in parallel
 CARD_STAGGER   = 0.3   # stagger between card launches (seconds)
@@ -1310,6 +1310,14 @@ async def _check_card_with_retry(
     last_resp         = "No sites responded"
     got_bank_response = False     # True once we receive a real bank response
 
+    # Best non-DEAD result seen so far (CHARGED > TDS > LIVE beats DEAD)
+    best_verdict: str  = "DEAD"
+    best_resp:    str  = "No sites responded"
+    best_price:   str  = "0.00"
+    best_currency: str = "USD"
+
+    _RANK = {"CHARGED": 3, "TDS": 2, "LIVE": 1, "DEAD": 0}
+
     for attempt in range(max_sites):
 
         # ── Stop signal (mass check) ──────────────────────────────────
@@ -1372,17 +1380,30 @@ async def _check_card_with_retry(
             verdict           = classify_response(resp)
             logging.info(f"[RESULT] {card[:6]}** → {verdict}  resp={resp!r}  "
                          f"price={price}  site={site}")
-            return verdict, resp, price, currency
+
+            # Keep the best result seen so far
+            if _RANK.get(verdict, 0) > _RANK.get(best_verdict, 0):
+                best_verdict  = verdict
+                best_resp     = resp
+                best_price    = price
+                best_currency = currency
+
+            # CHARGED / LIVE / TDS → stop immediately, winner found
+            if verdict in ("CHARGED", "LIVE", "TDS"):
+                return best_verdict, best_resp, best_price, best_currency
+
+            # DEAD from bank → keep trying other sites
+            continue
 
         # ── 5. Unknown response — skip ────────────────────────────────
         logging.debug(f"[SH] Unknown resp from {site}: {resp!r}")
         last_resp = resp
         local_dead.add(site)
 
-    # ── All attempts exhausted → return DEAD (not Error) ─────────────
+    # ── All attempts exhausted → return best result seen ─────────────
     logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites "
-                    f"bank_response={got_bank_response} last={last_resp!r}")
-    return "DEAD", last_resp, price, currency
+                    f"bank_response={got_bank_response} best={best_verdict!r} last={last_resp!r}")
+    return best_verdict, best_resp, best_price, best_currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
