@@ -48,7 +48,7 @@ from sh import (
     get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
-    probe_all_sites, get_working_sites, start_probe_background,
+    probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
     _send_sticker, get_random_live_emoji,
 )
 
@@ -2914,6 +2914,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _post_shutdown(app: Application) -> None:
+    """Cancel the background site-prober before the event loop closes.
+    Without this, asyncio.Semaphore waiters inside probe_all_sites try to
+    call loop.call_soon() on an already-closed loop → RuntimeError spam."""
+    try:
+        await stop_probe_background()
+        logger.info("[PROBE] Background prober stopped on shutdown.")
+    except Exception as exc:
+        logger.warning(f"[PROBE] shutdown cleanup error: {exc}")
+
+
 async def _post_init(app: Application) -> None:
     """
     1. Auto-detect the real bot username from Telegram and patch config so
@@ -2991,6 +3002,7 @@ def main():
             .get_updates_request(_get_updates_request)
             .concurrent_updates(512)   # handle 512 updates simultaneously
             .post_init(_post_init)
+            .post_shutdown(_post_shutdown)
             .build()
         )
 
