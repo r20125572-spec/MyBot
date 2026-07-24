@@ -52,7 +52,7 @@ EXTRA_CHARGED_GROUP_ID    = -1003991915326
 STRIPE_GATE_API_URL       = "https://cardx.up.railway.app/stripe/cc={card}"
 
 MAX_CONCURRENT_CARDS      = 10
-CARD_TIMEOUT_SECONDS      = 180
+CARD_TIMEOUT_SECONDS      = 300
 PROGRESS_UPDATE_INTERVAL  = 5.0
 CARDS_PER_PROGRESS_UPDATE = 10
 SESSION_CLEANUP_SECS      = 1800
@@ -285,13 +285,14 @@ def _prog_text(sess: dict) -> str:
     return (
         f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Stripe | 0$</b>\n'
         f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ {sess["checked"]}/{sess["total"]}</b>\n'
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> Live ➛ {sess["live"]}</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji> Dead ➛ {sess["dead"]}</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji> Errors ➛ {sess["errors"]}</b>\n'
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> Time ➛ {ts}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{pe}">⭐</tg-emoji>  |  <tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {dev_url}</b>'
+        f'<b>Live ➛ {sess["live"]} <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
+        f'<b>Dead ➛ {sess["dead"]} <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
+        f'<b>Errors ➛ {sess["errors"]} <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
+        f'<b>Time ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ul} '
+        f'<tg-emoji emoji-id="{pe}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ {dev_url} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
 async def _update_progress(bot, sid: str, force: bool = False):
@@ -340,63 +341,84 @@ async def _update_progress(bot, sid: str, force: bool = False):
 async def _send_hit_notifications(bot, sess: dict, card: str, verdict: str,
                                    resp: str, bin_data: dict, elapsed: float):
     user     = sess.get("user_obj")
-    plan     = sess.get("plan_name", "ELITE")
     plan_eid = sess.get("plan_eid", PRO_EMOJI_ID)
     ul       = _user_link(user)
-    live_eid = get_random_live_emoji()
     dev_url  = f'<a href="{DEV_LINK}">{BOT_NAME}</a>'
+    ch_link  = f'<a href="{CHANNEL_LINK}">[❆]</a>'
     ts       = _fmt_time(elapsed)
     safe_r   = _safe(resp)
-    bin_s    = _safe(_bin_str(bin_data))
-    verdict_line = "CHARGED 💎" if verdict == "CHARGED" else "LIVE ✅"
 
-    resp_te = (
-        f'<tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
+    # BIN string
+    bi = bin_data or {}
+    sc = str(bi.get("scheme", "N/A")).upper()
+    bk = bi.get("bank", "N/A")
+    co = bi.get("country", "N/A")
+    fl = bi.get("country_emoji", "")
+    bin_country = f"{fl} {co}".strip() if fl else co
+    bin_s = _safe(f"{sc} - {bk} - {bin_country}")
+
+    # Each hit uses a fresh random custom emoji from the pool
+    live_eid = get_random_live_emoji()
+
+    # Status line — the custom emoji is embedded as <tg-emoji> so it
+    # renders as an animated custom emoji sticker for ALL users
+    status_line = (
+        f'<b>{ch_link} Live '
+        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>'
     )
 
-    # ── Full card for DM ─────────────────────────────────────
+    # ── Full card for user DM (reference format) ─────────────
     dm_html = (
-        f"<b>HIT ➛ {verdict_line}</b>\n"
-        f"<b>Gate ➛ Stripe | 0$</b>\n"
-        f"<b>──────────</b>\n"
-        f"<b>{resp_te} {safe_r}</b>\n"
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji> <code>{html_escape(card)}</code></b>\n'
-        f"<b>🏦 {bin_s}</b>\n"
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> {ts}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {dev_url} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+        f'{status_line}\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{html_escape(card)}</code></b>\n'
+        f'<b>Gate ➛ Stripe | 0$</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji> Resp ➛ {safe_r}</b>\n'
+        f'<b>Bin ➛ <code>{bin_s}</code></b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ul} '
+        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ {dev_url} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
-    # ── Compact card for log groups ──────────────────────────
+    # ── Compact card for log groups ───────────────────────────
     log_html = (
-        f"<b>HIT ➛ {verdict_line}</b>\n"
-        f"<b>Gate ➛ Stripe | 0$</b>\n"
-        f"<b>──────────</b>\n"
-        f"<b>{resp_te} {safe_r}</b>\n"
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji> <code>{html_escape(card)}</code></b>\n'
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>'
+        f'{status_line}\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{html_escape(card)}</code></b>\n'
+        f'<b>Gate ➛ Stripe | 0$</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji> Resp ➛ {safe_r}</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ul} '
+        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>'
     )
 
-    # 1. DM → animation + full card
+    # 1. DM — random custom emoji header + full card
     await _RL_DM.wait()
     try:
         await _send_as_media(
-            bot, user.id, live_eid, caption=dm_html, parse_mode="HTML",
+            bot, user.id, get_random_live_emoji(),
+            caption=dm_html, parse_mode="HTML",
         )
     except (Forbidden, BadRequest) as e:
         logging.warning(f"[MST] DM failed uid={user.id}: {e}")
         try:
             await _send_as_media(
-                bot, sess["chat_id"], live_eid, caption=dm_html, parse_mode="HTML",
+                bot, sess["chat_id"], get_random_live_emoji(),
+                caption=dm_html, parse_mode="HTML",
             )
         except Exception:
             pass
     except Exception as e:
         logging.warning(f"[MST] DM error uid={user.id}: {e}")
 
-    # 2. Hit-log group → animation + compact card
+    # 2. Hit-log group — random custom emoji header + compact card
     await _RL_HIT.wait()
     try:
         await _send_as_media(
@@ -406,7 +428,7 @@ async def _send_hit_notifications(bot, sess: dict, card: str, verdict: str,
     except Exception as e:
         logging.error(f"[MST] hit-log group error: {e}")
 
-    # 3. Extra group → animation + compact card (slight delay)
+    # 3. Extra group — random custom emoji header + compact card
     if EXTRA_CHARGED_GROUP_ID:
         await asyncio.sleep(0.5)
         await _RL_XTRA.wait()
@@ -473,11 +495,15 @@ async def _process_card(bot, sid: str, card_fmt: str, cc: str):
             uid = sess.get("user_id")
             if uid: _set_credits(uid, _credits(uid) - 1)
 
-        # Notify in-chat immediately (silent sticker + label)
+        # Notify in-chat immediately — custom emoji sticker + hit label
+        _eid = get_random_live_emoji()
         asyncio.create_task(
             _send_as_media(
-                bot, sess["chat_id"], get_random_live_emoji(),
-                caption=f"<b>HIT ➛ {'CHARGED 💎' if verdict == 'CHARGED' else 'LIVE ✅'}</b>",
+                bot, sess["chat_id"], _eid,
+                caption=(
+                    f'<b><tg-emoji emoji-id="{_eid}">⭐</tg-emoji>'
+                    f' HIT ➛ LIVE ✅ — Stripe | 0$</b>'
+                ),
                 parse_mode="HTML", disable_notification=True,
             )
         )
@@ -734,13 +760,14 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_text = (
         f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Stripe | 0$</b>\n'
         f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ 0/{total}</b>\n'
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> Live ➛ 0</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji> Dead ➛ 0</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji> Errors ➛ 0</b>\n'
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> Time ➛ 0s</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ul} <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji>  |  <tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {dev_url}</b>'
+        f'<b>Live ➛ 0 <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
+        f'<b>Dead ➛ 0 <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
+        f'<b>Errors ➛ 0 <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
+        f'<b>Time ➛ 0s</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ul} '
+        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ {dev_url} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
     prog_msg = await msg.reply_text(
