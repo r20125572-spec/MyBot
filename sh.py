@@ -78,8 +78,8 @@ SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
 BTN_LABEL           = "⚡ Batmanchk"      # button shown on all result cards
 
 SH_COOLDOWN    = 25
-SITE_RETRIES   = 5     # sites tried per card (dead sites timeout at 6s each → 30s max)
-SITE_TIMEOUT   = 6     # seconds per API call — dead sites hang ~30s, cut them fast
+SITE_RETRIES   = 5     # sites tried per card
+SITE_TIMEOUT   = 12    # live sites respond in 7-8s; must be above that
 MAX_CONCURRENT = 15    # cards checked in parallel
 CARD_STAGGER   = 0.3   # stagger between card launches (seconds)
 BUTTON_LOCK    = 30
@@ -98,7 +98,7 @@ _PROBE_IN_PROGRESS: bool  = False
 _PROBE_LAST_RUN:    float = 0.0
 PROBE_TTL:          float = 1800.0   # re-probe every 30 min
 PROBE_CARD:         str   = "4000223372377978|05|29|651"   # same test card as sitechk.py
-PROBE_TIMEOUT:      float = 8.0
+PROBE_TIMEOUT:      float = 12.0
 PROBE_CONCURRENCY:  int   = 60
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1458,11 +1458,12 @@ async def _fetch_bin_direct(bin6: str) -> dict:
         {
             "url":   f"https://data.handyapi.com/bin/{bin6}",
             "hdrs":  {},
+            # Real response keys: "Scheme", "Issuer", "Country": {"A2":..,"Name":..}
             "parse": lambda d: {
                 "scheme":       (d.get("Scheme") or d.get("scheme") or d.get("Type") or "").upper(),
-                "bank":         d.get("Issuer", d.get("issuer", d.get("bank", ""))),
-                "country":      (d.get("CountryInfo") or {}).get("Name", d.get("country", "")),
-                "country_code": (d.get("CountryInfo") or {}).get("A2", d.get("country_code", "")),
+                "bank":         d.get("Issuer") or d.get("issuer") or d.get("bank") or "",
+                "country":      (d.get("Country") or d.get("CountryInfo") or {}).get("Name", ""),
+                "country_code": (d.get("Country") or d.get("CountryInfo") or {}).get("A2", ""),
             },
         },
         {
@@ -1564,6 +1565,34 @@ async def _bin_lookup(bin6: str) -> dict:
     return result
 
 
+# ISO-standard long names → clean short names
+_COUNTRY_CLEAN = {
+    "United States of America (the)":                            "United States",
+    "United Kingdom of Great Britain and Northern Ireland (the)":"United Kingdom",
+    "Korea (the Republic of)":                                   "South Korea",
+    "Korea (the Democratic People's Republic of)":               "North Korea",
+    "Russian Federation (the)":                                  "Russia",
+    "Iran (Islamic Republic of)":                                "Iran",
+    "Taiwan, Province of China":                                 "Taiwan",
+    "Hong Kong, Special Administrative Region":                  "Hong Kong",
+    "Philippines (the)":                                         "Philippines",
+    "Netherlands (the)":                                         "Netherlands",
+    "Sudan (the)":                                               "Sudan",
+    "Niger (the)":                                               "Niger",
+    "Gambia (the)":                                              "Gambia",
+    "Bolivia (Plurinational State of)":                          "Bolivia",
+    "Venezuela (Bolivarian Republic of)":                        "Venezuela",
+    "Tanzania, United Republic of":                              "Tanzania",
+    "Moldova (the Republic of)":                                 "Moldova",
+    "Syrian Arab Republic (the)":                                "Syria",
+    "Lao People's Democratic Republic (the)":                    "Laos",
+    "Viet Nam":                                                  "Vietnam",
+}
+
+def _clean_country(name: str) -> str:
+    return _COUNTRY_CLEAN.get(name, name)
+
+
 def _bin_str(bd: dict) -> str:
     def _g(*keys):
         for k in keys:
@@ -1573,7 +1602,7 @@ def _bin_str(bd: dict) -> str:
         return "N/A"
     scheme  = escape(_g("scheme", "brand", "card_scheme", "network").upper())
     bank    = escape(_g("bank", "bank_name", "issuer", "issuer_name"))
-    country = escape(_g("country", "country_name", "country_full"))
+    country = escape(_clean_country(_g("country", "country_name", "country_full")))
     flag    = bd.get("country_emoji", "")
     cstr    = f"{flag} {country}".strip() if flag else country
     return f"{scheme} - {bank} - {cstr}"
