@@ -270,8 +270,9 @@ def _fetch_url_sync(url: str, timeout: int = 10) -> tuple:
         return 0, {}
 
 async def _fetch_url(url: str, timeout: int = 10) -> tuple:
-    """Async wrapper around _fetch_url_sync."""
-    loop = asyncio.get_event_loop()
+    """Async wrapper around _fetch_url_sync.
+    Uses get_running_loop() so it works correctly inside PTB's event loop."""
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _fetch_url_sync, url, timeout)
 
 
