@@ -961,7 +961,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         return
 
-    _sp_html = '<b>🔄 Scanning...</b>'
+    _sp_html = f'<b>🔄 Gate ➳ {gate_name}</b>'
     msg = await update.message.reply_text(_sp_html, parse_mode="HTML")
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
