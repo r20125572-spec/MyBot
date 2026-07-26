@@ -502,7 +502,7 @@ async def _process_card(bot, sid: str, card_fmt: str, cc: str):
                 bot, sess["chat_id"], _eid,
                 caption=(
                     f'<b><tg-emoji emoji-id="{_eid}">⭐</tg-emoji>'
-                    f' HIT ➛ LIVE ✅ — Stripe | 0$</b>'
+                    f' HIT ⺳ LIVE ✅ — Stripe | 0$</b>'
                 ),
                 parse_mode="HTML", disable_notification=True,
             )
@@ -758,15 +758,15 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dev_url  = f'<a href="{DEV_LINK}">{BOT_NAME}</a>'
 
     init_text = (
-        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Stripe | 0$</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ 0/{total}</b>\n'
-        f'<b>Live ➛ 0 <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
-        f'<b>Dead ➛ 0 <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
-        f'<b>Errors ➛ 0 <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
-        f'<b>Time ➛ 0s</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ul} '
+        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ⺳ Stripe | 0$</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ⺳ 0/{total}</b>\n'
+        f'<b>Live ⺳ 0 <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
+        f'<b>Dead ⺳ 0 <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
+        f'<b>Errors ⺳ 0 <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
+        f'<b>Time ⺳ 0s</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ⺳ {ul} '
         f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ {dev_url} '
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ⺳ {dev_url} '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
