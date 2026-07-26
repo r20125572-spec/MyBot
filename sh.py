@@ -78,13 +78,12 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 80   # max site attempts per card
-SITE_TIMEOUT      = 20   # seconds per API call — generous for slow proxies
-MAX_CONCURRENT    = 100  # cards checked in parallel
-CARD_STAGGER      = 0.02 # stagger between card launches (seconds)
-SITE_BATCH        = 5    # sites raced in parallel within each retry round
-CONSEC_TIMEOUT_MAX = 45  # abort card after 45 consecutive timeouts
-                         # (15 rounds × 3 × 20s = 300s max before giving up)
+SITE_RETRIES      = 20   # max site attempts per card
+SITE_TIMEOUT      = 10   # seconds per API call
+MAX_CONCURRENT    = 200  # cards checked in parallel
+CARD_STAGGER      = 0.005 # stagger between card launches (seconds)
+SITE_BATCH        = 10   # sites raced in parallel within each retry round
+CONSEC_TIMEOUT_MAX = 15  # abort card after 15 consecutive timeouts
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -184,7 +183,7 @@ def get_random_live_emoji() -> str:
 # Each session gets its own event loop so it can’t block the bot’s main loop.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _USER_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(
-    max_workers=40,
+    max_workers=60,
     thread_name_prefix="sh_msh_sess",
 )
 _MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
@@ -2569,6 +2568,9 @@ async def _msh_session_worker(bot, sid, cards, user, plan, all_sites, proxies):
     sess = MSH_SESSIONS.get(sid)
     if not sess:
         return
+
+    # Start session cleanup task on the main loop (mst.py pattern)
+    _fire(_start_cleanup_if_needed())
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)  # matches MAX_CONCURRENT
 
