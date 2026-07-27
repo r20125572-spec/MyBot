@@ -44,8 +44,7 @@ from config import (
     DEV_EMOJI_ID, DECLINED_EMOJI_ID,
 )
 from mass import get_mass_handlers
-from b3 import get_b3_handler
-from chk import get_chk_handler
+
 from sh import (
     get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
     run_mass_batch, create_msh_session, MSH_SESSIONS,
@@ -656,24 +655,9 @@ def kb_payment() -> RawMarkup:
 
 def kb_gate_main() -> RawMarkup:
     return RawMarkup([
-        [_btn("🔐 " + B("AUTH"),    cb="mauth",   style="primary"),
-         _btn("💳 " + B("CHARGE"),  cb="mcharge", style="primary"),
-         _btn("👑 " + B("PREMIUM"), cb="mmass",   style="primary")],
+        [_btn("⚡ " + B("SHOPIFY MASS"), cb="imsh",  style="primary"),
+         _btn("🔥 " + B("SHOPIFY SINGLE"), cb="ish", style="primary")],
         [_btn("🔙 " + B("BACK"),    cb="bmain")],
-    ])
-
-def kb_auth_gates() -> RawMarkup:
-    return RawMarkup([
-        [_btn("🔐 " + B("BRAINTREE AUTH"), cb="ib3", style="primary")],
-        [_btn("🔙 " + B("BACK"),           cb="mgates")],
-    ])
-
-def kb_charge_gates() -> RawMarkup:
-    return RawMarkup([
-        [_btn(B("Stripe"),  cb="ichk", style="primary"),
-         _btn(B("PayPal"),  cb="ipp",  style="primary")],
-        [_btn(B("Shopify"), cb="ish",  style="primary")],
-        [_btn(B("Back"),    cb="mgates", style="danger")],
     ])
 
 def kb_premium_gates() -> RawMarkup:
@@ -730,48 +714,49 @@ def kb_fb_owner(key: str) -> RawMarkup:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CMD PAGES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CMD_TOTAL_PAGES = 6
+CMD_TOTAL_PAGES = 5
 CMD_PAGES = {
     1: (
         "⭅ <b>𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>Available Modules</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>[+] 💳 Charge Module</b>  (3)\n"
-        f"<b>[+] 🔐 Auth Module</b>    (1)\n"
+        f"<b>[+] 🔥 Single Checker</b>  (2)\n"
+        f"<b>[+] ⚡ Mass Checker</b>   (3)\n"
         f"<b>[+] 👑 Mass Module</b>    (4)  <i>Premium</i>\n"
-        f"<b>[+] 🛠 Tools</b>          (5)\n"
+        f"<b>[+] 🛠 Tools</b>          (4)\n"
         f"<b>[+] 👤 Account</b>        (3)\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Use ▶ Next to explore each module</i>"
     ),
     2: (
-        "⭅ <b>💳 𝗖𝗛𝗔𝗥𝗚𝗘 𝗠𝗢𝗗𝗨𝗟𝗘</b> ⭆\n"
+        "⭅ <b>🔥 𝗦𝗜𝗡𝗚𝗟𝗘 𝗖𝗛𝗘𝗖𝗞𝗘𝗥</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/chk</b>  ➳ Stripe Charge\n"
-        "       Cost ➳ 1 Credit\n"
-        "       Usage: <code>/chk cc|mm|yy|cvv</code>\n\n"
-        "<b>/pp</b>   ➳ PayPal Charge\n"
-        "       Cost ➳ 1 Credit\n"
-        "       Usage: <code>/pp cc|mm|yy|cvv</code>\n\n"
-        "<b>/sh</b>   ➳ Shopify Charge\n"
-        "       Cost ➳ 1 Credit\n"
-        "       Usage: <code>/sh cc|mm|yy|cvv</code>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Example: /chk 4111111111111111|12|2026|123</i>"
+        "<b>────────────</b>\n"
+        "<b>Gate</b>    ➳ Shopify 0-20$\n"
+        "<b>Command</b> ➳ <code>/sh</code>\n"
+        "<b>Limit</b>   ➳ Unlimited\n"
+        "<b>Type</b>    ➳ Single Checker\n"
+        "<b>Cost</b>    ➳ ∞ (Premium)\n"
+        "<b>Credits</b> ➳ ∞\n"
+        "<b>Status</b>  ➳ ✅ Available\n"
+        "<b>────────────</b>\n"
+        "Usage: <code>/sh cc|mm|yy|cvv</code>"
     ),
     3: (
-        "⭅ <b>🔐 𝗔𝗨𝗧𝗛 𝗠𝗢𝗗𝗨𝗟𝗘</b> ⭆\n"
+        "⭅ <b>⚡ 𝗠𝗔𝗦𝗦 𝗖𝗛𝗘𝗖𝗞𝗘𝗥</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>/b3</b>   ➳ Braintree Auth\n"
-        "       Cost ➳ 1 Credit\n"
-        "       Usage: <code>/b3 cc|mm|yy|cvv</code>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>What is Auth?</b>\n"
-        "Auth gates verify a card is live\n"
-        "without making a real charge.\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Example: /b3 4111111111111111|12|2026|123</i>"
+        "<b>────────────</b>\n"
+        "<b>Gate</b>    ➳ Shopify 0-20$\n"
+        "<b>Command</b> ➳ <code>/msh</code>\n"
+        "<b>Limit</b>   ➳ Unlimited\n"
+        "<b>Type</b>    ➳ Mass Checker\n"
+        "<b>Stop</b>    ➳ Button\n"
+        "<b>Cost</b>    ➳ ∞ (Premium)\n"
+        "<b>Credits</b> ➳ ∞\n"
+        "<b>Status</b>  ➳ ✅ Available\n"
+        "<b>────────────</b>\n"
+        "Reply to a .txt file → <code>/msh</code>"
     ),
     4: (
         "⭅ <b>👑 𝗠𝗔𝗦𝗦 𝗠𝗢𝗗𝗨𝗟𝗘</b> ⭆\n"
@@ -1031,8 +1016,6 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             reply_markup=kb_result_raw(premium),
                             disable_web_page_preview=True)
 
-async def cmd_pp(u, c): await process_gate(u, c, "pp",  "PayPal Charge | 0$")
-async def cmd_sh(u, c): await process_gate(u, c, "sh",  "Shopify Charge | 0$")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GATE ON/OFF  (owner only)
@@ -1046,10 +1029,6 @@ async def _gate_toggle(update, context, gate: str, state: bool):
         parse_mode="HTML"
     )
 
-async def cmd_onchk(u, c):   await _gate_toggle(u, c, "chk",  True)
-async def cmd_offchk(u, c):  await _gate_toggle(u, c, "chk",  False)
-async def cmd_onpp(u, c):    await _gate_toggle(u, c, "pp",   True)
-async def cmd_offpp(u, c):   await _gate_toggle(u, c, "pp",   False)
 async def cmd_onsh(u, c):    await _gate_toggle(u, c, "sh",   True)
 async def cmd_offsh(u, c):   await _gate_toggle(u, c, "sh",   False)
 
@@ -1107,8 +1086,6 @@ async def cmd_updatesites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 async def cmd_onmsh(u, c):   await _gate_toggle(u, c, "msh",  True)
 async def cmd_offmsh(u, c):  await _gate_toggle(u, c, "msh",  False)
-async def cmd_onb3(u, c):    await _gate_toggle(u, c, "b3",   True)
-async def cmd_offb3(u, c):   await _gate_toggle(u, c, "b3",   False)
 async def cmd_onau(u, c):    await _gate_toggle(u, c, "au",   True)
 async def cmd_offau(u, c):   await _gate_toggle(u, c, "au",   False)
 async def cmd_onmss(u, c):   await _gate_toggle(u, c, "mss",  True)
@@ -1720,18 +1697,14 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/unban &lt;user&gt; ➳ Unban user\n"
         "/broadcast &lt;msg&gt; ➳ Broadcast\n"
         "/maintenance on|off ➳ Maintenance mode\n"
-        "/onchk /offchk ➳ Toggle Stripe gate\n"
-        "/onpp /offpp ➳ Toggle PayPal gate\n"
         "/onsh /offsh ➳ Toggle Shopify gate\n"
         "/onmsh /offmsh ➳ Toggle Shopify Mass gate\n"
-        "/onb3 /offb3 ➳ Toggle Braintree gate\n"
         "/onau /offau ➳ Toggle Stripe Auth\n"
         "/onmss /offmss ➳ Toggle Stripe Mass\n"
         "/onmpp2 /offmpp2 ➳ Toggle PayPal Mass\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
-        "/chk ➳ Stripe Charge\n/b3 ➳ Braintree Charge\n"
-        "/pp ➳ PayPal Charge\n/sh ➳ Shopify Charge\n"
+        "/sh ➳ Shopify Single Checker\n"
         "/msh ➳ Shopify Mass 0-20$ (trial: 1cr=1card, limit 5000)\n"
         "/au ➳ Stripe Auth Mass\n"
         "/mss ➳ Stripe Mass Check\n/mpp2 ➳ PayPal Mass Check\n"
@@ -2205,15 +2178,16 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not cards:
         await update.message.reply_text(
-            f"<b>{E_GATE} {B('Mass Shopify Checker')}</b>\n──────────\n"
-            f"<b>Gate</b>    ➳ Shopify 0-20$\n"
-            f"<b>Command</b> ➳ <code>/msh</code>\n"
-            f"<b>Limit</b>   ➳ 500/day (Trial) | 5000 (Premium)\n"
-            f"<b>Buttons</b> ➳ Live · All · Stop\n"
-            f"──────────\n"
-            f"<b>How to use:</b>\n"
-            f"• Reply to a .txt file (one <code>cc|mm|yy|cvv</code> per line)\n"
-            f"• Or reply to a message containing cards",
+            "<b>────────────</b>\n"
+            "<b>Gate</b>    ➳ Shopify 0-20$\n"
+            "<b>Command</b> ➳ <code>/msh</code>\n"
+            "<b>Limit</b>   ➳ Unlimited\n"
+            "<b>Type</b>    ➳ Mass Checker\n"
+            "<b>Stop</b>    ➳ Button\n"
+            "<b>Cost</b>    ➳ ∞ (Premium)\n"
+            "<b>Credits</b> ➳ ∞\n"
+            "<b>Status</b>  ➳ ✅ Available\n"
+            "<b>────────────</b>",
             parse_mode="HTML"
         )
         return
@@ -2706,20 +2680,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb_gate_main()
         )
         return
-    if data == "mauth":
-        await query.message.edit_text(
-            f"<b>🔐 {B('Auth Gates')}</b>\n──────────\n"
-            "Auth gates verify without charging.\n──────────",
-            parse_mode="HTML", reply_markup=kb_auth_gates()
-        )
-        return
-    if data == "mcharge":
-        await query.message.edit_text(
-            f"<b>💳 {B('Charge Gates')}</b>\n──────────\n"
-            "Charge gates perform a real $0 charge.\n──────────",
-            parse_mode="HTML", reply_markup=kb_charge_gates()
-        )
-        return
     if data == "mmass":
         # All users can see the mass gate menu; premium is enforced per-command
         await query.message.edit_text(
@@ -2778,9 +2738,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     gate_info_map = {
-        "ib3":   ("Braintree Auth | 0$", "b3",  1),
-        "ichk":  ("Stripe Charge | 0$",  "chk", 1),
-        "ipp":   ("PayPal Charge | 0$",  "pp",  1),
         "ish":   ("Shopify Charge | 0$", "sh",  1),
         "iau":   ("Stripe Auth | 0$",    "au",  0),
         "imss":  ("Stripe Mass",         "mss", 0),
@@ -3071,10 +3028,7 @@ def main():
         app.add_handler(CommandHandler("rm",      cmd_rm))
         app.add_handler(get_bin_lookup_handler())
         app.add_handler(CommandHandler("fb",      cmd_fb))
-        app.add_handler(CommandHandler("pp",      cmd_pp))
         app.add_handler(get_sh_handler())
-        app.add_handler(get_b3_handler())
-        app.add_handler(get_chk_handler())
         app.add_handler(CommandHandler("msh",     cmd_msh))
         for h in get_mass_handlers():
             app.add_handler(h)
@@ -3093,17 +3047,11 @@ def main():
         app.add_handler(CommandHandler("allcm",       cmd_allcm))
         app.add_handler(CommandHandler("allsub",      cmd_allsub))
         app.add_handler(CommandHandler("maintenance", cmd_maintenance))
-        app.add_handler(CommandHandler("onchk",   cmd_onchk))
-        app.add_handler(CommandHandler("offchk",  cmd_offchk))
-        app.add_handler(CommandHandler("onpp",    cmd_onpp))
-        app.add_handler(CommandHandler("offpp",   cmd_offpp))
         app.add_handler(CommandHandler("updatesites", cmd_updatesites))
         app.add_handler(CommandHandler("onsh",    cmd_onsh))
         app.add_handler(CommandHandler("offsh",   cmd_offsh))
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
-        app.add_handler(CommandHandler("onb3",    cmd_onb3))
-        app.add_handler(CommandHandler("offb3",   cmd_offb3))
         app.add_handler(CommandHandler("onau",    cmd_onau))
         app.add_handler(CommandHandler("offau",   cmd_offau))
         app.add_handler(CommandHandler("onmss",   cmd_onmss))
