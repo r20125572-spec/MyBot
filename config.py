@@ -304,7 +304,7 @@ async def _bin_handyapi(bin6: str) -> dict:
     return {
         "scheme":        (d.get("Scheme") or "N/A").upper(),
         "type":          (d.get("Type")   or "N/A").upper(),
-        "bank":          d.get("Issuer")  or "N/A",
+        "bank":          d.get("Bank") or d.get("Issuer") or "N/A",
         "country":       co.get("Name")   or "N/A",
         "country_emoji": _flag(co.get("A2", "")),
         "country_code":  co.get("A2", ""),
@@ -331,7 +331,7 @@ async def _bin_bincodes(bin6: str) -> dict:
 
 async def _bin_antipublic(bin6: str) -> dict:
     """API 4: bins.antipublic.one (free, no key)"""
-    code, d = await _fetch_url(f"https://bins.antipublic.one/bins/{bin6}", timeout=9)
+    code, d = await _fetch_url(f"https://bins.antipublic.cc/bins/{bin6}", timeout=9)
     if code != 200 or not d:
         return {}
     alpha2 = (d.get("country_alpha2") or d.get("country_code") or "").upper()
@@ -375,8 +375,8 @@ async def get_bin_info(bin_num: str) -> dict:
     _empty = {"scheme": "N/A", "type": "N/A", "bank": "N/A",
               "country": "N/A", "country_emoji": "", "country_code": "", "error": False}
 
-    for _fn in (_bin_binlist, _bin_handyapi, _bin_bincodes,
-                _bin_antipublic, _bin_bincheck):
+    for _fn in (_bin_antipublic, _bin_binlist, _bin_handyapi, _bin_bincodes,
+                _bin_bincheck):
         try:
             result = await asyncio.wait_for(_fn(bin6), timeout=12)
             if _bin_has_data(result):
