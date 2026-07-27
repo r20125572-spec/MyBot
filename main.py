@@ -43,8 +43,6 @@ from config import (
     CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
     DEV_EMOJI_ID, DECLINED_EMOJI_ID,
 )
-from mass import get_mass_handlers
-
 from sh import (
     get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
     run_mass_batch, create_msh_session, MSH_SESSIONS,
@@ -660,14 +658,6 @@ def kb_gate_main() -> RawMarkup:
         [_btn("🔙 " + B("BACK"),    cb="bmain")],
     ])
 
-def kb_premium_gates() -> RawMarkup:
-    return RawMarkup([
-        [_btn(B("Shopify 0-20$"),          cb="imsh",  style="primary"),
-         _btn(B("Stripe Auth") + " 👑",    cb="iau",   style="primary")],
-        [_btn(B("Stripe Mass") + " 👑",    cb="imss",  style="primary"),
-         _btn(B("PayPal Mass") + " 👑",    cb="impp2", style="primary")],
-        [_btn(B("Back"),                    cb="mgates", style="danger")],
-    ])
 
 def kb_upgrade() -> RawMarkup:
     return RawMarkup([
@@ -1086,12 +1076,6 @@ async def cmd_updatesites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 async def cmd_onmsh(u, c):   await _gate_toggle(u, c, "msh",  True)
 async def cmd_offmsh(u, c):  await _gate_toggle(u, c, "msh",  False)
-async def cmd_onau(u, c):    await _gate_toggle(u, c, "au",   True)
-async def cmd_offau(u, c):   await _gate_toggle(u, c, "au",   False)
-async def cmd_onmss(u, c):   await _gate_toggle(u, c, "mss",  True)
-async def cmd_offmss(u, c):  await _gate_toggle(u, c, "mss",  False)
-async def cmd_onmpp2(u, c):  await _gate_toggle(u, c, "mpp2", True)
-async def cmd_offmpp2(u, c): await _gate_toggle(u, c, "mpp2", False)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PREMIUM ACTIVATION
@@ -2680,15 +2664,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb_gate_main()
         )
         return
-    if data == "mmass":
-        # All users can see the mass gate menu; premium is enforced per-command
-        await query.message.edit_text(
-            f"<b>👑 {B('Mass Gates')}</b>\n──────────\n"
-            "Select a mass gate below.\n"
-            "👑 gates require premium.\n──────────",
-            parse_mode="HTML", reply_markup=kb_premium_gates()
-        )
-        return
     if data == "mprice":
         core_e  = tg_emoji(PLAN_EMOJIS["CORE"],  "⭐")
         elite_e = tg_emoji(PLAN_EMOJIS["ELITE"], "⭐")
@@ -2733,20 +2708,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Status</b>  ➳ {status_line}\n"
             f"<b>────────────</b>",
             parse_mode="HTML",
-            reply_markup=kb_back("mmass")
+            reply_markup=kb_back("mgates")
         )
         return
 
-    gate_info_map = {
-        "ish":   ("Shopify Charge | 0$", "sh",  1),
-        "iau":   ("Stripe Auth | 0$",    "au",  0),
-        "imss":  ("Stripe Mass",         "mss", 0),
-        "impp2": ("PayPal Mass",         "mpp2",0),
-    }
-    if data in gate_info_map:
-        gn, cmd, cost = gate_info_map[data]
+    if data == "ish":
+        ud_i   = get_user_data(user.id, context)
+        prem_i = is_user_premium(ud_i)
+        _cr    = ud_i.get("credits", 0)
+        credits_line = "∞" if prem_i else str(_cr)
+        status_line  = "✅ Available" if (prem_i or _cr > 0) else "🔒 No Credits"
         await query.message.edit_text(
-            gate_info_text(gn, cmd, cost),
+            f"<b>────────────</b>\n"
+            f"<b>Gate</b>    ➳ Shopify 0-20$\n"
+            f"<b>Command</b> ➳ <code>/sh</code>\n"
+            f"<b>Limit</b>   ➳ {'Unlimited' if prem_i else '1 card / check'}\n"
+            f"<b>Type</b>    ➳ Single Checker\n"
+            f"<b>Stop</b>    ➳ Automatic\n"
+            f"<b>Cost</b>    ➳ {'∞ (Premium)' if prem_i else '1 Credit'}\n"
+            f"<b>Credits</b> ➳ {credits_line}\n"
+            f"<b>Status</b>  ➳ {status_line}\n"
+            f"<b>────────────</b>",
             parse_mode="HTML",
             reply_markup=kb_back("mgates")
         )
@@ -3030,8 +3012,6 @@ def main():
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(get_sh_handler())
         app.add_handler(CommandHandler("msh",     cmd_msh))
-        for h in get_mass_handlers():
-            app.add_handler(h)
 
         app.add_handler(CommandHandler("1day",        cmd_1day))
         app.add_handler(CommandHandler("gen",         cmd_gen))
@@ -3052,12 +3032,6 @@ def main():
         app.add_handler(CommandHandler("offsh",   cmd_offsh))
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
-        app.add_handler(CommandHandler("onau",    cmd_onau))
-        app.add_handler(CommandHandler("offau",   cmd_offau))
-        app.add_handler(CommandHandler("onmss",   cmd_onmss))
-        app.add_handler(CommandHandler("offmss",  cmd_offmss))
-        app.add_handler(CommandHandler("onmpp2",  cmd_onmpp2))
-        app.add_handler(CommandHandler("offmpp2", cmd_offmpp2))
 
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
