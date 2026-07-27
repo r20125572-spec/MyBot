@@ -78,11 +78,11 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 5    # max site attempts per card  (tuned for speed)
+SITE_RETRIES      = 8    # max site attempts per card  (tuned for speed)
 SITE_TIMEOUT      = 90   # seconds — server-side timeout is 120s; give it 90s
-MAX_CONCURRENT    = 300  # cards checked in parallel
-CARD_STAGGER      = 0.002 # stagger between card launches (seconds)
-SITE_BATCH        = 15   # sites raced in parallel within each retry round
+MAX_CONCURRENT    = 500  # cards checked in parallel
+CARD_STAGGER      = 0.0  # no stagger — semaphore handles concurrency
+SITE_BATCH        = 25   # sites raced in parallel within each retry round
 CONSEC_TIMEOUT_MAX = 5   # abort after 5 consecutive timeouts (dead proxies)
 BUTTON_LOCK    = 30
 
@@ -183,7 +183,7 @@ def get_random_live_emoji() -> str:
 # Each session gets its own event loop so it can’t block the bot’s main loop.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _USER_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(
-    max_workers=60,
+    max_workers=100,
     thread_name_prefix="sh_msh_sess",
 )
 _MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
@@ -2152,8 +2152,9 @@ async def _fetch_bin_direct(bin6: str) -> dict:
     ]
 
     # Fire all 8 simultaneously — return as soon as the FIRST usable result arrives
-    tasks = {asyncio.ensure_future(_try(url, hdrs, parse))
-             for url, hdrs, parse in sources}
+    loop = asyncio.get_event_loop()
+    tasks = [loop.create_task(_try(url, hdrs, parse))
+             for url, hdrs, parse in sources]
     good: dict = {}
     pending = set(tasks)
     try:
@@ -2725,7 +2726,7 @@ async def _bin_prefetch(bin6: str) -> None:
     if bin6 in _BIN_CACHE and not _bin_empty(_BIN_CACHE.get(bin6, {})):
         return
     try:
-        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=5)
+        result = await asyncio.wait_for(_fetch_bin_direct(bin6), timeout=15)
         _BIN_CACHE[bin6] = result if result else {}
     except Exception:
         _BIN_CACHE.setdefault(bin6, {})
