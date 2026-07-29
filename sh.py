@@ -108,7 +108,7 @@ PROBE_CONCURRENCY:  int   = 60
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Core card/user/time emojis
-CARD_EMOJI_ID     = "5800709991627232190"
+CARD_EMOJI_ID     = "544535382930438741"
 USER_EMOJI_ID     = "6267115986541877538"
 TIME_EMOJI_ID     = "6285240160120477644"
 DEV_EMOJI_ID      = "6267091732861555879"
