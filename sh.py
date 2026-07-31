@@ -122,13 +122,18 @@ DECLINED_EMOJI_ID = "4956612582816351459"
 HIT_GATE_EMOJI_ID = "5341715473882955310"
 HIT_RESP_EMOJI_ID = "5839116473951328489"
 
-# Progress-message emojis
+# Progress-message emojis  (/msh mass checker — unchanged)
 PROG_GATE_EMOJI_ID     = "5370935802844946281"
 PROG_PROGRESS_EMOJI_ID = "5116268964023894989"
 PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
 PROG_LIVE_EMOJI_ID     = "6296367896398399651"   # custom live emoji
 PROG_DEAD_EMOJI_ID     = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+
+# /sh single-checker spinner — custom premium emoji IDs (user-defined)
+SH_GATE_EMOJI_ID = "6220029508456548253"   # ❤️  gate line
+SH_PROG_EMOJI_ID = "6298691319086712919"   # 😄  progress line
+SH_LIVE_EMOJI_ID = "6296367896398399651"   # 🎸  live count
 
 # Button emojis
 BTN_CHARGED_EMOJI_ID = "5465465194056525619"   # 💎 charged button
@@ -2050,7 +2055,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Spinner (initial "Checking..." message) ───────────────────────────────
     spin = await update.message.reply_text(
-        "<b>🛒 Gate ➛ Shopify</b>\n<b>🔄 Checking...</b>",
+        f'<b><tg-emoji emoji-id="{SH_GATE_EMOJI_ID}">❤️</tg-emoji>gate ➳Shopify</b>\n'
+        f'<b><tg-emoji emoji-id="{SH_PROG_EMOJI_ID}">😄</tg-emoji>Progress ➳ 0/1</b>\n'
+        f'<b>Live ➳ 0 <tg-emoji emoji-id="{SH_LIVE_EMOJI_ID}">🎸</tg-emoji>✅</b>',
         parse_mode="HTML"
     )
 
