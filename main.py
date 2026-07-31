@@ -13,7 +13,7 @@ from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update, TelegramObject, MessageEntity
+from telegram import Update, TelegramObject, MessageEntity, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -3091,14 +3091,24 @@ async def _post_init(app: Application) -> None:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FAKE LOGS  (owner-only — invisible to all other users)
-# /fakeon  → pick sender persona → starts stream to hit channel
+# /fakeon  → pick sender persona → starts stream to target channel
 # /fakeoff → stops stream
+# /getid   → owner runs this inside any chat to get its numeric ID
+#
+# Target channel: https://t.me/+BXmeotREVhllODFk
+# Set FAKE_LOG_CHANNEL_ID env-var on Railway to the numeric ID,
+# OR run /getid inside that channel to find out the ID.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from sh import HIT_LOG_GROUP_ID as _FL_GROUP_ID, MY_CHANNEL_LINK as _FL_CH_LINK
+from sh import MY_CHANNEL_LINK as _FL_CH_LINK
 
-_FL_JOB      = "fake_hit_stream"
-_FL_ACTIVE   = "fakelogs_active"
-_FL_PERSONA  = "fakelogs_persona_idx"
+# ── Target channel — set via Railway env var ──────────────────────────────────
+# Add FAKE_LOG_CHANNEL_ID to Railway → Variables with the numeric chat ID.
+# Run /getid inside the channel to discover its ID.
+_FL_CHANNEL_ID = int(os.environ.get("FAKE_LOG_CHANNEL_ID", "0"))
+
+_FL_JOB     = "fake_hit_stream"
+_FL_ACTIVE  = "fakelogs_active"
+_FL_PERSONA = "fakelogs_persona_idx"
 
 _FL_PERSONAS = [
     {"username": "Batxchk_bot", "link": "https://t.me/Batxchk_bot"},
@@ -3151,7 +3161,13 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     bd = context.bot_data
     if not bd.get(_FL_ACTIVE):
         return
-    persona = _FL_PERSONAS[bd.get(_FL_PERSONA, 0)]
+    persona    = _FL_PERSONAS[bd.get(_FL_PERSONA, 0)]
+    target_cid = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    if not target_cid:
+        logger.warning("[FAKELOGS] No channel ID set — stopping. "
+                       "Set FAKE_LOG_CHANNEL_ID env var on Railway.")
+        bd[_FL_ACTIVE] = False
+        return
     if random.random() < 0.65:
         text       = _fl_charged_msg(persona)
         next_delay = random.uniform(8, 12)
@@ -3160,12 +3176,12 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         next_delay = random.uniform(18, 30)
     try:
         await context.bot.send_message(
-            _FL_GROUP_ID, text,
+            target_cid, text,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
     except Exception as exc:
-        logger.warning(f"[FAKELOGS] send failed: {exc}")
+        logger.warning(f"[FAKELOGS] send failed (chat={target_cid}): {exc}")
     if bd.get(_FL_ACTIVE):
         context.job_queue.run_once(_fl_job, next_delay, name=_FL_JOB)
 
@@ -3176,9 +3192,19 @@ def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — /fakeon shows persona selector."""
     if update.effective_user.id != OWNER_ID:
         return
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    target = context.bot_data.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    if not target:
+        await update.message.reply_text(
+            "<b>⚠️ FAKE_LOG_CHANNEL_ID not set!</b>\n"
+            "1. Add your bot as admin to the target channel\n"
+            "2. Run <code>/getid</code> inside that channel\n"
+            "3. Set <code>FAKE_LOG_CHANNEL_ID=&lt;id&gt;</code> on Railway",
+            parse_mode="HTML"
+        )
+        return
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"@{p['username']}", callback_data=f"fakelogs_{i}")]
         for i, p in enumerate(_FL_PERSONAS)
@@ -3190,28 +3216,55 @@ async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def _fakeon_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback: owner picked a persona — arm the stream."""
     q = update.callback_query
     if q.from_user.id != OWNER_ID:
-        await q.answer("⛔ Owner only.", show_alert=True); return
+        await q.answer("⛔ Owner only.", show_alert=True)
+        return
     await q.answer()
     idx     = int(q.data.split("_")[-1])
     persona = _FL_PERSONAS[idx]
     _fl_stop(context)
     context.bot_data[_FL_ACTIVE]  = True
     context.bot_data[_FL_PERSONA] = idx
-    context.job_queue.run_once(_fl_job, 3, name=_FL_JOB)
+    # Store channel ID at start time so the job always uses the correct one
+    context.bot_data["fakelogs_channel_id"] = (
+        context.bot_data.get("fakelogs_channel_id") or _FL_CHANNEL_ID
+    )
+    context.job_queue.run_once(_fl_job, 2, name=_FL_JOB)
     await q.edit_message_text(
-        f"<b>✅ Fake logs ON — sender: @{persona['username']}</b>",
-        parse_mode="HTML", disable_web_page_preview=True,
+        f"<b>✅ Fake logs ON</b>\n"
+        f"<b>Sender ➛ @{persona['username']}</b>\n"
+        f"<b>Channel ID ➛ <code>{context.bot_data['fakelogs_channel_id']}</code></b>",
+        parse_mode="HTML",
     )
 
 
 async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — /fakeoff stops the stream."""
     if update.effective_user.id != OWNER_ID:
         return
     context.bot_data[_FL_ACTIVE] = False
     _fl_stop(context)
     await update.message.reply_text("<b>⛔ Fake logs OFF.</b>", parse_mode="HTML")
+
+
+async def _getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — reply with the numeric chat ID of the current chat.
+    Run this inside the target channel to discover its ID, then set
+    FAKE_LOG_CHANNEL_ID=<id> on Railway and restart."""
+    if update.effective_user.id != OWNER_ID:
+        return
+    chat = update.effective_chat
+    cid  = chat.id
+    # Store it automatically so /fakeon works right away without redeploy
+    context.bot_data["fakelogs_channel_id"] = cid
+    await update.message.reply_text(
+        f"<b>📋 Chat ID: <code>{cid}</code></b>\n"
+        f"<b>Title: {chat.title or 'DM'}</b>\n\n"
+        f"Set <code>FAKE_LOG_CHANNEL_ID={cid}</code> on Railway to make this permanent.",
+        parse_mode="HTML",
+    )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -3280,9 +3333,10 @@ def main():
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
 
-        # fake_logs: pattern-matched BEFORE the generic callback handler
+        # fake_logs — registered BEFORE the generic CallbackQueryHandler
         app.add_handler(CommandHandler("fakeon",  _fakeon_cmd))
         app.add_handler(CommandHandler("fakeoff", _fakeoff_cmd))
+        app.add_handler(CommandHandler("getid",   _getid_cmd))
         app.add_handler(CallbackQueryHandler(_fakeon_select_cb, pattern=r"^fakelogs_\d+$"))
 
         app.add_handler(CallbackQueryHandler(callback_handler))
