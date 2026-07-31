@@ -57,43 +57,72 @@ CREATE TABLE IF NOT EXISTS premium_users (
 );
 """
 
-# ── SSL helper ────────────────────────────────────────────────────────────────
-def _ssl_for_url(url: str):
-    """Internal Railway URLs don't need SSL. External ones do."""
-    if "railway.internal" in url:
-        return False
-    import ssl
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode    = ssl.CERT_NONE
-    return ctx
+def _strip_sslmode(url: str) -> str:
+    """Remove ?sslmode=... from the URL — asyncpg takes SSL via its own ssl= arg."""
+    import re
+    url = re.sub(r'[?&]sslmode=[^&]*', '', url)
+    url = re.sub(r'\?$', '', url)   # remove trailing ? if now empty
+    return url
 
 
 # ── Connection ────────────────────────────────────────────────────────────────
 async def _connect() -> bool:
+    """
+    Try every SSL combination until one works.
+    Railway PostgreSQL 18 behaviour varies by plan and URL type:
+      • railway.internal URL  →  no SSL needed
+      • proxy URL (rlwy.net)  →  may or may not need SSL
+    We try all modes so the bot auto-negotiates regardless.
+    """
     global _pool
     if not DATABASE_URL:
-        logger.warning("[DB] ⚠️  No DATABASE_URL found in environment — "
-                       "premium users will NOT persist across redeploys! "
-                       "Add PostgreSQL to your Railway project and link DATABASE_URL.")
+        logger.warning("[DB] ⚠️  No DATABASE_URL found — "
+                       "premium users will NOT persist across redeploys!")
         return False
-    try:
-        import asyncpg
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            ssl=_ssl_for_url(DATABASE_URL),
-            min_size=1,
-            max_size=5,
-            command_timeout=30,
-        )
-        async with _pool.acquire() as conn:
-            await conn.execute(_CREATE_TABLE)
-        logger.info("[DB] ✅ PostgreSQL connected — premium_users table ready.")
-        return True
-    except Exception as exc:
-        logger.error(f"[DB] ❌ Connection failed: {exc}")
-        _pool = None
-        return False
+
+    import asyncpg, ssl as _ssl
+
+    _unverified = _ssl.create_default_context()
+    _unverified.check_hostname = False
+    _unverified.verify_mode    = _ssl.CERT_NONE
+
+    clean_url = _strip_sslmode(DATABASE_URL)
+
+    # Internal Railway URLs never need SSL; try only ssl=False
+    if "railway.internal" in clean_url:
+        ssl_candidates = [False]
+    else:
+        ssl_candidates = [False, _unverified, True]
+
+    last_exc = None
+    for ssl_opt in ssl_candidates:
+        pool = None
+        try:
+            pool = await asyncpg.create_pool(
+                clean_url,
+                ssl=ssl_opt,
+                min_size=1,
+                max_size=5,
+                command_timeout=30,
+            )
+            async with pool.acquire() as conn:
+                await conn.execute(_CREATE_TABLE)
+            _pool = pool
+            label = "none" if ssl_opt is False else ("unverified" if ssl_opt is _unverified else "verified")
+            logger.info(f"[DB] ✅ PostgreSQL connected (ssl={label}) — "
+                        "premium_users table ready.")
+            return True
+        except Exception as exc:
+            label = "none" if ssl_opt is False else ("unverified" if ssl_opt is _unverified else "verified")
+            logger.warning(f"[DB] ssl={label} attempt failed: {exc}")
+            last_exc = exc
+            if pool:
+                try: await pool.close()
+                except Exception: pass
+
+    logger.error(f"[DB] ❌ All SSL attempts failed. Last: {last_exc}")
+    _pool = None
+    return False
 
 
 # ── Read ──────────────────────────────────────────────────────────────────────
