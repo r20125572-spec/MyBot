@@ -3028,13 +3028,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _post_shutdown(app: Application) -> None:
-    """Cancel the background site-prober and close the DB pool before exit."""
+    """Final save → Postgres, stop prober, close DB pool."""
+    # ── CRITICAL: save all premium users to Postgres before exit ──────────
+    # Passing app.bot_data ensures no data is lost on Railway redeploy.
+    await db.close_db(app.bot_data)
     try:
         await stop_probe_background()
         logger.info("[PROBE] Background prober stopped on shutdown.")
     except Exception as exc:
         logger.warning(f"[PROBE] shutdown cleanup error: {exc}")
-    await db.close_db()
 
 
 async def _post_init(app: Application) -> None:
