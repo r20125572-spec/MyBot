@@ -53,6 +53,7 @@ from sh import (
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
     _send_sticker, get_random_live_emoji,
 )
+import fake_logs
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -3154,6 +3155,10 @@ def main():
         app.add_handler(CommandHandler("offsh",   cmd_offsh))
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
+
+        # fake_logs: pattern-matched BEFORE the generic callback handler
+        for _h in fake_logs.get_handlers():
+            app.add_handler(_h)
 
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
