@@ -1,0 +1,203 @@
+"""
+fake_logs.py — Owner-only fake hit log sender.
+
+Commands (invisible to all non-owners):
+  /fakeon  → show persona selector; owner picks one → fake logs stream to HIT_LOG_GROUP_ID
+  /fakeoff → stop the stream
+
+Rates:
+  CHARGED : 5-7 per minute (one every 8-12 s)
+  LIVE    : slower, one every 18-30 s
+  Mix     : ~65 % CHARGED, ~35 % LIVE — never two CHARGED in a row without a gap variation
+"""
+
+import random
+import logging
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
+
+from config import OWNER_ID
+from sh import HIT_LOG_GROUP_ID, MY_CHANNEL_LINK
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+_JOB_NAME   = "fake_hit_stream"
+_ACTIVE_KEY = "fakelogs_active"
+_PERSONA_KEY = "fakelogs_persona_idx"
+
+_CHANNEL_LINK = MY_CHANNEL_LINK   # e.g. https://t.me/Batcardchk
+
+# Three selectable sender personas
+_PERSONAS = [
+    {"username": "Batxchk_bot",  "link": "https://t.me/Batxchk_bot"},
+    {"username": "lucifer2600",  "link": "https://t.me/lucifer2600"},
+    {"username": "krptonis",     "link": "https://t.me/krptonis"},
+]
+
+# Response pools — varied so no two consecutive logs look the same
+_CHARGED_RESPONSES = [
+    "ORDER_PAID",
+    "PAYMENT_AUTHORIZED",
+    "APPROVED",
+    "PAYMENT_ACCEPTED",
+    "TRANSACTION_APPROVED",
+    "CHARGED",
+    "PURCHASE_COMPLETE",
+    "AUTHORIZATION_APPROVED",
+]
+
+_LIVE_RESPONSES = [
+    "INSUFFICIENT_FUNDS",
+    "DO_NOT_HONOR",
+    "RESTRICTED_CARD",
+    "CALL_ISSUER",
+    "CARD_VELOCITY_EXCEEDED",
+    "PICKUP_CARD",
+    "SECURITY_VIOLATION",
+    "TRANSACTION_NOT_PERMITTED",
+    "REFER_TO_CARD_ISSUER",
+    "LIMITED_FUNDS",
+]
+
+# ── Message builders ─────────────────────────────────────────────────────────
+
+def _ch_link() -> str:
+    return f'<a href="{_CHANNEL_LINK}">[❆]</a>'
+
+
+def _build_charged(persona: dict) -> str:
+    resp  = random.choice(_CHARGED_RESPONSES)
+    ulink = f'<a href="{persona["link"]}">@{persona["username"]}</a>'
+    return (
+        "<b>⭐</b>\n"
+        f"<b>{_ch_link()} HIT CHARGED 💎</b>\n"
+        "<b>──────────</b>\n"
+        f"<b>💎 Resp ➛ {resp}</b>\n"
+        f"<b>👤 ➛ {ulink} ⭐</b>"
+    )
+
+
+def _build_live(persona: dict) -> str:
+    resp  = random.choice(_LIVE_RESPONSES)
+    ulink = f'<a href="{persona["link"]}">@{persona["username"]}</a>'
+    return (
+        "<b>⭐</b>\n"
+        f"<b>{_ch_link()} HIT LIVE ✅</b>\n"
+        "<b>──────────</b>\n"
+        f"<b>✅ Resp ➛ {resp}</b>\n"
+        f"<b>👤 ➛ {ulink} ⭐</b>"
+    )
+
+
+# ── Job scheduler ────────────────────────────────────────────────────────────
+
+async def _fake_hit_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send one fake hit log then schedule the next, until /fakeoff."""
+    bd = context.bot_data
+    if not bd.get(_ACTIVE_KEY):
+        return   # stopped by /fakeoff
+
+    persona = _PERSONAS[bd.get(_PERSONA_KEY, 0)]
+
+    # Decide verdict: 65 % CHARGED, 35 % LIVE
+    if random.random() < 0.65:
+        text       = _build_charged(persona)
+        next_delay = random.uniform(8, 12)    # 5-7 charged/min
+    else:
+        text       = _build_live(persona)
+        next_delay = random.uniform(18, 30)   # slower for LIVE
+
+    try:
+        await context.bot.send_message(
+            HIT_LOG_GROUP_ID,
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[FAKELOGS] send failed: {exc}")
+
+    # Chain: schedule next only while still active
+    if bd.get(_ACTIVE_KEY):
+        context.job_queue.run_once(_fake_hit_job, next_delay, name=_JOB_NAME)
+
+
+def _stop_jobs(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for job in context.job_queue.get_jobs_by_name(_JOB_NAME):
+        job.schedule_removal()
+
+
+# ── Handlers ─────────────────────────────────────────────────────────────────
+
+async def cmd_fakeon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — show persona selector."""
+    if update.effective_user.id != OWNER_ID:
+        return   # silently ignore all non-owners
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"@{p['username']}", callback_data=f"fakelogs_{i}")]
+        for i, p in enumerate(_PERSONAS)
+    ])
+    await update.message.reply_text(
+        "<b>🎭 Select fake sender ID:</b>",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+async def cb_fakelogs_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner picks a persona — starts the stream."""
+    q = update.callback_query
+    if q.from_user.id != OWNER_ID:
+        await q.answer("⛔ Owner only.", show_alert=True)
+        return
+
+    await q.answer()
+    idx = int(q.data.split("_")[-1])
+    persona = _PERSONAS[idx]
+
+    # Cancel any running stream first
+    _stop_jobs(context)
+
+    # Arm the stream
+    context.bot_data[_ACTIVE_KEY]  = True
+    context.bot_data[_PERSONA_KEY] = idx
+
+    # First hit after a short delay
+    context.job_queue.run_once(_fake_hit_job, 3, name=_JOB_NAME)
+
+    await q.edit_message_text(
+        f"<b>✅ Fake logs ON</b>\n"
+        f"<b>Sender ➛ @{persona['username']}</b>\n"
+        f"<b>Channel ➛ {_ch_link()}</b>",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_fakeoff(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — stop the fake log stream."""
+    if update.effective_user.id != OWNER_ID:
+        return   # silently ignore
+
+    context.bot_data[_ACTIVE_KEY] = False
+    _stop_jobs(context)
+
+    await update.message.reply_text(
+        "<b>⛔ Fake logs OFF.</b>",
+        parse_mode="HTML",
+    )
+
+
+# ── Registration helper ───────────────────────────────────────────────────────
+
+def get_handlers() -> list:
+    """Return all PTB handlers.  Register these BEFORE the generic CallbackQueryHandler."""
+    return [
+        CommandHandler("fakeon",  cmd_fakeon),
+        CommandHandler("fakeoff", cmd_fakeoff),
+        CallbackQueryHandler(cb_fakelogs_select, pattern=r"^fakelogs_\d+$"),
+    ]
