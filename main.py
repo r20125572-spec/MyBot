@@ -46,6 +46,7 @@ from config import (
     DEV_EMOJI_ID, DECLINED_EMOJI_ID,
 )
 from sh import (
+    cmd_sh,
     get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
@@ -535,13 +536,24 @@ def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 _force_sub_cache: dict = {}
+# Cache TTL constants (seconds)
+_FS_PASS_TTL  = 300   # confirmed joined: recheck after 5 min
+_FS_FAIL_TTL  = 30    # not joined yet: recheck after 30 s (fast re-verify)
 
 async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
+    """
+    Returns a list of (uname, link, label) tuples for channels the user
+    has NOT yet joined.  Empty list = all joined → allow through.
+    """
     if user_id == OWNER_ID:
         return []
+
     cached = _force_sub_cache.get(user_id)
-    if cached and cached[0] and time.time() - cached[1] < 300:
-        return []
+    if cached:
+        passed, ts, cached_list = cached
+        ttl = _FS_PASS_TTL if passed else _FS_FAIL_TTL
+        if time.time() - ts < ttl:
+            return cached_list   # [] if passed, list of missing if not
 
     not_joined = []
     for uname, link, label in FORCE_JOIN_FULL:
@@ -550,18 +562,31 @@ async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> l
             if member.status in ("left", "kicked", "restricted"):
                 not_joined.append((uname, link, label))
         except Forbidden:
-            pass
+            # Bot is not an admin of this channel — cannot verify membership.
+            # Treat as NOT joined so users are forced to join (strict mode).
+            logger.warning(
+                f"[FORCE-SUB] Bot has no admin rights in @{uname}. "
+                "Add the bot as administrator to enable membership checks."
+            )
+            not_joined.append((uname, link, label))
         except BadRequest as e:
             err = str(e).lower()
-            if any(x in err for x in ("not found", "user_not_participant", "participant", "not a member")):
+            # Telegram sends these when the user is not in the chat
+            if any(x in err for x in (
+                "user not found", "user_not_participant",
+                "participant_id_invalid", "chat not found",
+                "not a member", "not found",
+            )):
                 not_joined.append((uname, link, label))
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"[FORCE-SUB] check error for @{uname}: {exc}")
+            # Unknown error — don't block the user, skip this channel
             pass
 
     if not not_joined:
-        _force_sub_cache[user_id] = (True, time.time())
+        _force_sub_cache[user_id] = (True, time.time(), [])
     else:
-        _force_sub_cache.pop(user_id, None)
+        _force_sub_cache[user_id] = (False, time.time(), not_joined)
     return not_joined
 
 def _force_join_text(not_joined: list) -> str:
@@ -2638,6 +2663,19 @@ async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     except Exception: pass
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /sh GATE WRAPPER  — force-join + ban guard for Shopify
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _cmd_sh_gated(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Wrapper around sh.py's cmd_sh that enforces the force-join check.
+    cmd_sh itself has no force-sub logic, so we gate it here to keep
+    sh.py clean and avoid a circular import.
+    """
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    await cmd_sh(update, context)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CALLBACK QUERY HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2675,17 +2713,35 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_sub":
         not_joined = await check_force_sub(user.id, context)
         if not_joined:
+            # Still missing channels — update the message with fresh status
+            try:
+                await query.message.edit_text(
+                    _force_join_text(not_joined),
+                    parse_mode="HTML",
+                    reply_markup=kb_force_sub(not_joined),
+                )
+            except Exception:
+                pass
             await query.answer(
-                f"You still need to join {len(not_joined)} channel(s)!", show_alert=True
+                f"⚠️ Still need to join {len(not_joined)} channel(s)! Join then press Verify.",
+                show_alert=True,
             )
             return
-        _force_sub_cache[user.id] = (True, time.time())
-        await query.answer()   # dismiss loading indicator before deleting the message
-        await query.message.delete()
+        # All joined — cache the pass, delete the gate message, show start screen
+        _force_sub_cache[user.id] = (True, time.time(), [])
+        await query.answer("✅ Verified! Welcome.", show_alert=False)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        ud = get_user_data(user.id, context)
+        _update_user_meta(ud, user)
         await context.bot.send_message(
             chat_id=user.id,
-            text=f"<b>{E_LIVE} Verified! Use /start.</b>",
-            parse_mode="HTML"
+            text=ui_start_screen(user, context),
+            parse_mode="HTML",
+            reply_markup=kb_main(user.id),
+            disable_web_page_preview=True,
         )
         return
 
@@ -3076,7 +3132,7 @@ def main():
         app.add_handler(CommandHandler("rm",      cmd_rm))
         app.add_handler(get_bin_lookup_handler())
         app.add_handler(CommandHandler("fb",      cmd_fb))
-        app.add_handler(get_sh_handler())
+        app.add_handler(CommandHandler("sh",      _cmd_sh_gated))   # force-join gated
         app.add_handler(CommandHandler("msh",     cmd_msh))
 
         app.add_handler(CommandHandler("1day",        cmd_1day))
