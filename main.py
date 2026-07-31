@@ -70,7 +70,8 @@ MAX_MSG = 4000
 PREMIUM_FILE = os.environ.get("PREMIUM_FILE", "premium_users.json")
 
 def _save_premium_file(bot_data: dict) -> None:
-    """Persist all active (non-expired) premium users to PREMIUM_FILE (JSON backup)."""
+    """Persist all active (non-expired) premium users to PREMIUM_FILE (JSON backup).
+    For the full save (JSON + Postgres), use await _save_premium(bot_data) instead."""
     now       = time.time()
     all_users = bot_data.get("user_data", {})
     premium   = {}
@@ -91,6 +92,13 @@ def _save_premium_file(bot_data: dict) -> None:
         logger.info(f"[PREMIUM] JSON backup: {len(premium)} user(s) → {PREMIUM_FILE}")
     except Exception as exc:
         logger.warning(f"[PREMIUM] JSON save failed: {exc}")
+
+
+async def _save_premium(bot_data: dict) -> None:
+    """Save to JSON backup AND instantly write to Postgres.
+    Call this (with await) after every plan grant or removal."""
+    _save_premium_file(bot_data)                                    # JSON backup
+    await db.save_all_now(bot_data.get("user_data", {}))           # Postgres instant save
 
 
 def _load_premium_file(bot_data: dict) -> None:
@@ -1181,8 +1189,8 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     ud["last_receipt"] = receipt
     if username: ud["username"] = username
 
-    # Persist premium immediately so a restart won't lose this user's access
-    _save_premium_file(context.bot_data)
+    # Persist premium immediately — JSON backup + instant Postgres write
+    await _save_premium(context.bot_data)
 
     plan_emoji   = tg_emoji(get_plan_emoji_id(plan), "⭐")
     exp_date     = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
@@ -1231,8 +1239,8 @@ async def _grant(uid: int, plan: str, days: int,
     except Exception:
         pass
 
-    # Persist so this grant survives a bot restart
-    _save_premium_file(context.bot_data)
+    # Persist so this grant survives a bot restart — JSON + Postgres
+    await _save_premium(context.bot_data)
 
     plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
     await update.message.reply_text(
@@ -1448,7 +1456,7 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ud = get_user_data(target, context)
     ud["plan"] = "TRIAL"; ud["expires"] = 0
-    _save_premium_file(context.bot_data)
+    await _save_premium(context.bot_data)
     await update.message.reply_text(
         f"<b>{E_DECLINED} Premium removed for <code>{target}</code>.</b>", parse_mode="HTML"
     )
@@ -1632,7 +1640,7 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ud["plan"]    = "TRIAL"
     ud["expires"] = 0
-    _save_premium_file(context.bot_data)
+    await _save_premium(context.bot_data)
 
     uname_d      = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
     old_plan_str = get_styled_plan(old_plan)
@@ -2955,8 +2963,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
             target_name = ud_t.get("name", f"User {uid}")
             exp_str = datetime.fromtimestamp(ud_t["expires"]).strftime("%Y-%m-%d %H:%M")
-            # Persist grant immediately (JSON backup)
-            _save_premium_file(context.bot_data)
+            # Persist grant immediately — JSON + Postgres
+            await _save_premium(context.bot_data)
             try:
                 await send_activation_msg(uid, plan_key, days, context)
             except Exception:
@@ -2990,7 +2998,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = int(data.split("_")[-1])
             ud  = get_user_data(uid, context)
             ud["plan"] = "TRIAL"; ud["expires"] = 0
-            _save_premium_file(context.bot_data)
+            await _save_premium(context.bot_data)
             await query.answer(f"Premium removed for {uid}", show_alert=True)
             return
         if data.startswith("find_sub_"):
@@ -3251,6 +3259,37 @@ async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("<b>⛔ Fake logs OFF.</b>", parse_mode="HTML")
 
 
+async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — show live PostgreSQL connection status."""
+    if update.effective_user.id != OWNER_ID:
+        return
+    now       = time.time()
+    status    = db.status_text()
+    connected = db.is_connected()
+    user_data = context.bot_data.get("user_data", {})
+    premium   = [(uid, ud) for uid, ud in user_data.items()
+                 if ud.get("plan", "TRIAL").upper() != "TRIAL"
+                 and ud.get("expires", 0) > now]
+    lines = [
+        f"<b>🗄 Database Status</b>",
+        f"<b>──────────</b>",
+        f"<b>DB ➛</b> {status}",
+        f"<b>Premium users in memory ➛</b> <code>{len(premium)}</code>",
+    ]
+    if connected and premium:
+        saved = await db.save_all_now(user_data)
+        lines.append(f"<b>Just saved to Postgres ➛</b> <code>{saved}</code> user(s) ✅")
+    if not connected:
+        lines += [
+            "",
+            "<b>Fix:</b>",
+            "1. Railway → your project → <b>+ New → Database → PostgreSQL</b>",
+            "2. Click your bot service → Variables → Add Reference → DATABASE_URL",
+            "3. Redeploy the bot",
+        ]
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def _getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner only — reply with the numeric chat ID of the current chat.
     Run this inside the target channel to discover its ID, then set
@@ -3335,6 +3374,8 @@ def main():
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
 
+        # owner-only secret commands
+        app.add_handler(CommandHandler("dbstatus", _dbstatus_cmd))
         # fake_logs — registered BEFORE the generic CallbackQueryHandler
         app.add_handler(CommandHandler("fakeon",  _fakeon_cmd))
         app.add_handler(CommandHandler("fakeoff", _fakeoff_cmd))
