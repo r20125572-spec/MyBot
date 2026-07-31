@@ -3061,6 +3061,46 @@ async def _post_init(app: Application) -> None:
     # ── Connect to Postgres & sync — all logic lives in database.py ────────
     await db.attach(app)
 
+    # ── Startup DM to owner — confirms DB status so data loss is obvious ───
+    try:
+        now          = time.time()
+        user_data    = app.bot_data.get("user_data", {})
+        premium_cnt  = sum(
+            1 for ud in user_data.values()
+            if ud.get("plan", "TRIAL").upper() != "TRIAL"
+            and ud.get("expires", 0) > now
+        )
+        db_status    = db.status_text()
+        db_ok        = db.is_connected()
+        lines = [
+            f"<b>🤖 Bot Restarted</b>",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"<b>Database ➛</b> {db_status}",
+            f"<b>Premium users restored ➛</b> <code>{premium_cnt}</code>",
+        ]
+        if not db_ok:
+            lines += [
+                "",
+                "<b>⚠️ Premium users will be LOST on next restart!</b>",
+                "",
+                "<b>Fix on Railway:</b>",
+                "1. Your project → <b>+ New → Database → PostgreSQL</b>",
+                "2. Click your bot service → Variables",
+                "3. Add Reference → <code>DATABASE_URL</code>",
+                "4. Redeploy the bot",
+                "",
+                f"Then send <code>/dbstatus</code> to confirm.",
+            ]
+        else:
+            lines.append(f"\n<i>Send /dbstatus to force a save &amp; re-check.</i>")
+        await app.bot.send_message(
+            chat_id=OWNER_ID,
+            text="\n".join(lines),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning(f"[STARTUP] Could not DM owner: {exc}")
+
     # ── Auto-detect real bot username ──────────────────────────────────────
     try:
         import config as _cfg
