@@ -53,8 +53,6 @@ from sh import (
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
     _send_sticker, get_random_live_emoji,
 )
-import fake_logs
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3091,6 +3089,132 @@ async def _post_init(app: Application) -> None:
         logger.warning(f"[PROBE] Could not start background prober: {exc}")
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FAKE LOGS  (owner-only — invisible to all other users)
+# /fakeon  → pick sender persona → starts stream to hit channel
+# /fakeoff → stops stream
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+from sh import HIT_LOG_GROUP_ID as _FL_GROUP_ID, MY_CHANNEL_LINK as _FL_CH_LINK
+
+_FL_JOB      = "fake_hit_stream"
+_FL_ACTIVE   = "fakelogs_active"
+_FL_PERSONA  = "fakelogs_persona_idx"
+
+_FL_PERSONAS = [
+    {"username": "Batxchk_bot", "link": "https://t.me/Batxchk_bot"},
+    {"username": "lucifer2600", "link": "https://t.me/lucifer2600"},
+    {"username": "krptonis",    "link": "https://t.me/krptonis"},
+]
+
+_FL_CHARGED_RESP = [
+    "ORDER_PAID", "PAYMENT_AUTHORIZED", "APPROVED",
+    "PAYMENT_ACCEPTED", "TRANSACTION_APPROVED",
+    "CHARGED", "PURCHASE_COMPLETE", "AUTHORIZATION_APPROVED",
+]
+_FL_LIVE_RESP = [
+    "INSUFFICIENT_FUNDS", "DO_NOT_HONOR", "RESTRICTED_CARD",
+    "CALL_ISSUER", "CARD_VELOCITY_EXCEEDED", "PICKUP_CARD",
+    "SECURITY_VIOLATION", "TRANSACTION_NOT_PERMITTED",
+    "REFER_TO_CARD_ISSUER", "LIMITED_FUNDS",
+]
+
+
+def _fl_ch() -> str:
+    return f'<a href="{_FL_CH_LINK}">[❆]</a>'
+
+
+def _fl_charged_msg(persona: dict) -> str:
+    resp  = random.choice(_FL_CHARGED_RESP)
+    ulink = f'<a href="{persona["link"]}">@{persona["username"]}</a>'
+    return (
+        "<b>⭐</b>\n"
+        f"<b>{_fl_ch()} HIT CHARGED 💎</b>\n"
+        "<b>──────────</b>\n"
+        f"<b>💎 Resp ➛ {resp}</b>\n"
+        f"<b>👤 ➛ {ulink} ⭐</b>"
+    )
+
+
+def _fl_live_msg(persona: dict) -> str:
+    resp  = random.choice(_FL_LIVE_RESP)
+    ulink = f'<a href="{persona["link"]}">@{persona["username"]}</a>'
+    return (
+        "<b>⭐</b>\n"
+        f"<b>{_fl_ch()} HIT LIVE ✅</b>\n"
+        "<b>──────────</b>\n"
+        f"<b>✅ Resp ➛ {resp}</b>\n"
+        f"<b>👤 ➛ {ulink} ⭐</b>"
+    )
+
+
+async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    bd = context.bot_data
+    if not bd.get(_FL_ACTIVE):
+        return
+    persona = _FL_PERSONAS[bd.get(_FL_PERSONA, 0)]
+    if random.random() < 0.65:
+        text       = _fl_charged_msg(persona)
+        next_delay = random.uniform(8, 12)
+    else:
+        text       = _fl_live_msg(persona)
+        next_delay = random.uniform(18, 30)
+    try:
+        await context.bot.send_message(
+            _FL_GROUP_ID, text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[FAKELOGS] send failed: {exc}")
+    if bd.get(_FL_ACTIVE):
+        context.job_queue.run_once(_fl_job, next_delay, name=_FL_JOB)
+
+
+def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for job in context.job_queue.get_jobs_by_name(_FL_JOB):
+        job.schedule_removal()
+
+
+async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != OWNER_ID:
+        return
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"@{p['username']}", callback_data=f"fakelogs_{i}")]
+        for i, p in enumerate(_FL_PERSONAS)
+    ])
+    await update.message.reply_text(
+        "<b>🎭 Select fake sender ID:</b>",
+        parse_mode="HTML", reply_markup=kb,
+    )
+
+
+async def _fakeon_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if q.from_user.id != OWNER_ID:
+        await q.answer("⛔ Owner only.", show_alert=True); return
+    await q.answer()
+    idx     = int(q.data.split("_")[-1])
+    persona = _FL_PERSONAS[idx]
+    _fl_stop(context)
+    context.bot_data[_FL_ACTIVE]  = True
+    context.bot_data[_FL_PERSONA] = idx
+    context.job_queue.run_once(_fl_job, 3, name=_FL_JOB)
+    await q.edit_message_text(
+        f"<b>✅ Fake logs ON — sender: @{persona['username']}</b>",
+        parse_mode="HTML", disable_web_page_preview=True,
+    )
+
+
+async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data[_FL_ACTIVE] = False
+    _fl_stop(context)
+    await update.message.reply_text("<b>⛔ Fake logs OFF.</b>", parse_mode="HTML")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 def main():
     if not acquire_instance_lock():
         logger.critical("Another instance is already running. Exiting.")
@@ -3157,8 +3281,9 @@ def main():
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
 
         # fake_logs: pattern-matched BEFORE the generic callback handler
-        for _h in fake_logs.get_handlers():
-            app.add_handler(_h)
+        app.add_handler(CommandHandler("fakeon",  _fakeon_cmd))
+        app.add_handler(CommandHandler("fakeoff", _fakeoff_cmd))
+        app.add_handler(CallbackQueryHandler(_fakeon_select_cb, pattern=r"^fakelogs_\d+$"))
 
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
