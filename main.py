@@ -60,6 +60,68 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PREMIUM PERSISTENCE
+# Saves/restores premium users across bot restarts.
+# File path can be absolute to a mounted volume on Railway.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PREMIUM_FILE = os.environ.get("PREMIUM_FILE", "premium_users.json")
+
+def _save_premium_file(bot_data: dict) -> None:
+    """Persist all active (non-expired) premium users to PREMIUM_FILE."""
+    now       = time.time()
+    all_users = bot_data.get("user_data", {})
+    premium   = {}
+    for uid_str, ud in all_users.items():
+        plan    = ud.get("plan", "TRIAL").upper()
+        expires = ud.get("expires", 0)
+        if plan != "TRIAL" and expires > now:
+            premium[uid_str] = {
+                "plan":         plan,
+                "expires":      expires,
+                "name":         ud.get("name", ""),
+                "username":     ud.get("username", ""),
+                "last_receipt": ud.get("last_receipt", ""),
+            }
+    try:
+        with open(PREMIUM_FILE, "w", encoding="utf-8") as f:
+            json.dump(premium, f, indent=2)
+        logger.info(f"[PREMIUM] Saved {len(premium)} premium user(s) → {PREMIUM_FILE}")
+    except Exception as exc:
+        logger.warning(f"[PREMIUM] Save failed: {exc}")
+
+def _load_premium_file(bot_data: dict) -> None:
+    """Restore premium users from PREMIUM_FILE into bot_data on startup."""
+    if not os.path.exists(PREMIUM_FILE):
+        logger.info(f"[PREMIUM] {PREMIUM_FILE} not found — starting fresh.")
+        return
+    try:
+        with open(PREMIUM_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except Exception as exc:
+        logger.warning(f"[PREMIUM] Load failed: {exc}")
+        return
+
+    now       = time.time()
+    user_data = bot_data.setdefault("user_data", {})
+    restored  = 0
+    for uid_str, pdata in saved.items():
+        expires = pdata.get("expires", 0)
+        if expires <= now:
+            continue                       # already expired — skip
+        plan = pdata.get("plan", "TRIAL").upper()
+        if plan == "TRIAL":
+            continue
+        ud = user_data.setdefault(uid_str, {})
+        ud["plan"]    = plan
+        ud["expires"] = expires
+        if pdata.get("name"):         ud.setdefault("name",         pdata["name"])
+        if pdata.get("username"):     ud.setdefault("username",     pdata["username"])
+        if pdata.get("last_receipt"): ud.setdefault("last_receipt", pdata["last_receipt"])
+        restored += 1
+
+    logger.info(f"[PREMIUM] Restored {restored} premium user(s) from {PREMIUM_FILE}")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FORCE-JOIN LIST
@@ -1092,6 +1154,9 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     ud["last_receipt"] = receipt
     if username: ud["username"] = username
 
+    # Persist premium immediately so a restart won't lose this user's access
+    _save_premium_file(context.bot_data)
+
     plan_emoji   = tg_emoji(get_plan_emoji_id(plan), "⭐")
     exp_date     = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
     display_name = f"@{username}" if username else name
@@ -1138,6 +1203,9 @@ async def _grant(uid: int, plan: str, days: int,
         display_uname = chat.username or ""
     except Exception:
         pass
+
+    # Persist so this grant survives a bot restart
+    _save_premium_file(context.bot_data)
 
     plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
     await update.message.reply_text(
@@ -1353,6 +1421,7 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ud = get_user_data(target, context)
     ud["plan"] = "TRIAL"; ud["expires"] = 0
+    _save_premium_file(context.bot_data)
     await update.message.reply_text(
         f"<b>{E_DECLINED} Premium removed for <code>{target}</code>.</b>", parse_mode="HTML"
     )
@@ -1536,6 +1605,7 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ud["plan"]    = "TRIAL"
     ud["expires"] = 0
+    _save_premium_file(context.bot_data)
 
     uname_d      = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
     old_plan_str = get_styled_plan(old_plan)
@@ -2827,6 +2897,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
             target_name = ud_t.get("name", f"User {uid}")
             exp_str = datetime.fromtimestamp(ud_t["expires"]).strftime("%Y-%m-%d %H:%M")
+            # Persist grant immediately
+            _save_premium_file(context.bot_data)
             try:
                 await send_activation_msg(uid, plan_key, days, context)
             except Exception:
@@ -2860,6 +2932,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = int(data.split("_")[-1])
             ud  = get_user_data(uid, context)
             ud["plan"] = "TRIAL"; ud["expires"] = 0
+            _save_premium_file(context.bot_data)
             await query.answer(f"Premium removed for {uid}", show_alert=True)
             return
         if data.startswith("find_sub_"):
@@ -2916,6 +2989,9 @@ async def _post_init(app: Application) -> None:
        Sleep 5 s so Telegram can expire the old getUpdates session.
     3. Start background site prober so /sh and /msh only use alive sites.
     """
+    # ── Restore premium users from disk ────────────────────────────────────
+    _load_premium_file(app.bot_data)
+
     # ── Auto-detect real bot username ──────────────────────────────────────
     try:
         import config as _cfg
