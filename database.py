@@ -20,6 +20,7 @@ How it works
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -125,32 +126,45 @@ async def _load_from_db(bot_data: dict) -> int:
 
 
 # ── Write (shared logic) ──────────────────────────────────────────────────────
+_UPSERT_SQL = """
+    INSERT INTO premium_users
+        (user_id, plan, expires, name, username, last_receipt, granted_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT (user_id) DO UPDATE SET
+        plan         = EXCLUDED.plan,
+        expires      = EXCLUDED.expires,
+        name         = EXCLUDED.name,
+        username     = EXCLUDED.username,
+        last_receipt = EXCLUDED.last_receipt,
+        granted_at   = EXCLUDED.granted_at
+"""
+
 async def _upsert_records(records: list) -> int:
-    """Execute upsert for a list of prepared tuples. Returns count saved."""
+    """Upsert a list of tuples into premium_users. Retries once on failure."""
     if not _pool or not records:
         return 0
-    try:
-        async with _pool.acquire() as conn:
-            await conn.executemany(
-                """
-                INSERT INTO premium_users
-                    (user_id, plan, expires, name, username,
-                     last_receipt, granted_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    plan         = EXCLUDED.plan,
-                    expires      = EXCLUDED.expires,
-                    name         = EXCLUDED.name,
-                    username     = EXCLUDED.username,
-                    last_receipt = EXCLUDED.last_receipt,
-                    granted_at   = EXCLUDED.granted_at
-                """,
-                records,
-            )
-        return len(records)
-    except Exception as exc:
-        logger.warning(f"[DB] upsert error: {exc}")
-        return 0
+    for attempt in (1, 2):
+        try:
+            async with _pool.acquire() as conn:
+                await conn.executemany(_UPSERT_SQL, records)
+            logger.debug(f"[DB] upsert OK: {len(records)} record(s).")
+            return len(records)
+        except Exception as exc:
+            logger.warning(f"[DB] upsert attempt {attempt}/2 failed: {exc}")
+            if attempt == 1:
+                await asyncio.sleep(1)   # brief pause before retry
+    # Both attempts failed — try to reconnect and do one final attempt
+    logger.error("[DB] ❌ Both upsert attempts failed — trying reconnect...")
+    reconnected = await _connect()
+    if reconnected:
+        try:
+            async with _pool.acquire() as conn:
+                await conn.executemany(_UPSERT_SQL, records)
+            logger.info(f"[DB] ✅ Upsert succeeded after reconnect: {len(records)} record(s).")
+            return len(records)
+        except Exception as exc:
+            logger.error(f"[DB] ❌ Upsert failed even after reconnect: {exc}")
+    return 0
 
 
 # ── Public write helpers ──────────────────────────────────────────────────────
