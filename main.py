@@ -23,6 +23,8 @@ from telegram.request import HTTPXRequest
 
 import aiohttp as _aiohttp
 
+import database as db   # PostgreSQL premium persistence (Railway)
+
 from mst import get_bin_handler as get_bin_lookup_handler
 
 from config import (
@@ -68,7 +70,7 @@ MAX_MSG = 4000
 PREMIUM_FILE = os.environ.get("PREMIUM_FILE", "premium_users.json")
 
 def _save_premium_file(bot_data: dict) -> None:
-    """Persist all active (non-expired) premium users to PREMIUM_FILE."""
+    """Persist all active (non-expired) premium users to PREMIUM_FILE (JSON backup)."""
     now       = time.time()
     all_users = bot_data.get("user_data", {})
     premium   = {}
@@ -86,9 +88,10 @@ def _save_premium_file(bot_data: dict) -> None:
     try:
         with open(PREMIUM_FILE, "w", encoding="utf-8") as f:
             json.dump(premium, f, indent=2)
-        logger.info(f"[PREMIUM] Saved {len(premium)} premium user(s) → {PREMIUM_FILE}")
+        logger.info(f"[PREMIUM] JSON backup: {len(premium)} user(s) → {PREMIUM_FILE}")
     except Exception as exc:
-        logger.warning(f"[PREMIUM] Save failed: {exc}")
+        logger.warning(f"[PREMIUM] JSON save failed: {exc}")
+
 
 def _load_premium_file(bot_data: dict) -> None:
     """Restore premium users from PREMIUM_FILE into bot_data on startup."""
@@ -2897,7 +2900,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
             target_name = ud_t.get("name", f"User {uid}")
             exp_str = datetime.fromtimestamp(ud_t["expires"]).strftime("%Y-%m-%d %H:%M")
-            # Persist grant immediately
+            # Persist grant immediately (JSON backup)
             _save_premium_file(context.bot_data)
             try:
                 await send_activation_msg(uid, plan_key, days, context)
@@ -2970,14 +2973,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _post_shutdown(app: Application) -> None:
-    """Cancel the background site-prober before the event loop closes.
-    Without this, asyncio.Semaphore waiters inside probe_all_sites try to
-    call loop.call_soon() on an already-closed loop → RuntimeError spam."""
+    """Cancel the background site-prober and close the DB pool before exit."""
     try:
         await stop_probe_background()
         logger.info("[PROBE] Background prober stopped on shutdown.")
     except Exception as exc:
         logger.warning(f"[PROBE] shutdown cleanup error: {exc}")
+    await db.close_db()
 
 
 async def _post_init(app: Application) -> None:
@@ -2989,8 +2991,10 @@ async def _post_init(app: Application) -> None:
        Sleep 5 s so Telegram can expire the old getUpdates session.
     3. Start background site prober so /sh and /msh only use alive sites.
     """
-    # ── Restore premium users from disk ────────────────────────────────────
+    # ── Load premium from JSON backup (always) ─────────────────────────────
     _load_premium_file(app.bot_data)
+    # ── Connect to Postgres & sync — all logic lives in database.py ────────
+    await db.attach(app)
 
     # ── Auto-detect real bot username ──────────────────────────────────────
     try:
