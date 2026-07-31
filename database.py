@@ -256,4 +256,3 @@ async def close_db() -> None:
 def is_connected() -> bool:
     """True when the pool is open (used for health checks if needed)."""
     return _pool is not None
-
