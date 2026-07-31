@@ -1896,19 +1896,22 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
     # • Each card gets its own slice of the site pool
     # • The user sees cards finishing one by one (not all at once)
     # • The API is not hammered with 20 simultaneous calls
-    tasks = []
+    #
+    # FIX: write every task into sess["tasks"] IMMEDIATELY after creation so
+    # cb_msh_stop can cancel in-flight tasks the instant the button is pressed,
+    # regardless of how far into the card list we are.
+    sess["tasks"] = []
     for i, (cf, cn) in enumerate(valid_cards):
         if sess.get("status") != "CHECKING":
             break
         t = asyncio.create_task(worker(cf, cn))
-        tasks.append(t)
+        sess["tasks"].append(t)          # live update — stop handler sees this
         # Wait for CARD_STAGGER seconds before launching the next card.
         # This also naturally throttles the API — each card checks
         # a different set of sites because the pool is shuffled fresh per card.
         await asyncio.sleep(CARD_STAGGER)
 
-    sess["tasks"] = tasks
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*sess["tasks"], return_exceptions=True)
 
     if MSH_SESSIONS.get(sid, {}).get("status") == "CHECKING":
         MSH_SESSIONS[sid]["status"] = "FINISHED"
@@ -2059,18 +2062,12 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Add proxies to <code>px.txt</code> (one ip:port per line).",
             parse_mode="HTML"); return
 
-    # Use probed working sites; fall back to full list if probe hasn't run yet
+    # Use probed working sites; fall back to full site list (non-blocking).
+    # The background prober keeps _WORKING_SITES updated every 30 min —
+    # we never block /sh on a probe to keep single-check responses fast.
     sites = get_working_sites()
 
-    # If probe has never run and all sites look dead, warn user briefly
-    if not _WORKING_SITES:
-        await spin.edit_text(
-            "<b>🛒 Gate ➛ Shopify</b>\n<b>🔄 Finding live sites... please wait</b>",
-            parse_mode="HTML"
-        )
-        # Block until probe finishes (only for single check, to get real result)
-        sites = await probe_all_sites(_load_sites(), proxies)
-
+    # ── Start checking immediately — no blocking probe wait ──────────────────
     t0 = time.time()
     try:
         (verdict, resp, price, currency), bin_data = await asyncio.gather(
