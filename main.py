@@ -1671,32 +1671,241 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BROADCAST  —  /broadcast + /bstatus
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Settings
+_BROADCAST_UPDATE_N    = 100   # refresh progress every N users
+_BROADCAST_MAX_CONC    = 200   # max simultaneous sends (Telegram rate-safe)
+
+# Lock — prevents two broadcasts running at the same time
+_broadcast_lock = asyncio.Lock()
+
+
+def _broadcast_status_text(total: int, done: int, sent: int,
+                            blocked: int, failed: int,
+                            finished: bool = False) -> str:
+    """Build the live-updating broadcast status card."""
+    header   = f"✅ <b>Broadcast Complete</b>" if finished else "📡 <b>Broadcasting…</b>"
+    filled   = int((done / total) * 20) if total else 20
+    bar      = "█" * filled + "░" * (20 - filled)
+    pct      = f"{int(done / total * 100)}%" if total else "100%"
+    return (
+        f"{header}\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>Total</b>   ➛ <b>{total}</b>\n"
+        f"📨 <b>Sent</b>    ➛ <b>{sent}</b>\n"
+        f"🚫 <b>Blocked</b> ➛ <b>{blocked}</b>\n"
+        f"❌ <b>Failed</b>  ➛ <b>{failed}</b>\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"<code>[{bar}]</code> {done}/{total}  ({pct})"
+    )
+
+
+async def _broadcast_worker(bot, status_msg, user_ids: list,
+                             src_chat_id: int = None, src_msg_id: int = None,
+                             text: str = None):
+    """
+    Core broadcast engine — runs as a background task.
+    • Sends ALL messages concurrently, capped by semaphore.
+    • Progress card refreshes every _BROADCAST_UPDATE_N users.
+    • Releases _broadcast_lock when done.
+    """
+    total   = len(user_ids)
+    sent    = blocked = failed = done = 0
+    sem     = asyncio.Semaphore(_BROADCAST_MAX_CONC)
+    counter_lock = asyncio.Lock()
+
+    async def _send_one(uid: int):
+        nonlocal sent, blocked, failed, done
+        async with sem:
+            try:
+                if src_chat_id and src_msg_id:
+                    # Native copy — no "Forwarded from" header
+                    await bot.copy_message(
+                        chat_id=uid,
+                        from_chat_id=src_chat_id,
+                        message_id=src_msg_id,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=uid, text=text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                async with counter_lock:
+                    sent += 1
+            except Forbidden:
+                async with counter_lock:
+                    blocked += 1
+                    logging.debug(f"[broad] blocked by {uid}")
+            except BadRequest as e:
+                async with counter_lock:
+                    failed += 1
+                    logging.debug(f"[broad] bad request {uid}: {e}")
+            except Exception as e:
+                async with counter_lock:
+                    failed += 1
+                    logging.debug(f"[broad] error {uid}: {e}")
+            finally:
+                async with counter_lock:
+                    done += 1
+
+    # Fire every send concurrently (semaphore keeps it safe)
+    tasks        = [asyncio.create_task(_send_one(uid)) for uid in user_ids]
+    last_report  = 0
+
+    # Live progress updater loop
+    try:
+        while True:
+            await asyncio.sleep(0.3)
+            async with counter_lock:
+                cur_done, cur_sent = done, sent
+                cur_blocked, cur_failed = blocked, failed
+            if cur_done >= total:
+                break
+            if cur_done - last_report >= _BROADCAST_UPDATE_N:
+                try:
+                    await status_msg.edit_text(
+                        _broadcast_status_text(
+                            total, cur_done, cur_sent, cur_blocked, cur_failed
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                last_report = cur_done
+    except Exception:
+        pass
+
+    # Wait for all sends to settle
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    async with counter_lock:
+        fs, fb, ff = sent, blocked, failed
+
+    # Final status card
+    try:
+        await status_msg.edit_text(
+            _broadcast_status_text(total, total, fs, fb, ff, finished=True),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    # Release lock so a new broadcast can start
+    if _broadcast_lock.locked():
+        _broadcast_lock.release()
+
+    logging.info(
+        f"[broad] Done — total={total} sent={fs} blocked={fb} failed={ff}"
+    )
+
+
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args:
+    """
+    /broadcast — owner only.
+
+    Two modes:
+      1. Reply to any message with /broadcast  → copies it natively (no 'Forwarded from')
+      2. /broadcast <text>                     → sends a plain-text HTML message
+    Runs in the BACKGROUND — other commands still work while it runs.
+    """
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    # ── Usage check ──────────────────────────────────────────────────────────
+    has_reply = bool(update.message.reply_to_message)
+    has_args  = bool(context.args)
+
+    if not has_reply and not has_args:
         await update.message.reply_text(
-            f"<b>Usage:</b> /broadcast &lt;message&gt;", parse_mode="HTML"
+            "↩️ <b>Usage:</b>\n"
+            "• Reply to any message with <b>/broadcast</b> — copies it to all users\n"
+            "• <b>/broadcast</b> &lt;text&gt; — sends a text message to all users\n\n"
+            "<i>No 'Forwarded from' header. Runs in background.</i>",
+            parse_mode="HTML",
         )
         return
-    msg_text  = " ".join(context.args)
-    all_users = context.bot_data.get("user_data", {})
-    sent = failed = 0
-    for uid_str in all_users:
-        try:
-            await context.bot.send_message(
-                chat_id=int(uid_str), text=msg_text, parse_mode="HTML",
-                disable_web_page_preview=True
+
+    # ── Duplicate-broadcast guard ────────────────────────────────────────────
+    if _broadcast_lock.locked():
+        await update.message.reply_text(
+            "⚠️ A broadcast is already in progress.\n"
+            "Use /bstatus to check, or wait for it to finish.",
+        )
+        return
+
+    await _broadcast_lock.acquire()
+
+    try:
+        # Collect all known user IDs from bot_data
+        all_users = list(context.bot_data.get("user_data", {}).keys())
+        user_ids  = []
+        for uid_str in all_users:
+            try:
+                user_ids.append(int(uid_str))
+            except ValueError:
+                pass
+
+        total = len(user_ids)
+        if total == 0:
+            await update.message.reply_text("⚠️ No users found in user_data.")
+            _broadcast_lock.release()
+            return
+
+        # Determine source
+        src_chat_id = src_msg_id = None
+        text        = None
+        if has_reply:
+            src_chat_id = update.message.reply_to_message.chat_id
+            src_msg_id  = update.message.reply_to_message.message_id
+        else:
+            text = " ".join(context.args)
+
+        # Initial status card
+        status_msg = await update.message.reply_text(
+            _broadcast_status_text(total, 0, 0, 0, 0),
+            parse_mode="HTML",
+        )
+
+        # Confirm + launch in background
+        await update.message.reply_text(
+            f"🚀 <b>Broadcast started!</b>\n"
+            f"Sending to <b>{total}</b> users in background…\n\n"
+            f"<i>Progress updates every {_BROADCAST_UPDATE_N} users.</i>",
+            parse_mode="HTML",
+        )
+
+        asyncio.create_task(
+            _broadcast_worker(
+                context.bot, status_msg, user_ids,
+                src_chat_id=src_chat_id, src_msg_id=src_msg_id,
+                text=text,
             )
-            sent += 1
-        except Exception:
-            failed += 1
-        await asyncio.sleep(0.05)
-    await update.message.reply_text(
-        f"<b>{E_LIVE} {B('Broadcast Done')}</b>\n──────────\n"
-        f"<b>Sent</b>   ➳ {sent}\n<b>Failed</b> ➳ {failed}\n"
-        "──────────",
-        parse_mode="HTML"
-    )
+        )
+
+    except Exception as e:
+        if _broadcast_lock.locked():
+            _broadcast_lock.release()
+        logging.error(f"[broad] Failed to start: {e}")
+        await update.message.reply_text(f"❌ Error starting broadcast: {e}")
+
+
+async def cmd_bstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check whether a broadcast is currently running."""
+    if update.effective_user.id != OWNER_ID:
+        return
+    if _broadcast_lock.locked():
+        await update.message.reply_text(
+            "📡 <b>Status:</b> Broadcast is currently running…",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            "✅ <b>Status:</b> No broadcast in progress.",
+            parse_mode="HTML",
+        )
 
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -3404,6 +3613,7 @@ def main():
         app.add_handler(CommandHandler("ban",         cmd_ban))
         app.add_handler(CommandHandler("unban",       cmd_unban))
         app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
+        app.add_handler(CommandHandler("bstatus",     cmd_bstatus))
         app.add_handler(CommandHandler("info",        cmd_info))
         app.add_handler(CommandHandler("allcm",       cmd_allcm))
         app.add_handler(CommandHandler("allsub",      cmd_allsub))
