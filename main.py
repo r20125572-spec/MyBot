@@ -96,8 +96,9 @@ def _save_premium_file(bot_data: dict) -> None:
 
 async def _save_premium(bot_data: dict) -> None:
     """Save to JSON backup AND instantly write to Postgres.
-    Call this (with await) after every plan grant or removal."""
-    _save_premium_file(bot_data)                                    # JSON backup
+    Call this (with await) after every plan grant or removal.
+    The JSON write runs in a thread pool so it never blocks the event loop."""
+    await asyncio.to_thread(_save_premium_file, bot_data)          # JSON backup (non-blocking)
     await db.save_all_now(bot_data.get("user_data", {}))           # Postgres instant save
 
 
@@ -3266,7 +3267,9 @@ async def _post_init(app: Application) -> None:
     3. Start background site prober so /sh and /msh only use alive sites.
     """
     # ── Load premium from JSON backup (always) ─────────────────────────────
-    _load_premium_file(app.bot_data)
+    # Run in thread pool — json.load() on a large file would otherwise block
+    # the event loop during startup.
+    await asyncio.to_thread(_load_premium_file, app.bot_data)
     # ── Connect to Postgres & sync — all logic lives in database.py ────────
     await db.attach(app)
 
@@ -3565,18 +3568,20 @@ def main():
 
     try:
         # Regular API calls (send_message, edit_message, etc.)
-        # Large pool so many users sending/receiving at the same time never queue
+        # Pool sized for 1000+ concurrent users — each outbound message needs
+        # a connection slot; 512 ensures no queuing under peak load.
         _request = HTTPXRequest(
-            connection_pool_size=64,
-            connect_timeout=10.0,
+            connection_pool_size=512,
+            connect_timeout=15.0,
             read_timeout=60.0,
             write_timeout=60.0,
             pool_timeout=120.0,
         )
-        # Long-poll getUpdates — separate pool, generous read timeout
+        # Long-poll getUpdates — dedicated pool with generous read timeout.
+        # Kept small because only ONE getUpdates call is in flight at a time.
         _get_updates_request = HTTPXRequest(
             connection_pool_size=8,
-            connect_timeout=10.0,
+            connect_timeout=15.0,
             read_timeout=65.0,   # PTB polls for 30 s + 35 s buffer
             write_timeout=60.0,
             pool_timeout=120.0,
@@ -3586,7 +3591,7 @@ def main():
             .token(BOT_TOKEN)
             .request(_request)
             .get_updates_request(_get_updates_request)
-            .concurrent_updates(512)   # handle 512 updates simultaneously
+            .concurrent_updates(1024)  # 1000+ users sending commands simultaneously
             .post_init(_post_init)
             .post_shutdown(_post_shutdown)
             .build()
