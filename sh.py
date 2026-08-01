@@ -747,11 +747,11 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
                     403: "site error! status: 403",
                     429: "site error! status: 429",
                     500: "site error! status: 500",
-                    502: "site error! status: 500",
-                    503: "site error! status: 500",
+                    502: "site error! status: 502",   # FIX: was 500 (wrong string)
+                    503: "site error! status: 503",   # FIX: was 500 (wrong string)
                     504: "timeout",
                 }
-                return (_emap.get(http_st, f"HTTP Error {http_st}"),
+                return (_emap.get(http_st, f"site error! status: {http_st}"),
                         "Shopify Payments", "0.00", "USD", http_st)
     except asyncio.TimeoutError:
         return ("timeout", "Shopify Payments", "0.00", "USD", None)
@@ -797,10 +797,11 @@ async def _check_card_with_retry(
     random.shuffle(pool)
     px_pool         = list(proxies) if proxies else list(_ALL_PROXIES)
     tried: set      = set()
-    price, currency = "0.00", "USD"
-    last_resp       = "No sites responded"
-    consec_timeouts = 0
-    attempt         = 0   # total slots consumed
+    price, currency  = "0.00", "USD"
+    last_resp        = "No sites responded"
+    consec_timeouts  = 0
+    consec_api_errs  = 0    # consecutive API-server 502/503/504 — detects dead API
+    attempt          = 0    # total slots consumed
 
     # ── helpers ───────────────────────────────────────────────────────
     async def _try_one(site: str, proxy: Optional[str]):
@@ -878,11 +879,27 @@ async def _check_card_with_retry(
                     last_resp = resp
                     continue
 
-                # HTTP-level error
+                # HTTP-level error from the API server itself (not the Shopify site).
+                # 502/503/504 mean the gate API (shopi.up.railway.app) is down —
+                # retrying with a different Shopify site won't help.
                 if http_st and http_st not in (200,):
                     local_dead.add(site)
                     last_resp = f"HTTP {http_st}"
+                    if http_st in (502, 503, 504):
+                        consec_api_errs += 1
+                    else:
+                        consec_api_errs = 0
+                    # After 5 consecutive gate-API failures, the API server itself
+                    # is down — abort immediately instead of wasting 80 attempts.
+                    if consec_api_errs >= 5:
+                        logging.error(
+                            f"[SH] {card[:6]}** gate API returned HTTP {http_st} "
+                            f"{consec_api_errs}× in a row — API server is down, aborting."
+                        )
+                        return "DEAD", f"Gate API unavailable (HTTP {http_st})", price, currency
                     continue
+
+                consec_api_errs = 0   # reset on any 200
 
                 # Rate-limited → put site back and let next round retry it
                 if http_st == 429 or (resp and "status: 429" in resp.lower()):
@@ -2072,7 +2089,21 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Use probed working sites; fall back to full site list (non-blocking).
     # The background prober keeps _WORKING_SITES updated every 30 min —
     # we never block /sh on a probe to keep single-check responses fast.
-    sites = get_working_sites()
+    try:
+        sites = get_working_sites()
+    except RuntimeError:
+        await spin.edit_text(
+            "❌ <b>No Shopify sites configured.</b>\n\n"
+            "Add sites to <code>sites.txt</code> (one domain per line, e.g. <code>store.myshopify.com</code>).\n"
+            "Then use /sitechk to verify them.",
+            parse_mode="HTML")
+        return
+    if not sites:
+        await spin.edit_text(
+            "❌ <b>sites.txt is empty.</b>\n\n"
+            "Add at least one Shopify domain to <code>sites.txt</code>.",
+            parse_mode="HTML")
+        return
 
     # ── Start checking immediately — no blocking probe wait ──────────────────
     t0 = time.time()
