@@ -2026,7 +2026,11 @@ async def _send_hit(bot, user, text: str, verdict: str,
     bin_data  = bin_data or {}
     eid       = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
     ulink     = _user_link(user)
-    resp_disp = escape(_clean_resp(resp)) if resp else "ORDER_PAID"
+    # LIVE and TDS always show INSUFFICIENT_FUNDS — never show Bank Error etc.
+    if verdict in ("LIVE", "TDS"):
+        resp_disp = "INSUFFICIENT_FUNDS"
+    else:
+        resp_disp = escape(_clean_resp(resp)) if resp else "ORDER_PAID"
 
     # Build compact log card — matches the target UI exactly:
     #   HIT ➛ CHARGED 💎
