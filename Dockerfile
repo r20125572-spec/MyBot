@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install build tools needed for asyncpg C extension
+# gcc + libpq needed to build asyncpg C extension from source (fallback if no wheel)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
