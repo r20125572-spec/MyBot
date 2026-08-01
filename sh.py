@@ -1826,44 +1826,48 @@ def build_result_msg(card, resp, verdict, bin_data, price, currency,
 
     raw_resp = resp or "Unknown"
     rl = raw_resp.lower()
+
+    # Cleaned response — used for CHARGED and DEAD cards
     if "site error! status:" in rl:
         m = re.search(r"status:\s*(\d+)", rl)
-        display_resp = f"Site Error {m.group(1)}" if m else "Site Error"
+        display_resp_clean = f"Site Error {m.group(1)}" if m else "Site Error"
     elif "not shopify" in rl or "site not supported" in rl:
-        display_resp = "Site Not Supported"
+        display_resp_clean = "Site Not Supported"
     elif "application not found" in rl or "store not found" in rl:
-        display_resp = "Store Not Found"
+        display_resp_clean = "Store Not Found"
     else:
-        display_resp = _clean_resp(raw_resp)
-    safe_resp = escape(display_resp)
+        display_resp_clean = _clean_resp(raw_resp)
 
-    ch_link   = f'<a href="{CHANNEL_LINK}">[❆]</a>'
-    live_eid  = get_random_live_emoji()
+    # Raw response — used for LIVE and TDS cards (show exactly what API returned)
+    display_resp_raw = raw_resp.upper() if raw_resp else "UNKNOWN"
 
-    # Gate line — always show price so users see what the site charged
-    gate_price = _fmt_price(price, currency)
-    gate_base  = f"Gate ➛ Shopify • {gate_price}"
+    ch_link  = f'<a href="{CHANNEL_LINK}">[❆]</a>'
+    live_eid = get_random_live_emoji()
 
     if verdict == "CHARGED":
-        status_line = (f'<b>{ch_link} HIT CHARGED '
-                       f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
-        gate_line   = gate_base
-        resp_te     = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
+        status_line  = (f'<b>{ch_link} HIT CHARGED '
+                        f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
+        gate_line    = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
+        resp_te      = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
+        safe_resp    = escape(display_resp_clean)
     elif verdict == "TDS":
-        status_line = (f'<b>{ch_link} HIT LIVE [3DS] '
-                       f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
-        gate_line   = gate_base          # ← price now shown for TDS too
-        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+        status_line  = (f'<b>{ch_link} HIT LIVE [3DS] '
+                        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
+        gate_line    = "Gate ➛ Shopify"
+        resp_te      = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+        safe_resp    = "INSUFFICIENT_FUNDS"               # always show this on TDS
     elif verdict == "LIVE":
-        status_line = (f'<b>{ch_link} HIT LIVE '
-                       f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
-        gate_line   = gate_base          # ← price now shown for LIVE too
-        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+        status_line  = (f'<b>{ch_link} HIT LIVE '
+                        f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
+        gate_line    = "Gate ➛ Shopify"
+        resp_te      = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+        safe_resp    = "INSUFFICIENT_FUNDS"               # always show this on LIVE
     else:  # DEAD
-        status_line = (f'<b>{ch_link} DEAD DECLINED '
-                       f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
-        gate_line   = gate_base          # ← price shown for DEAD too (transparency)
-        resp_te     = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
+        status_line  = (f'<b>{ch_link} DEAD DECLINED '
+                        f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
+        gate_line    = "Gate ➛ Shopify"                  # no price on DEAD
+        resp_te      = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
+        safe_resp    = escape(display_resp_clean)
 
     return (
         f'{status_line}\n'
