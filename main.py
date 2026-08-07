@@ -13,7 +13,7 @@ from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime
-from telegram import Update, TelegramObject, MessageEntity, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, TelegramObject, MessageEntity, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes,
@@ -736,11 +736,12 @@ def kb_back(cb: str) -> RawMarkup:
 
 def kb_price() -> RawMarkup:
     return RawMarkup([
-        [_btn("⭐ " + B("10$ — CORE"),  cb="pay10", style="primary"),
-         _btn("⭐ " + B("15$ — ELITE"), cb="pay15", style="primary"),
-         _btn("⭐ " + B("30$ — ROOT"),  cb="pay30", style="primary")],
-        [_btn("🆘 " + B("SUPPORT"),     url=SUPPORT_LINK, style="primary")],
-        [_btn("🔙 " + B("BACK"),        cb="bmain")],
+        [_btn("⭐ " + B("1.5$ — 1 Day"),  cb="pay1d", style="primary"),
+         _btn("⭐ " + B("8$ — 7 Days"),   cb="pay10", style="primary")],
+        [_btn("⭐ " + B("12$ — 15 Days"), cb="pay15", style="primary"),
+         _btn("⭐ " + B("25$ — 30 Days"), cb="pay30", style="primary")],
+        [_btn("🆘 " + B("SUPPORT"),       url=SUPPORT_LINK, style="primary")],
+        [_btn("🔙 " + B("BACK"),          cb="bmain")],
     ])
 
 def kb_payment() -> RawMarkup:
@@ -2634,19 +2635,24 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     txt = (
         f"<b>{core_e} {B('Core')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 1\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 1.5$\n"
+        "──────────\n"
+        f"<b>{core_e} {B('Core')} Plan</b>\n──────────\n"
         "<b>Days</b>     ➳ 7\n"
         "<b>Credits</b>  ➳ Unlimited\n"
-        "<b>Price</b>    ➳ 10$\n"
+        "<b>Price</b>    ➳ 8$\n"
         "──────────\n"
         f"<b>{elite_e} {B('Elite')} Plan</b>\n──────────\n"
         "<b>Days</b>     ➳ 15\n"
         "<b>Credits</b>  ➳ Unlimited\n"
-        "<b>Price</b>    ➳ 15$\n"
+        "<b>Price</b>    ➳ 12$\n"
         "──────────\n"
         f"<b>{root_e} {B('Root')} Plan</b>\n──────────\n"
         "<b>Days</b>     ➳ 30\n"
         "<b>Credits</b>  ➳ Unlimited\n"
-        "<b>Price</b>    ➳ 30$\n"
+        "<b>Price</b>    ➳ 25$\n"
         "──────────"
     )
     await update.message.reply_text(txt, reply_markup=kb_price(), parse_mode="HTML")
@@ -2753,78 +2759,171 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _fb_key(user_id: int) -> str:
     return f"{user_id}_{int(time.time())}_{random.randint(1000, 9999)}"
 
+async def _process_fb_group(mgid: str, context: ContextTypes.DEFAULT_TYPE):
+    """Called after a short delay to process a buffered media-group /fb submission."""
+    await asyncio.sleep(1.5)   # wait for all album photos to arrive
+    buf   = context.bot_data.get("fb_mg_buf", {})
+    group = buf.pop(mgid, None)
+    if not group:
+        return
+
+    file_ids  = group["file_ids"]
+    user      = group["user"]
+    user_note = group["user_note"]
+    submitted = group["submitted"]
+    uname     = f"@{user.username}" if user.username else user.first_name or "User"
+    key       = _fb_key(user.id)
+
+    context.bot_data.setdefault("fb_pending", {})[key] = {
+        "file_ids": file_ids, "file_type": "photo",
+        "user_id": user.id, "username": uname,
+        "name": user.full_name or user.first_name or "User",
+        "note": user_note, "date": submitted,
+    }
+
+    count         = len(file_ids)
+    owner_caption = (
+        f"<b>{E_DEV} {B('New Feedback')} ({count} photo{'s' if count > 1 else ''})</b>\n──────────\n"
+        f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {user.id}\n"
+        f"<b>Date</b> ➳ {submitted}\n"
+    )
+    if user_note:
+        owner_caption += f"<b>Note</b> ➳ {user_note[:200]}\n"
+    owner_caption += "──────────\nApprove ALL to post to channel?"
+
+    try:
+        if count == 1:
+            await context.bot.send_photo(chat_id=OWNER_ID, photo=file_ids[0],
+                                         caption=owner_caption,
+                                         reply_markup=kb_fb_owner(key),
+                                         parse_mode="HTML")
+        else:
+            # Send album (media groups can't carry inline keyboards in Telegram)
+            media = [InputMediaPhoto(media=fid) for fid in file_ids]
+            media[0] = InputMediaPhoto(media=file_ids[0],
+                                       caption=owner_caption, parse_mode="HTML")
+            await context.bot.send_media_group(chat_id=OWNER_ID, media=media)
+            # Separate message carries the approve/decline buttons
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=f"☝️ <b>Approve all {count} photos above?</b>",
+                reply_markup=kb_fb_owner(key),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"Feedback notify owner failed: {e}")
+
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
     if not await require_membership(update, context): return
-    msg       = update.message
-    user      = update.effective_user
+    msg   = update.message
+    user  = update.effective_user
+
+    # ── resolve the media message ──────────────────────────────────────────────
     media_msg = None
     if msg.photo or msg.video:
         media_msg = msg
     elif msg.reply_to_message and (msg.reply_to_message.photo or msg.reply_to_message.video):
         media_msg = msg.reply_to_message
 
-    if media_msg:
-        if media_msg.photo:   file_id, file_type = media_msg.photo[-1].file_id, "photo"
-        elif media_msg.video: file_id, file_type = media_msg.video.file_id, "video"
-        else:
-            await msg.reply_text("Invalid media type."); return
-
-        user_note = (msg.text or msg.caption or "").strip()
-        bot_uname = context.bot.username or ""
-        for prefix in (f"/fb@{bot_uname}", "/fb"):
-            if user_note.lower().startswith(prefix.lower()):
-                user_note = user_note[len(prefix):].strip(); break
-
-        key       = _fb_key(user.id)
-        uname     = f"@{user.username}" if user.username else user.first_name or "User"
-        submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        context.bot_data.setdefault("fb_pending", {})[key] = {
-            "file_id": file_id, "file_type": file_type, "user_id": user.id,
-            "username": uname, "name": user.full_name or user.first_name or "User",
-            "note": user_note, "date": submitted,
-        }
+    if not media_msg:
         await msg.reply_text(
-            f"<b>{E_LIVE} {B('Feedback Submitted')}</b>\n──────────\n"
-            "Your feedback is under review.\n──────────",
+            f"<b>📸 {B('Feedback')}</b>\n──────────\n"
+            "Send one or more photos with <code>/fb</code> as caption,\n"
+            "or reply to a photo/video with <code>/fb</code>.\n"
+            "──────────",
             parse_mode="HTML"
         )
-
-        owner_caption = (
-            f"<b>{E_DEV} {B('New Feedback')}</b>\n──────────\n"
-            f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {user.id}\n"
-            f"<b>Date</b> ➳ {submitted}\n<b>Type</b> ➳ {file_type.capitalize()}\n"
-        )
-        if user_note: owner_caption += f"<b>Note</b> ➳ {user_note[:200]}\n"
-        owner_caption += "──────────\nApprove to post to channel?"
-
-        try:
-            if file_type == "photo":
-                await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id,
-                                             caption=owner_caption, reply_markup=kb_fb_owner(key),
-                                             parse_mode="HTML")
-            else:
-                await context.bot.send_video(chat_id=OWNER_ID, video=file_id,
-                                             caption=owner_caption, reply_markup=kb_fb_owner(key),
-                                             parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Feedback notify owner failed: {e}")
         return
 
+    # ── strip /fb prefix from caption / text ──────────────────────────────────
+    user_note = (msg.text or msg.caption or "").strip()
+    bot_uname = context.bot.username or ""
+    for prefix in (f"/fb@{bot_uname}", "/fb"):
+        if user_note.lower().startswith(prefix.lower()):
+            user_note = user_note[len(prefix):].strip()
+            break
+
+    submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # ── media-group (album) — buffer and process after delay ──────────────────
+    if media_msg.photo and media_msg.media_group_id:
+        mgid = media_msg.media_group_id
+        buf  = context.bot_data.setdefault("fb_mg_buf", {})
+        if mgid not in buf:
+            buf[mgid] = {
+                "file_ids":  [],
+                "user":      user,
+                "user_note": user_note,
+                "submitted": submitted,
+                "task":      None,
+            }
+            # Acknowledge only on first photo of the album
+            await msg.reply_text(
+                f"<b>{E_LIVE} {B('Feedback Submitted')}</b>\n──────────\n"
+                "All photos are under review.\n──────────",
+                parse_mode="HTML"
+            )
+        buf[mgid]["file_ids"].append(media_msg.photo[-1].file_id)
+        # Cancel old delayed task, schedule a fresh one
+        old_task = buf[mgid].get("task")
+        if old_task and not old_task.done():
+            old_task.cancel()
+        buf[mgid]["task"] = asyncio.create_task(_process_fb_group(mgid, context))
+        return
+
+    # ── single photo or video ──────────────────────────────────────────────────
+    if media_msg.photo:
+        file_id, file_type = media_msg.photo[-1].file_id, "photo"
+    else:
+        file_id, file_type = media_msg.video.file_id, "video"
+
+    uname = f"@{user.username}" if user.username else user.first_name or "User"
+    key   = _fb_key(user.id)
+
+    context.bot_data.setdefault("fb_pending", {})[key] = {
+        "file_ids": [file_id], "file_type": file_type, "user_id": user.id,
+        "username": uname, "name": user.full_name or user.first_name or "User",
+        "note": user_note, "date": submitted,
+    }
     await msg.reply_text(
-        f"<b>📸 {B('Feedback')}</b>\n──────────\n"
-        "Reply to a photo/video with <code>/fb</code>\n"
-        "OR send photo/video with <code>/fb</code> as caption.\n"
-        "──────────",
+        f"<b>{E_LIVE} {B('Feedback Submitted')}</b>\n──────────\n"
+        "Your feedback is under review.\n──────────",
         parse_mode="HTML"
     )
+
+    owner_caption = (
+        f"<b>{E_DEV} {B('New Feedback')}</b>\n──────────\n"
+        f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {user.id}\n"
+        f"<b>Date</b> ➳ {submitted}\n<b>Type</b> ➳ {file_type.capitalize()}\n"
+    )
+    if user_note:
+        owner_caption += f"<b>Note</b> ➳ {user_note[:200]}\n"
+    owner_caption += "──────────\nApprove to post to channel?"
+
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id,
+                                         caption=owner_caption,
+                                         reply_markup=kb_fb_owner(key),
+                                         parse_mode="HTML")
+        else:
+            await context.bot.send_video(chat_id=OWNER_ID, video=file_id,
+                                         caption=owner_caption,
+                                         reply_markup=kb_fb_owner(key),
+                                         parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Feedback notify owner failed: {e}")
 
 async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     fb = context.bot_data.get("fb_pending", {}).get(key)
     if not fb: await query.answer("Already handled.", show_alert=True); return
     uname, uid, submitted = fb["username"], fb["user_id"], fb["date"]
-    file_id, file_type, user_note = fb["file_id"], fb["file_type"], fb.get("note", "")
+    file_type  = fb["file_type"]
+    user_note  = fb.get("note", "")
+    # support both old single-file_id and new file_ids list
+    file_ids   = fb.get("file_ids") or ([fb["file_id"]] if fb.get("file_id") else [])
+
     channel_caption = "──────────\n"
     if user_note: channel_caption += f"{user_note}\n──────────\n"
     channel_caption += (
@@ -2833,22 +2932,35 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
     )
     posted = False
     try:
-        if file_type == "photo":
-            await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=file_id,
+        if file_type == "photo" and len(file_ids) > 1:
+            # Post all photos as a media group to the channel
+            media = [InputMediaPhoto(media=fid) for fid in file_ids]
+            media[0] = InputMediaPhoto(media=file_ids[0],
+                                       caption=channel_caption, parse_mode="HTML")
+            await context.bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
+        elif file_type == "photo":
+            await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=file_ids[0],
                                          caption=channel_caption, parse_mode="HTML")
         else:
-            await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=file_id,
+            await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=file_ids[0],
                                          caption=channel_caption, parse_mode="HTML")
         posted = True
     except Exception as e:
         logger.error(f"Feedback channel post failed: {e}")
     context.bot_data["fb_pending"].pop(key, None)
+    status_txt = f"{'Posted ✅' if posted else 'Post Failed ⚠️'}"
     try:
         await query.message.edit_caption(
-            caption=f"<b>{E_LIVE} {B('Feedback')} {'Posted ✅' if posted else 'Post Failed ⚠️'}</b>\n──────────",
+            caption=f"<b>{E_LIVE} {B('Feedback')} {status_txt}</b>\n──────────",
             reply_markup=None, parse_mode="HTML"
         )
-    except Exception: pass
+    except Exception:
+        try:
+            await query.message.edit_text(
+                text=f"<b>{E_LIVE} {B('Feedback')} {status_txt}</b>\n──────────",
+                reply_markup=None, parse_mode="HTML"
+            )
+        except Exception: pass
     try:
         await context.bot.send_message(
             chat_id=uid,
@@ -3001,9 +3113,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elite_e = tg_emoji(PLAN_EMOJIS["ELITE"], "⭐")
         root_e  = tg_emoji(PLAN_EMOJIS["ROOT"],  "⭐")
         txt = (
-            f"<b>{core_e} {B('Core')}</b>  ➳ 7 days | 10$\n"
-            f"<b>{elite_e} {B('Elite')}</b> ➳ 15 days | 15$\n"
-            f"<b>{root_e} {B('Root')}</b>   ➳ 30 days | 30$\n"
+            f"<b>{core_e} {B('Core')}</b>  ➳ 1 day  | 1.5$\n"
+            f"<b>{core_e} {B('Core')}</b>  ➳ 7 days | 8$\n"
+            f"<b>{elite_e} {B('Elite')}</b> ➳ 15 days | 12$\n"
+            f"<b>{root_e} {B('Root')}</b>   ➳ 30 days | 25$\n"
             "──────────\nAll plans: Unlimited credits"
         )
         await query.message.edit_text(txt, parse_mode="HTML", reply_markup=kb_price())
@@ -3128,9 +3241,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     pay_map = {
-        "pay10": ("Core",  10, 7,  "CORE"),
-        "pay15": ("Elite", 15, 15, "ELITE"),
-        "pay30": ("Root",  30, 30, "ROOT"),
+        "pay1d": ("Core",  1.5, 1,  "CORE"),
+        "pay10": ("Core",  8,   7,  "CORE"),
+        "pay15": ("Elite", 12,  15, "ELITE"),
+        "pay30": ("Root",  25,  30, "ROOT"),
     }
     if data in pay_map:
         plan_n, price, days, plan_key = pay_map[data]
