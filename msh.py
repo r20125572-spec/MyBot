@@ -158,7 +158,7 @@ BUTTON_LOCK_SECONDS    = 30
 API_URL                = "https://goshopi.up.railway.app/shopii"
 
 # Speed control — lower = slower but safer on proxies
-MAX_CONCURRENT_CARDS = 25
+MAX_CONCURRENT_CARDS = 40
 CARD_DELAY_SECONDS   = 0.5
 
 MSH_SESSIONS  = {}
