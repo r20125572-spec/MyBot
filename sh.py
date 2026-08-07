@@ -2024,13 +2024,15 @@ async def _send_hit(bot, user, text: str, verdict: str,
     Set skip_dm=True when the result was already sent to the chat (e.g. from cmd_sh)
     to prevent the same card appearing twice in a private chat."""
     bin_data  = bin_data or {}
-    eid       = get_random_charged_emoji() if verdict == "CHARGED" else get_random_live_emoji()
-    ulink     = _user_link(user)
-    # LIVE and TDS always show INSUFFICIENT_FUNDS — never show Bank Error etc.
+
+    # Only CHARGED cards get DM / hit-log / group notifications.
+    # LIVE and TDS are silently collected into the live_cards file — no DM, no log post.
     if verdict in ("LIVE", "TDS"):
-        resp_disp = "INSUFFICIENT_FUNDS"
-    else:
-        resp_disp = escape(_clean_resp(resp)) if resp else "ORDER_PAID"
+        return
+
+    eid   = get_random_charged_emoji()
+    ulink = _user_link(user)
+    resp_disp = escape(_clean_resp(resp)) if resp else "ORDER_PAID"
 
     # Build compact log card — matches the target UI exactly:
     #   HIT ➛ CHARGED 💎
@@ -2215,25 +2217,13 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
                 sess["tds_cards"].append(rec)
-                _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
-                                            price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(
-                    bot, user, _dm_html, "TDS",
-                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
-                    plan=plan, resp=raw_resp,
-                ))
+                # No DM / hit-log for TDS — user collects via Live file button
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "LIVE":
                 sess["approved"] += 1
                 sess["live_cards"].append(rec)
-                _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
-                                            price, currency, elapsed, user, plan)
-                asyncio.create_task(_send_hit(
-                    bot, user, _dm_html, "LIVE",
-                    card=card_fmt, bin_data=bin_data, price=price, currency=currency,
-                    plan=plan, resp=raw_resp,
-                ))
+                # No DM / hit-log for LIVE — user collects via Live file button
                 asyncio.create_task(_update_progress(bot, sid, force=True))
 
             elif verdict == "DEAD":
