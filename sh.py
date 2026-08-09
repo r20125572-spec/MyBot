@@ -86,11 +86,11 @@ SH_COOLDOWN    = 25
 #
 # Safe values that keep the API healthy:
 #   SITE_BATCH=1      → one site attempt at a time per card (no racing)
-#   MAX_CONCURRENT=8  → max 8 cards in parallel during /msh
+#   MAX_CONCURRENT=25  → max 8 cards in parallel during /msh
 #   API_CONCURRENCY=20→ global hard cap on simultaneous API calls (all users)
 SITE_RETRIES       = 20   # max site attempts per card (was 80 — overkill)
 SITE_TIMEOUT       = 30   # seconds per API call — generous for slow Railway
-MAX_CONCURRENT     = 8    # cards in parallel during /msh  (was 50)
+MAX_CONCURRENT     = 25    # cards in parallel during /msh  (was 50)
 CARD_STAGGER       = 1.5  # seconds between card launches  (was 0.3)
 SITE_BATCH         = 1    # sites tried per round (was 3 — caused API floods)
 ROUND_DELAY        = 0.5  # seconds to sleep between retry rounds per card
@@ -352,16 +352,14 @@ DEAD_ERRORS     = RETRY_ERRORS
 SUCCESS_RESPONSES = [
     # ── Confirmed LIVE (card hit the bank, soft/ambiguous decline) ──────────
     'INSUFFICIENT_FUNDS', 'INCORRECT_CVV', 'INCORRECT_CVC', 'INCORRECT_ZIP',
-    'INVALID_CVC', 'INVALID_CVV', 'SECURITY_VIOLATION',
-    'PCI_ERROR', 'CVV_FAILED', 'AVS_FAILED', 'RISK_BLOCKED',
-    'CALL_ISSUER', 'GENERIC_ERROR',
+    'INVALID_CVC',
     # ── TDS (3-D Secure required) ────────────────────────────────────────────
-    '3DS_REQUIRED', '3D_SECURE', '3DS', 'AUTHENTICATION_REQUIRED', 'SCA_REQUIRED',
+    '3DS_REQUIRED',
     # ── Charged ──────────────────────────────────────────────────────────────
-    'ORDER_PAID', 'PAYMENT_AUTHORIZED', 'PAYMENT_ACCEPTED', 'CHARGED', 'APPROVED',
+    'ORDER_PAID',
     # ── Bank hard-declines (card reached bank but was rejected) ──────────────
-    'CARD_DECLINED', 'GENERIC_DECLINE', 'DO NOT HONOR', 'DO_NOT_HONOR',
-    'UNKNOWN_ERROR', 'Processing Error', 'PROCESSING_ERROR',
+    'CARD_DECLINED', 'GENERIC_DECLINE', 'DO NOT HONOR', 'DO_NOT_HONOR', 
+    'UNKNOWN_ERROR', 'Processing Error', 'PROCESSING_ERROR', 'GENERIC_ERROR',
     'EXPIRED_CARD', 'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
     'AMOUNT_TOO_SMALL', 'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD',
     'TEST_MODE_LIVE_CARD', 'INCORRECT_NUMBER', 'RESTRICTED_CARD',
@@ -889,59 +887,58 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
     # automatically — no &proxy= param needed or accepted.
     url = f"{API_URL}?cc={card}&site={site_clean}"
 
-    # Global rate-limit: only API_CONCURRENCY calls may be in-flight at once.
-    # This prevents 1000 concurrent users from flooding Railway and getting
-    # 502/503 errors that hide real bank responses (PCI_ERROR, GENERIC_ERROR…).
-    async with _get_api_sem():
-        # connect=5 → hung proxies fail fast; sock_read=timeout → slow Railway OK
-        _to = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
-        try:
-            async with aiohttp.ClientSession(timeout=_to) as session:
-                async with session.get(url, ssl=False) as r:
-                    http_st = r.status
-                    raw     = await r.text()
+    # Per-user concurrency is controlled by the asyncio.Semaphore(25) in
+    # run_mass_batch — each user independently gets 25 concurrent slots.
+    # No global semaphore here so one user's 25 slots don't eat into another's.
+    # connect=5 → hung proxies fail fast; sock_read=timeout → slow Railway OK
+    _to = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
+    try:
+        async with aiohttp.ClientSession(timeout=_to) as session:
+            async with session.get(url, ssl=False) as r:
+                http_st = r.status
+                raw     = await r.text()
 
-                    # Empty body = API couldn't reach the store
-                    if not raw or not raw.strip():
+                # Empty body = API couldn't reach the store
+                if not raw or not raw.strip():
+                    return ("site error! status: 404",
+                            "Shopify Payments", "0.00", "USD", http_st)
+
+                if http_st == 200:
+                    try:
+                        data = _json.loads(raw)
+                    except Exception:
                         return ("site error! status: 404",
                                 "Shopify Payments", "0.00", "USD", http_st)
 
-                    if http_st == 200:
-                        try:
-                            data = _json.loads(raw)
-                        except Exception:
-                            return ("site error! status: 404",
-                                    "Shopify Payments", "0.00", "USD", http_st)
+                    raw_gw   = str(data.get("Gateway") or data.get("gateway") or "Shopify Payments")
+                    gw       = _normalise_gateway(raw_gw)
+                    price    = str(data.get("Price")    or data.get("price")    or "0.00")
+                    currency = str(data.get("Currency") or data.get("currency") or "USD")
+                    api_resp = _parse_response_field(data)
 
-                        raw_gw   = str(data.get("Gateway") or data.get("gateway") or "Shopify Payments")
-                        gw       = _normalise_gateway(raw_gw)
-                        price    = str(data.get("Price")    or data.get("price")    or "0.00")
-                        currency = str(data.get("Currency") or data.get("currency") or "USD")
-                        api_resp = _parse_response_field(data)
+                    logging.info(f"[API] {card[:6]}** {site_clean} "
+                                 f"→ {api_resp!r}  gw={gw}  price={price} {currency}")
+                    return api_resp, gw, price, currency, http_st
 
-                        logging.info(f"[API] {card[:6]}** {site_clean} "
-                                     f"→ {api_resp!r}  gw={gw}  price={price} {currency}")
-                        return api_resp, gw, price, currency, http_st
+                # Non-200 HTTP from the API server itself
+                _emap = {
+                    404: "site error! status: 404",
+                    403: "site error! status: 403",
+                    429: "site error! status: 429",
+                    500: "site error! status: 500",
+                    502: "site error! status: 502",
+                    503: "site error! status: 503",
+                    504: "timeout",
+                }
+                return (_emap.get(http_st, f"site error! status: {http_st}"),
+                        "Shopify Payments", "0.00", "USD", http_st)
 
-                    # Non-200 HTTP from the API server itself
-                    _emap = {
-                        404: "site error! status: 404",
-                        403: "site error! status: 403",
-                        429: "site error! status: 429",
-                        500: "site error! status: 500",
-                        502: "site error! status: 502",
-                        503: "site error! status: 503",
-                        504: "timeout",
-                    }
-                    return (_emap.get(http_st, f"site error! status: {http_st}"),
-                            "Shopify Payments", "0.00", "USD", http_st)
-
-        except asyncio.TimeoutError:
-            return ("timeout", "Shopify Payments", "0.00", "USD", None)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
+    except asyncio.TimeoutError:
+        return ("timeout", "Shopify Payments", "0.00", "USD", None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2097,24 +2094,19 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             # Update progress after every single card so user sees real-time counts
             asyncio.create_task(_update_progress(bot, sid))
 
-    # Launch workers one at a time with a stagger delay so:
-    # • Each card gets its own slice of the site pool
-    # • The user sees cards finishing one by one (not all at once)
-    # • The API is not hammered with 20 simultaneous calls
+    # Launch ALL card tasks immediately (no stagger) — the per-session semaphore
+    # (asyncio.Semaphore(MAX_CONCURRENT) = 25) inside each worker controls how
+    # many cards run concurrently FOR THIS USER.  Every user gets their own 25
+    # concurrent slots independently — there is no shared global cap here.
     #
-    # FIX: write every task into sess["tasks"] IMMEDIATELY after creation so
-    # cb_msh_stop can cancel in-flight tasks the instant the button is pressed,
-    # regardless of how far into the card list we are.
+    # Tasks are registered into sess["tasks"] immediately so cb_msh_stop can
+    # cancel in-flight tasks the instant the Stop button is pressed.
     sess["tasks"] = []
-    for i, (cf, cn) in enumerate(valid_cards):
+    for cf, cn in valid_cards:
         if sess.get("status") != "CHECKING":
             break
         t = asyncio.create_task(worker(cf, cn))
-        sess["tasks"].append(t)          # live update — stop handler sees this
-        # Wait for CARD_STAGGER seconds before launching the next card.
-        # This also naturally throttles the API — each card checks
-        # a different set of sites because the pool is shuffled fresh per card.
-        await asyncio.sleep(CARD_STAGGER)
+        sess["tasks"].append(t)
 
     await asyncio.gather(*sess["tasks"], return_exceptions=True)
 
