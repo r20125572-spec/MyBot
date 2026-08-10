@@ -172,10 +172,11 @@ SH_PROG_EMOJI_ID = "6298691319086712919"   # 😄  progress line
 SH_LIVE_EMOJI_ID = "6296367896398399651"   # 🎸  live count
 
 # Button emojis
-BTN_CHARGED_EMOJI_ID = "5465465194056525619"   # 💎 charged button
-BTN_LIVE_EMOJI_ID    = "5039793437776282663"   # ✅ live button
-BTN_ALL_EMOJI_ID     = "4956324463525233747"   # 📁 all button
-BTN_STOP_EMOJI_ID    = "6179444193518162239"   # ⛔ stop button
+BTN_CHARGED_EMOJI_ID  = "5465465194056525619"   # 💎 charged button
+BTN_LIVE_EMOJI_ID     = "5039793437776282663"   # ✅ live button
+BTN_ALL_EMOJI_ID      = "4956324463525233747"   # 📁 all button
+BTN_STOP_EMOJI_ID     = "6179444193518162239"   # ⛔ stop button
+CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"   # 💳 hit-log group inline button
 
 # Pool of 18 premium animated emojis — used for CHARGED and LIVE hits (random per card)
 CHARGED_EMOJI_IDS = [
@@ -408,12 +409,12 @@ def classify_response(resp: str) -> str:
             or mu == "CHARGED"):
         return "CHARGED"
 
-    # ── TDS (3-D Secure redirect) ────────────────────────────────────────────
+    # ── TDS (3-D Secure redirect) — treated as LIVE ─────────────────────────
     if ("3DS_REQUIRED"            in mu
             or "3D_SECURE"            in mu
             or "AUTHENTICATION_REQUIRED" in mu
             or "SCA_REQUIRED"         in mu):
-        return "TDS"
+        return "LIVE"
 
     # ── LIVE (card reached the bank — soft / ambiguous decline) ─────────────
     # Every response here means the card was submitted to the bank and the
@@ -1932,16 +1933,20 @@ async def _send_hit(bot, user, text: str, verdict: str,
         else getattr(user, "first_name", None) or "User"
     )
 
+    plan_eid = _plan_eid(plan)
     log_html = (
         f'<b>HIT ➛ CHARGED '
-        f'<tg-emoji emoji-id="6253354142526345892">💎</tg-emoji></b>\n'
+        f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>{gate_txt}</b>\n'
-        f'<b><tg-emoji emoji-id="6220029508456548253">👁</tg-emoji> ORDER_PAID</b>\n'
-        f'<b>User ➛ {escape(uname_display)}</b>'
+        f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
+        f' <code>{resp_disp}</code></b>\n'
+        f'<b>User ➛ {ulink}'
+        f' <tg-emoji emoji-id="{plan_eid}">⭐</tg-emoji></b>'
     )
 
     log_kb = RawMarkup([[
-        _btn("⚡ @Batxchk_bot", url=BOT_USERNAME_LINK, style="danger"),
+        _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
+             icon=CARD_CHK_BTN_EMOJI_ID),
     ]])
 
     # ── 1. DM — animation + full result card as caption ───────────────────────
