@@ -47,7 +47,8 @@ from config import (
 )
 from sh import (
     cmd_sh,
-    get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
+    get_sh_handler, get_me_handler,
+    _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
@@ -276,7 +277,7 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
             "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0,
             "total_refs": 0, "total_checks": 0, "approved_checks": 0, "declined_checks": 0,
             "last_gate": "N/A", "last_card": "N/A", "codes_redeemed": 0, "keys_redeemed": 0,
-            "banned": False,
+            "banned": False, "total_charged": 0,
         }
     return context.bot_data["user_data"][uid]
 
@@ -2625,6 +2626,71 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Live leaderboard — top 5 users by lifetime CHARGED cards from this bot."""
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+
+    # ── Emoji IDs ────────────────────────────────────────────────────────────
+    _EM = lambda eid, fb: f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
+    CROWN   = _EM("6181649972757271368", "⚜")
+    DIAMOND = _EM("4958610528588008305", "💎")
+    BLUE    = _EM("5416111497224920515", "🔵")   # rank 1
+    WHITE1  = _EM("5415586905624420894", "⚪")   # rank 2
+    WHITE2  = _EM("5415982270248918567", "⚪")   # rank 3
+    TOP     = _EM("6170155021070506364", "🔝")   # all ranks
+    DEV_E   = _EM("6267091732861555879", "⚡")   # dev line
+
+    rank_markers = [BLUE, WHITE1, WHITE2, "4.", "5."]
+
+    # ── Pull all users and sort by total_charged ──────────────────────────────
+    user_data = context.bot_data.get("user_data", {})
+    board = sorted(
+        [
+            {
+                "display": (
+                    f"@{ud['username']}" if ud.get("username")
+                    else ud.get("first_name") or ud.get("name") or "User"
+                ),
+                "count": ud.get("total_charged", 0),
+            }
+            for ud in user_data.values()
+            if ud.get("total_charged", 0) > 0
+        ],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:5]
+
+    divider = "────────────"
+
+    lines = [
+        f"{CROWN} <b>Leaderboard</b> {DIAMOND}",
+        divider,
+    ]
+
+    if not board:
+        lines.append("No charge cards yet — be the first! 🎯")
+    else:
+        for i, entry in enumerate(board):
+            marker = rank_markers[i]
+            lines.append(
+                f"{marker} {escape(entry['display'])} ➳ "
+                f"<b>{entry['count']}</b> {DIAMOND} {TOP}"
+            )
+
+    # Pad to always show 5 slots (so layout is consistent even with few users)
+    for i in range(len(board), 5):
+        marker = rank_markers[i]
+        lines.append(f"{marker} ———")
+
+    lines += [
+        divider,
+        f"{DEV_E} Dev ➳@Batxchk_bot🦇",
+    ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_not_banned(update, context): return
     if not await require_membership(update, context): return
@@ -3713,6 +3779,7 @@ def main():
 
         app.add_handler(CommandHandler("start",   cmd_start))
         app.add_handler(CommandHandler("ping",    cmd_ping))
+        app.add_handler(CommandHandler("status",  cmd_status))   # /status — live leaderboard
         app.add_handler(CommandHandler("plan",    cmd_plan))
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
@@ -3721,6 +3788,7 @@ def main():
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(CommandHandler("sh",      _cmd_sh_gated))   # force-join gated
         app.add_handler(CommandHandler("msh",     cmd_msh))
+        app.add_handler(get_me_handler())                           # /me — lifetime charged stats
 
         app.add_handler(CommandHandler("1day",        cmd_1day))
         app.add_handler(CommandHandler("gen",         cmd_gen))
