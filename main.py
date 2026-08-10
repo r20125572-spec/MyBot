@@ -2545,7 +2545,8 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Fire mass batch in the background ───────────────────────────
     asyncio.create_task(
-        run_mass_batch(context.bot, sid, valid_cards, user, plan, sites, proxies)
+        run_mass_batch(context.bot, sid, valid_cards, user, plan, sites, proxies,
+                       bot_data=context.bot_data)
     )
 
     # ── Deduct trial credits ────────────────────────────────────────
