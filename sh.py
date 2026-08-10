@@ -2013,7 +2013,7 @@ def create_msh_session(sid, chat_id, user_id, msg_id, user_msg_id,
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MASS CHECK RUNNER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
+async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies, bot_data=None):
     sess = MSH_SESSIONS.get(sid)
     if not sess: return
 
@@ -2068,9 +2068,12 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             if verdict == "CHARGED":
                 sess["charged"] += 1
                 sess["charged_cards"].append(rec)
-                # Track lifetime charged count for /me
-                _ud_msh = _get_ud(user.id, context)
-                _ud_msh["total_charged"] = _ud_msh.get("total_charged", 0) + 1
+                # Track lifetime charged count for /me — use bot_data directly
+                # (no context available in this background task)
+                if bot_data is not None:
+                    _ud_store = bot_data.setdefault("user_data", {})
+                    _ud_msh   = _ud_store.setdefault(str(user.id), {})
+                    _ud_msh["total_charged"] = _ud_msh.get("total_charged", 0) + 1
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2339,11 +2342,15 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          reply_to_message_id=update.message.message_id)
 
     if verdict in ("CHARGED", "LIVE", "TDS"):
+        # skip_dm only when checking in a PRIVATE chat (the result is already
+        # visible there). In a group the result appears in the group, so the
+        # user still needs a personal DM with the full charged card.
+        _in_private = (update.effective_chat.id == user.id)
         asyncio.create_task(_send_hit(
             context.bot, user, res_html, verdict,
             card=card, bin_data=bin_data, price=price, currency=currency,
             plan=plan, resp=resp,
-            skip_dm=True,   # result already sent to chat above — no duplicate DM
+            skip_dm=_in_private,
         ))
 
 
