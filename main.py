@@ -1404,6 +1404,117 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HOUR-BASED PREMIUM KEYS  /hr  /hr1  /hr2  /hr3
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def cmd_hr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — generate hour-based ELITE premium key(s).
+    Shortcuts : /hr1  /hr2  /hr3  (N hours, 1 key each)
+    Full form : /hr <hours>            (1 key)
+                /hr <hours> <count>    (count keys)
+    Silent for everyone except the owner.
+    """
+    if update.effective_user.id != OWNER_ID:
+        return  # silent
+
+    # Determine how many hours from the command name itself (/hr1 etc.) or args
+    cmd_text = (update.message.text or "").split()[0].lstrip("/").lower()
+    if "@" in cmd_text:
+        cmd_text = cmd_text.split("@")[0]
+
+    hours: Optional[int] = None
+    count = 1
+
+    if len(cmd_text) > 2 and cmd_text[:2] == "hr" and cmd_text[2:].isdigit():
+        # /hr1 /hr2 /hr3 … shortcut
+        hours = int(cmd_text[2:])
+        # optional count in first arg
+        if context.args:
+            try:
+                c = int(context.args[0])
+                if 1 <= c <= 50:
+                    count = c
+            except ValueError:
+                pass
+    else:
+        # /hr  N  [count]
+        if not context.args:
+            await update.message.reply_text(
+                f"<b>⏱ Hour Key Generator</b>\n──────────\n"
+                f"<code>/hr &lt;hours&gt;</code>           — 1 key\n"
+                f"<code>/hr &lt;hours&gt; &lt;count&gt;</code>  — multiple keys\n\n"
+                f"<b>Shortcuts:</b>\n"
+                f"<code>/hr1</code> → 1 h  │  <code>/hr2</code> → 2 h  │  <code>/hr3</code> → 3 h\n\n"
+                f"<b>Examples:</b>\n"
+                f"<code>/hr 6</code>      → 6-hour key\n"
+                f"<code>/hr 12 3</code>   → 3 keys, each 12 hours\n"
+                f"──────────\n"
+                f"Users redeem with: <code>/rm KEY</code>",
+                parse_mode="HTML",
+            )
+            return
+        try:
+            hours = int(context.args[0])
+            if hours <= 0:
+                raise ValueError
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "<b>❌ Hours must be a positive whole number.</b>", parse_mode="HTML"
+            )
+            return
+        if len(context.args) >= 2:
+            try:
+                count = int(context.args[1])
+                if count <= 0 or count > 50:
+                    raise ValueError
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>❌ Count must be 1–50.</b>", parse_mode="HTML"
+                )
+                return
+
+    # Build duration label
+    if hours < 24:
+        dur_label = f"{hours} hour{'s' if hours != 1 else ''}"
+    else:
+        d, h = divmod(hours, 24)
+        dur_label = f"{d}d" + (f" {h}h" if h else "")
+
+    keys_store = context.bot_data.setdefault("keys", {})
+    generated  = []
+    for _ in range(count):
+        key = gen_code(12)
+        keys_store[key] = {"plan": "ELITE", "hours": hours, "used": False}
+        generated.append(key)
+
+    plan_emoji = tg_emoji(get_plan_emoji_id("ELITE"), "⭐")
+
+    if count == 1:
+        await update.message.reply_text(
+            f"<b>⏱ Hour Key Generated</b>\n──────────\n"
+            f"<b>Key</b>      ➳ <code>{generated[0]}</code>\n"
+            f"<b>Access</b>   ➳ {get_styled_plan('ELITE')} {plan_emoji}\n"
+            f"<b>Duration</b> ➳ {dur_label}\n"
+            f"──────────\n"
+            f"Redeem: <code>/rm {generated[0]}</code>",
+            parse_mode="HTML",
+        )
+    else:
+        lines = [
+            f"<b>⏱ Hour Keys Generated</b>",
+            f"──────────",
+            f"<b>Access</b>   ➳ {get_styled_plan('ELITE')} {plan_emoji}",
+            f"<b>Duration</b> ➳ {dur_label}",
+            f"<b>Count</b>    ➳ {count}",
+            f"──────────",
+        ]
+        for i, k in enumerate(generated, 1):
+            lines.append(f"<b>{i}.</b> <code>{k}</code>")
+        lines += ["──────────", "Redeem with: <code>/rm KEY</code>"]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if len(context.args) < 3:
@@ -2795,10 +2906,45 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         keys[code]["used"] = True
-        p, d = keys[code]["plan"], keys[code]["days"]
+        p  = keys[code]["plan"]
         ud["keys_redeemed"] = ud.get("keys_redeemed", 0) + 1
-        receipt    = await send_activation_msg(uid, p, d, context)
         plan_emoji = tg_emoji(get_plan_emoji_id(p), "⭐")
+
+        # ── Hour-based key (e.g. /hr1 /hr2 /hr3) ──
+        if "hours" in keys[code]:
+            hours      = keys[code]["hours"]
+            expires_ts = time.time() + hours * 3600
+            if ud.get("plan", "TRIAL").upper() == "TRIAL":
+                ud["pre_premium_credits"] = ud.get("credits", 150)
+            ud["plan"]         = p.upper()
+            ud["expires"]      = expires_ts
+            receipt            = gen_receipt()
+            ud["last_receipt"] = receipt
+            await _save_premium(context.bot_data)
+
+            exp_str   = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
+            if hours < 24:
+                dur_label = f"{hours} hour{'s' if hours != 1 else ''}"
+            else:
+                d2, h2 = divmod(hours, 24)
+                dur_label = f"{d2}d" + (f" {h2}h" if h2 else "")
+
+            await update.message.reply_text(
+                f"<b>{E_LIVE} {B('Hour Key Redeemed!')}</b>\n──────────\n"
+                f"<b>Key</b>      ➳ <code>{code}</code>\n"
+                f"<b>Access</b>   ➳ {get_styled_plan(p)} {plan_emoji}\n"
+                f"<b>Duration</b> ➳ {dur_label}\n"
+                f"<b>Expires</b>  ➳ <code>{exp_str}</code>\n"
+                f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
+                f"──────────\n"
+                f"Your plan is active! Use /sub to check.",
+                parse_mode="HTML",
+            )
+            return
+
+        # ── Day-based key (standard /gen key flow) ──
+        d      = keys[code]["days"]
+        receipt = await send_activation_msg(uid, p, d, context)
         await update.message.reply_text(
             f"<b>{E_LIVE} {B('Key Redeemed')}</b>\n──────────\n"
             f"<b>Key</b>     ➳ <code>{code}</code>\n"
@@ -3534,99 +3680,144 @@ async def _post_init(app: Application) -> None:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FAKE LOGS  (owner-only — invisible to all other users)
-# /fakeon  → pick sender persona → starts stream to target channel
-# /fakeoff → stops stream
-# /getid   → owner runs this inside any chat to get its numeric ID
-#
-# Target channel: https://t.me/+BXmeotREVhllODFk
-# Set FAKE_LOG_CHANNEL_ID env-var on Railway to the numeric ID,
-# OR run /getid inside that channel to find out the ID.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from sh import MY_CHANNEL_LINK as _FL_CH_LINK
+# FAKE LOGS CONTROL SYSTEM  /fakeon  (owner-only, silent to all others)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# bot_data keys used:
+#   "fl_ids"             — list of ID dicts the owner configured
+#   "fl_speed"           — "slow" | "normal" | "fast"
+#   "fakelogs_active"    — bool, is the stream running?
+#   "fl_state"           — None | "awaiting_id"
+#   "fakelogs_channel_id"— numeric chat ID of target logs channel
+#
+# Fake logs look IDENTICAL to real hit notifications.
+# Each message is attributed to a random enabled ID from fl_ids.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+from sh import LOGS_CHANNEL_LINK as _FL_CH_LINK   # [❆] in fake logs links back to the hits channel
 
-# ── Target channel — set via Railway env var ──────────────────────────────────
-# Add FAKE_LOG_CHANNEL_ID to Railway → Variables with the numeric chat ID.
-# Run /getid inside the channel to discover its ID.
 _FL_CHANNEL_ID = int(os.environ.get("FAKE_LOG_CHANNEL_ID", "0"))
+_FL_JOB        = "fake_hit_stream"
+_FL_ACTIVE     = "fakelogs_active"
 
-_FL_JOB     = "fake_hit_stream"
-_FL_ACTIVE  = "fakelogs_active"
-_FL_PERSONA = "fakelogs_persona_idx"
+# ── Speed presets: (min_delay, max_delay) in seconds ─────────────────────────
+_FL_SPEEDS = {
+    "slow":   (90,  180),   # 1.5 – 3 min   (very relaxed)
+    "normal": (40,   80),   # 40 s – 1.5 min (moderate)
+    "fast":   (18,   35),   # 18 – 35 s      (active but not spammy)
+}
+_FL_SPEED_LABELS = {
+    "slow":   "🐢 Slow  (1.5–3 min)",
+    "normal": "🚶 Normal (40–80 s)",
+    "fast":   "🏃 Fast  (18–35 s)",
+}
 
-_FL_PERSONAS = [
-    {"username": "Batxchk_bot", "link": "https://t.me/Batxchk_bot"},
-    {"username": "lucifer2600", "link": "https://t.me/lucifer2600"},
-    {"username": "krptonis",    "link": "https://t.me/krptonis"},
+# ── Realistic BIN data  (prefix, network, type, country, flag, bank) ─────────
+_FL_BINS = [
+    ("4147", "Visa",       "Credit",  "United States", "🇺🇸", "Chase Bank"),
+    ("4154", "Visa",       "Credit",  "United States", "🇺🇸", "Wells Fargo"),
+    ("4217", "Visa",       "Credit",  "United States", "🇺🇸", "Bank of America"),
+    ("4009", "Visa",       "Debit",   "United States", "🇺🇸", "Citi Bank"),
+    ("4532", "Visa",       "Credit",  "United Kingdom","🇬🇧", "HSBC"),
+    ("4716", "Visa",       "Debit",   "Canada",        "🇨🇦", "RBC"),
+    ("5404", "Mastercard", "Credit",  "United States", "🇺🇸", "Capital One"),
+    ("5179", "Mastercard", "Credit",  "United States", "🇺🇸", "Chase Bank"),
+    ("5449", "Mastercard", "Credit",  "United States", "🇺🇸", "Citi Bank"),
+    ("5258", "Mastercard", "Credit",  "Australia",     "🇦🇺", "ANZ Bank"),
+    ("4024", "Visa",       "Credit",  "United States", "🇺🇸", "US Bank"),
+    ("5178", "Mastercard", "Credit",  "United States", "🇺🇸", "Capital One"),
 ]
 
-_FL_CHARGED_RESP = [
+_FL_PRICES = [
+    "12.99", "17.99", "19.99", "24.99", "29.99",
+    "34.99", "39.99", "44.99", "49.99", "59.99",
+    "74.99", "79.99", "89.99", "99.99",
+]
+
+_FL_RESP = [
     "ORDER_PAID", "PAYMENT_AUTHORIZED", "APPROVED",
-    "PAYMENT_ACCEPTED", "TRANSACTION_APPROVED",
     "CHARGED", "PURCHASE_COMPLETE", "AUTHORIZATION_APPROVED",
-]
-_FL_LIVE_RESP = [
-    "INSUFFICIENT_FUNDS", "DO_NOT_HONOR", "RESTRICTED_CARD",
-    "CALL_ISSUER", "CARD_VELOCITY_EXCEEDED", "PICKUP_CARD",
-    "SECURITY_VIOLATION", "TRANSACTION_NOT_PERMITTED",
-    "REFER_TO_CARD_ISSUER", "LIMITED_FUNDS",
+    "PAYMENT_ACCEPTED", "TRANSACTION_APPROVED",
 ]
 
 
-def _fl_ch() -> str:
-    return f'<a href="{_FL_CH_LINK}">[❆]</a>'
+def _fl_fake_card(bin_prefix: str) -> str:
+    """Build a fake but plausible-looking card string: XXXX|XXXX|XXXX|XXXX|MM|YY|CVV"""
+    remaining = 16 - len(bin_prefix)
+    digits    = bin_prefix + "".join(str(random.randint(0, 9)) for _ in range(remaining))
+    groups    = [digits[i:i+4] for i in range(0, 16, 4)]
+    month     = f"{random.randint(1, 12):02d}"
+    year      = str(random.randint(25, 28))
+    cvv       = str(random.randint(100, 999))
+    return "|".join(groups) + f"|{month}|{year}|{cvv}"
 
 
-def _fl_charged_msg(persona: dict) -> str:
-    resp  = random.choice(_FL_CHARGED_RESP)
-    ulink = f'<a href="{persona["link"]}">@{persona["username"]}</a>'
+def _fl_log_msg(id_entry: dict) -> str:
+    """Build a fake CHARGED hit that looks identical to a real log from _send_hit."""
+    bp, network, ctype, country, flag, bank = random.choice(_FL_BINS)
+    card  = _fl_fake_card(bp)
+    price = random.choice(_FL_PRICES)
+    resp  = random.choice(_FL_RESP)
+    ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
+    ch    = f'<a href="{_FL_CH_LINK}">[❆]</a>'
     return (
-        "<b>⭐</b>\n"
-        f"<b>{_fl_ch()} HIT CHARGED 💎</b>\n"
-        "<b>──────────</b>\n"
-        f"<b>💎 Resp ➛ {resp}</b>\n"
-        f"<b>👤 ➛ {ulink} ⭐</b>"
+        f"<b>💎 {ch} HIT ➛ CHARGED 💎</b>\n"
+        f"<b>──────────────</b>\n"
+        f"<b>💎 {resp} ✅</b>\n"
+        f"<b>──────────────</b>\n"
+        f"<b>💳</b> <code>{card}</code>\n"
+        f"<b>🏦 {network} {ctype} • {country} {flag}</b>\n"
+        f"<b>🏛 {bank}</b>\n"
+        f"<b>💰 ${price} USD</b>\n"
+        f"<b>──────────────</b>\n"
+        f"<b>👁 ➛ {ulink}</b>\n"
+        f"<b>🤖 ➛ @Batxchk_bot</b>"
     )
 
 
-def _fl_live_msg(persona: dict) -> str:
-    resp  = random.choice(_FL_LIVE_RESP)
-    ulink = f'<a href="{persona["link"]}">@{persona["username"]}</a>'
-    return (
-        "<b>⭐</b>\n"
-        f"<b>{_fl_ch()} HIT LIVE ✅</b>\n"
-        "<b>──────────</b>\n"
-        f"<b>✅ Resp ➛ {resp}</b>\n"
-        f"<b>👤 ➛ {ulink} ⭐</b>"
-    )
+def _fl_get_ids(bd: dict) -> list:
+    return bd.setdefault("fl_ids", [])
 
+
+def _fl_get_speed(bd: dict) -> str:
+    return bd.get("fl_speed", "normal")
+
+
+# ── Background job ────────────────────────────────────────────────────────────
 
 async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    bd = context.bot_data
+    bd     = context.bot_data
     if not bd.get(_FL_ACTIVE):
         return
-    persona    = _FL_PERSONAS[bd.get(_FL_PERSONA, 0)]
-    target_cid = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
-    if not target_cid:
-        logger.warning("[FAKELOGS] No channel ID set — stopping. "
-                       "Set FAKE_LOG_CHANNEL_ID env var on Railway.")
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    if not target:
+        logger.warning("[FAKELOGS] No channel ID configured — stopping.")
         bd[_FL_ACTIVE] = False
         return
-    if random.random() < 0.65:
-        text       = _fl_charged_msg(persona)
-        next_delay = random.uniform(8, 12)
-    else:
-        text       = _fl_live_msg(persona)
-        next_delay = random.uniform(18, 30)
-    try:
-        await context.bot.send_message(
-            target_cid, text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
-    except Exception as exc:
-        logger.warning(f"[FAKELOGS] send failed (chat={target_cid}): {exc}")
+
+    ids = [e for e in _fl_get_ids(bd) if e.get("enabled", True)]
+    speed = _fl_get_speed(bd)
+    lo, hi = _FL_SPEEDS[speed]
+
+    if ids:
+        id_entry = random.choice(ids)
+        text     = _fl_log_msg(id_entry)
+        btn_kb   = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚡ @Batxchk_bot", url="https://t.me/Batxchk_bot")
+        ]])
+        try:
+            await context.bot.send_message(
+                target, text,
+                parse_mode="HTML",
+                reply_markup=btn_kb,
+                disable_web_page_preview=True,
+            )
+            id_entry["count"] = id_entry.get("count", 0) + 1
+        except Exception as exc:
+            logger.warning(f"[FAKELOGS] send failed (chat={target}): {exc}")
+
     if bd.get(_FL_ACTIVE):
-        context.job_queue.run_once(_fl_job, next_delay, name=_FL_JOB)
+        context.job_queue.run_once(_fl_job, random.uniform(lo, hi), name=_FL_JOB)
 
 
 def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3634,52 +3825,149 @@ def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
         job.schedule_removal()
 
 
+# ── Control panel UI builders ─────────────────────────────────────────────────
+
+def _fl_main_text(bd: dict) -> str:
+    active  = bd.get(_FL_ACTIVE, False)
+    speed   = _fl_get_speed(bd)
+    ids     = _fl_get_ids(bd)
+    on_ct   = sum(1 for e in ids if e.get("enabled", True))
+    status  = "🟢 RUNNING" if active else "🔴 STOPPED"
+    target  = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    cid_str = f"<code>{target}</code>" if target else "<i>not set</i>"
+    return (
+        f"<b>🎭 Fake Logs Control Panel</b>\n"
+        f"──────────\n"
+        f"<b>Status  ➛</b> {status}\n"
+        f"<b>Channel ➛</b> {cid_str}\n"
+        f"<b>Speed   ➛</b> {_FL_SPEED_LABELS[speed]}\n"
+        f"<b>IDs     ➛</b> {on_ct}/{len(ids)} enabled\n"
+        f"──────────"
+    )
+
+
+def _fl_main_kb(bd: dict) -> InlineKeyboardMarkup:
+    active     = bd.get(_FL_ACTIVE, False)
+    toggle_lbl = "⛔ Stop Logs" if active else "▶️ Start Logs"
+    toggle_cb  = "fl_stop"      if active else "fl_start"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 IDs",   callback_data="fl_ids"),
+            InlineKeyboardButton("⚡ Speed", callback_data="fl_speed"),
+            InlineKeyboardButton("📊 Show",  callback_data="fl_show"),
+        ],
+        [InlineKeyboardButton(toggle_lbl, callback_data=toggle_cb)],
+    ])
+
+
+def _fl_ids_text(bd: dict) -> str:
+    ids = _fl_get_ids(bd)
+    if not ids:
+        return (
+            "<b>📋 Fake Log IDs</b>\n──────────\n"
+            "No IDs added yet.\n\n"
+            "Press <b>➕ Add ID</b>, then send the ID in chat:\n"
+            "<code>123456789 @username</code>\n"
+            "or just <code>@username</code>"
+        )
+    lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
+    for e in ids:
+        on  = "🟢" if e.get("enabled", True) else "🔴"
+        ct  = e.get("count", 0)
+        lines.append(f"{on} {e['display']} — {ct} fake hit{'s' if ct != 1 else ''}")
+    lines.append("──────────\nUse buttons below to toggle / remove / add IDs.")
+    return "\n".join(lines)
+
+
+def _fl_ids_kb(bd: dict) -> InlineKeyboardMarkup:
+    ids  = _fl_get_ids(bd)
+    rows = []
+    for i, e in enumerate(ids):
+        on     = e.get("enabled", True)
+        toggle = "🟢 ON" if on else "🔴 OFF"
+        rows.append([
+            InlineKeyboardButton(e["display"],  callback_data="fl_noop"),
+            InlineKeyboardButton(toggle,         callback_data=f"fltog_{i}"),
+            InlineKeyboardButton("❌ Remove",    callback_data=f"flrem_{i}"),
+        ])
+    rows.append([
+        InlineKeyboardButton("➕ Add ID", callback_data="fl_addid"),
+        InlineKeyboardButton("🔙 Back",   callback_data="fl_panel"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fl_speed_text() -> str:
+    return (
+        "<b>⚡ Fake Log Speed</b>\n──────────\n"
+        "Choose how fast fake CHARGED hits appear in the logs channel.\n"
+        "All speeds use <b>random gaps</b> — no fixed pattern that could reveal the fakes."
+    )
+
+
+def _fl_speed_kb(bd: dict) -> InlineKeyboardMarkup:
+    cur  = _fl_get_speed(bd)
+    rows = []
+    for key, label in _FL_SPEED_LABELS.items():
+        check = "✅ " if key == cur else "     "
+        rows.append([InlineKeyboardButton(f"{check}{label}", callback_data=f"flspd_{key}")])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data="fl_panel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fl_show_text(bd: dict) -> str:
+    ids   = _fl_get_ids(bd)
+    speed = _fl_get_speed(bd)
+    if not ids:
+        return "<b>📊 Fake Log Stats</b>\n──────────\nNo IDs configured yet."
+    lines = ["<b>📊 Fake Log Stats</b>", "──────────"]
+    total = 0
+    for e in ids:
+        on     = "🟢" if e.get("enabled", True) else "🔴"
+        ct     = e.get("count", 0)
+        total += ct
+        tag    = "" if e.get("enabled", True) else " <i>(disabled)</i>"
+        lines.append(f"{on} {e['display']} — <b>{ct}</b> hits{tag}")
+    lines += [
+        "──────────",
+        f"<b>Total fake hits sent ➛ {total}</b>",
+        f"<b>Speed ➛ {_FL_SPEED_LABELS[speed]}</b>",
+    ]
+    return "\n".join(lines)
+
+
+def _fl_show_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Clear All Stats", callback_data="fl_clrstats")],
+        [InlineKeyboardButton("🔙 Back",            callback_data="fl_panel")],
+    ])
+
+
+# ── /fakeon command ───────────────────────────────────────────────────────────
+
 async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Owner only — /fakeon shows persona selector."""
+    """Owner only — /fakeon opens the fake logs control panel.
+    Completely silent (no reply) to any non-owner user."""
     if update.effective_user.id != OWNER_ID:
-        return
-    target = context.bot_data.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+        return  # silent — not even a "permission denied" message
+
+    bd     = context.bot_data
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
     if not target:
         await update.message.reply_text(
-            "<b>⚠️ FAKE_LOG_CHANNEL_ID not set!</b>\n"
-            "1. Add your bot as admin to the target channel\n"
-            "2. Run <code>/getid</code> inside that channel\n"
-            "3. Set <code>FAKE_LOG_CHANNEL_ID=&lt;id&gt;</code> on Railway",
-            parse_mode="HTML"
+            "<b>⚠️ Log channel not configured!</b>\n"
+            "──────────\n"
+            "1. Add your bot as <b>admin</b> to the target logs channel\n"
+            "2. Run <code>/getid</code> <i>inside that channel</i>\n"
+            "3. Set <code>FAKE_LOG_CHANNEL_ID=&lt;id&gt;</code> on Railway → redeploy",
+            parse_mode="HTML",
         )
         return
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"@{p['username']}", callback_data=f"fakelogs_{i}")]
-        for i, p in enumerate(_FL_PERSONAS)
-    ])
+
     await update.message.reply_text(
-        "<b>🎭 Select fake sender ID:</b>",
-        parse_mode="HTML", reply_markup=kb,
-    )
-
-
-async def _fakeon_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Callback: owner picked a persona — arm the stream."""
-    q = update.callback_query
-    if q.from_user.id != OWNER_ID:
-        await q.answer("⛔ Owner only.", show_alert=True)
-        return
-    await q.answer()
-    idx     = int(q.data.split("_")[-1])
-    persona = _FL_PERSONAS[idx]
-    _fl_stop(context)
-    context.bot_data[_FL_ACTIVE]  = True
-    context.bot_data[_FL_PERSONA] = idx
-    # Store channel ID at start time so the job always uses the correct one
-    context.bot_data["fakelogs_channel_id"] = (
-        context.bot_data.get("fakelogs_channel_id") or _FL_CHANNEL_ID
-    )
-    context.job_queue.run_once(_fl_job, 2, name=_FL_JOB)
-    await q.edit_message_text(
-        f"<b>✅ Fake logs ON</b>\n"
-        f"<b>Sender ➛ @{persona['username']}</b>\n"
-        f"<b>Channel ID ➛ <code>{context.bot_data['fakelogs_channel_id']}</code></b>",
+        _fl_main_text(bd),
         parse_mode="HTML",
+        reply_markup=_fl_main_kb(bd),
     )
 
 
@@ -3689,7 +3977,195 @@ async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     context.bot_data[_FL_ACTIVE] = False
     _fl_stop(context)
-    await update.message.reply_text("<b>⛔ Fake logs OFF.</b>", parse_mode="HTML")
+    await update.message.reply_text("<b>⛔ Fake logs stopped.</b>", parse_mode="HTML")
+
+
+# ── Master callback handler ───────────────────────────────────────────────────
+
+async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles all fl_* / fltog_* / flrem_* / flspd_* callbacks.
+    Owner-only and completely silent to everyone else."""
+    q = update.callback_query
+    if q.from_user.id != OWNER_ID:
+        await q.answer("⛔ Owner only.", show_alert=True)
+        return
+    await q.answer()
+
+    bd  = context.bot_data
+    dat = q.data
+
+    # ── Main panel ────────────────────────────────────────────────────────────
+    if dat == "fl_panel":
+        await q.edit_message_text(
+            _fl_main_text(bd), parse_mode="HTML",
+            reply_markup=_fl_main_kb(bd),
+        )
+
+    elif dat == "fl_start":
+        enabled = [e for e in _fl_get_ids(bd) if e.get("enabled", True)]
+        if not enabled:
+            await q.answer(
+                "⚠️ Enable at least one ID first (📋 IDs → 🟢 ON).",
+                show_alert=True,
+            )
+            return
+        bd[_FL_ACTIVE] = True
+        _fl_stop(context)
+        context.job_queue.run_once(_fl_job, 3, name=_FL_JOB)
+        await q.edit_message_text(
+            _fl_main_text(bd), parse_mode="HTML",
+            reply_markup=_fl_main_kb(bd),
+        )
+
+    elif dat == "fl_stop":
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        await q.edit_message_text(
+            _fl_main_text(bd), parse_mode="HTML",
+            reply_markup=_fl_main_kb(bd),
+        )
+
+    elif dat == "fl_noop":
+        pass  # label-only button — intentional no-op
+
+    # ── IDs panel ─────────────────────────────────────────────────────────────
+    elif dat == "fl_ids":
+        await q.edit_message_text(
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
+        )
+
+    elif dat == "fl_addid":
+        bd["fl_state"] = "awaiting_id"
+        await q.edit_message_text(
+            "<b>➕ Add Fake Log ID</b>\n──────────\n"
+            "Send the user details in your next message:\n\n"
+            "<b>Format:</b> <code>123456789 @username</code>\n"
+            "or just    <code>@username</code>\n\n"
+            "<i>The ID / username will appear in fake hit logs as the checker.</i>\n"
+            "──────────\nSend /fakeon to cancel.",
+            parse_mode="HTML",
+        )
+
+    elif dat.startswith("fltog_"):
+        try:
+            idx = int(dat.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return
+        ids = _fl_get_ids(bd)
+        if 0 <= idx < len(ids):
+            ids[idx]["enabled"] = not ids[idx].get("enabled", True)
+        await q.edit_message_text(
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
+        )
+
+    elif dat.startswith("flrem_"):
+        try:
+            idx = int(dat.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return
+        ids = _fl_get_ids(bd)
+        if 0 <= idx < len(ids):
+            ids.pop(idx)
+        await q.edit_message_text(
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
+        )
+
+    # ── Speed panel ───────────────────────────────────────────────────────────
+    elif dat == "fl_speed":
+        await q.edit_message_text(
+            _fl_speed_text(), parse_mode="HTML",
+            reply_markup=_fl_speed_kb(bd),
+        )
+
+    elif dat.startswith("flspd_"):
+        spd = dat.split("_", 1)[1]
+        if spd in _FL_SPEEDS:
+            bd["fl_speed"] = spd
+        await q.edit_message_text(
+            _fl_speed_text(), parse_mode="HTML",
+            reply_markup=_fl_speed_kb(bd),
+        )
+
+    # ── Show / stats panel ────────────────────────────────────────────────────
+    elif dat == "fl_show":
+        await q.edit_message_text(
+            _fl_show_text(bd), parse_mode="HTML",
+            reply_markup=_fl_show_kb(),
+        )
+
+    elif dat == "fl_clrstats":
+        for e in _fl_get_ids(bd):
+            e["count"] = 0
+        await q.edit_message_text(
+            _fl_show_text(bd), parse_mode="HTML",
+            reply_markup=_fl_show_kb(),
+        )
+
+
+# ── Add-ID message capture ────────────────────────────────────────────────────
+
+async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Captures owner's next message when fl_state == 'awaiting_id'.
+    Only fires for the owner; all other users pass through silently."""
+    if update.effective_user.id != OWNER_ID:
+        return
+    bd = context.bot_data
+    if bd.get("fl_state") != "awaiting_id":
+        return  # not in add-ID mode — ignore
+
+    raw    = (update.message.text or "").strip()
+    parts  = raw.split()
+    uid_val   = None
+    uname_val = None
+
+    for p in parts:
+        if p.startswith("@"):
+            uname_val = p
+        elif p.lstrip("-").isdigit():
+            uid_val = p
+
+    if not uid_val and not uname_val:
+        await update.message.reply_text(
+            "<b>❌ Could not parse.</b>\n"
+            "Send: <code>123456789 @username</code>\n"
+            "or just <code>@username</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    display = uname_val or f"user_{uid_val}"
+    link    = (
+        f"https://t.me/{uname_val.lstrip('@')}"
+        if uname_val
+        else f"tg://user?id={uid_val}"
+    )
+    key_val = uid_val or uname_val
+
+    ids = _fl_get_ids(bd)
+    for e in ids:
+        if e["uid"] == key_val:
+            bd["fl_state"] = None
+            await update.message.reply_text(
+                f"<b>⚠️ {display} is already in the list.</b>", parse_mode="HTML"
+            )
+            return
+
+    ids.append({
+        "uid":     key_val,
+        "display": display,
+        "link":    link,
+        "enabled": True,
+        "count":   0,
+    })
+    bd["fl_state"] = None
+    await update.message.reply_text(
+        f"<b>✅ {display} added to fake logs.</b>\n"
+        f"Use /fakeon → 📋 IDs to manage.",
+        parse_mode="HTML",
+    )
 
 
 async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3812,13 +4288,33 @@ def main():
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
 
-        # owner-only secret commands
+        # ── Hour-based premium key commands (owner-only, silent to others) ──
+        app.add_handler(CommandHandler("hr",  cmd_hr))
+        app.add_handler(CommandHandler("hr1", cmd_hr))
+        app.add_handler(CommandHandler("hr2", cmd_hr))
+        app.add_handler(CommandHandler("hr3", cmd_hr))
+
+        # ── Owner-only secret commands ─────────────────────────────────────
         app.add_handler(CommandHandler("dbstatus", _dbstatus_cmd))
-        # fake_logs — registered BEFORE the generic CallbackQueryHandler
+
+        # ── Fake logs system — registered BEFORE the generic handler ───────
         app.add_handler(CommandHandler("fakeon",  _fakeon_cmd))
         app.add_handler(CommandHandler("fakeoff", _fakeoff_cmd))
         app.add_handler(CommandHandler("getid",   _getid_cmd))
-        app.add_handler(CallbackQueryHandler(_fakeon_select_cb, pattern=r"^fakelogs_\d+$"))
+
+        # Fake-logs control panel callbacks
+        app.add_handler(CallbackQueryHandler(
+            _fl_cb,
+            pattern=r"^(fl_panel|fl_start|fl_stop|fl_noop|fl_ids|fl_addid"
+                    r"|fl_speed|fl_show|fl_clrstats"
+                    r"|fltog_\d+|flrem_\d+|flspd_\w+)$",
+        ))
+
+        # Add-ID message capture — owner only, when awaiting_id state is set
+        app.add_handler(MessageHandler(
+            filters.TEXT & filters.User(OWNER_ID) & ~filters.COMMAND,
+            _fl_addid_msg,
+        ))
 
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
