@@ -74,7 +74,7 @@ SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
 BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
 BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
 MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channel
-LOGS_CHANNEL_LINK   = "https://t.me/+BXmeotREVhllODFk"             # hits log channel
+LOGS_CHANNEL_LINK   = "https://t.me/+XYnHim3rGsw0Yzdk"             # hits log channel
 
 SH_COOLDOWN    = 25
 
@@ -1400,21 +1400,30 @@ async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
                           reply_to_message_id: int = None):
     """Send a hit notification with a premium custom emoji sticker header.
 
-    Embeds emoji_id as a standalone <tg-emoji> tag on the first line so it
-    renders as a large animated custom emoji for ALL Telegram users —
-    no Telegram Premium account needed.  The caption follows on the next line.
+    Builds the full HTML, then converts it with html_to_entities() so that
+    custom_emoji MessageEntity objects are injected DIRECTLY — this guarantees
+    animated premium stickers show for ALL users regardless of whether the bot
+    account has Telegram Premium.  parse_mode="HTML" alone often falls back to
+    the plain-text fallback glyph instead of the animated emoji.
     """
     try:
         if emoji_id:
-            text = (
+            full_html = (
                 f'<b><tg-emoji emoji-id="{emoji_id}">⭐</tg-emoji></b>\n'
                 f'{caption}'
             )
         else:
-            text = caption
+            full_html = caption
+
+        # Convert HTML → (plain_text, [MessageEntity, ...]) and send with
+        # entities= so premium custom_emoji stickers always render animated.
+        plain_text, ents = html_to_entities(full_html)
+
         await bot.send_message(
-            chat_id=chat_id, text=text,
-            parse_mode=parse_mode, reply_markup=reply_markup,
+            chat_id=chat_id,
+            text=plain_text,
+            entities=ents if ents else None,
+            reply_markup=reply_markup,
             disable_web_page_preview=True,
             disable_notification=disable_notification,
             reply_to_message_id=reply_to_message_id,
