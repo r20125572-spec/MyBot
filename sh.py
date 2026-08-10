@@ -1323,6 +1323,19 @@ class MsgBuilder:
             self._ents.append(MessageEntity(type="text_link", offset=o, length=l, url=url))
         return self
 
+    def italic(self, s: str) -> "MsgBuilder":
+        if not s: return self
+        o = self._u16(self._txt); l = self._u16(s); self._txt += s
+        if l: self._ents.append(MessageEntity(type="italic", offset=o, length=l))
+        return self
+
+    def mention(self, username: str) -> "MsgBuilder":
+        """@username mention entity."""
+        if not username: return self
+        o = self._u16(self._txt); l = self._u16(username); self._txt += username
+        if l: self._ents.append(MessageEntity(type="mention", offset=o, length=l))
+        return self
+
     def nl(self, n: int = 1) -> "MsgBuilder":
         self._txt += "\n" * n
         return self
@@ -1465,6 +1478,7 @@ def _get_ud(uid: int, ctx) -> dict:
             "total_refs": 0, "total_checks": 0, "approved_checks": 0,
             "declined_checks": 0, "last_gate": "N/A", "last_card": "N/A",
             "codes_redeemed": 0, "keys_redeemed": 0, "banned": False,
+            "total_charged": 0,   # lifetime CHARGED cards
         }
     return ud_store[key]
 
@@ -1896,36 +1910,29 @@ async def _send_hit(bot, user, text: str, verdict: str,
     #   Gate ➛ Shopify • 1.99 USD
     #   💎 ORDER_PAID
     #   User ➛ @username ⭐
-    ch_link_g  = f'<a href="{MY_CHANNEL_LINK}">[❆]</a>'
-    live_eid_g = get_random_live_emoji()
+    # ── New log style ───────────────────────────────────────────────────────────
+    # HIT ➛ CHARGED 💎
+    # Gate ➛ Shopify • {price} {currency}
+    # 👁 ORDER_PAID
+    # User ➛ @username
+    # Custom emoji IDs: 6253354142526345892 = 💎 · 6220029508456548253 = 👁
+    gate_txt = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
 
-    if verdict == "CHARGED":
-        status_line_g = (f'<b>{ch_link_g} HIT CHARGED '
-                         f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji></b>')
-        gate_txt  = f"Gate ➛ Shopify • {_fmt_price(price, currency)}"
-        resp_te_g = f'<tg-emoji emoji-id="{PROG_CHARGED_EMOJI_ID}">💎</tg-emoji>'
-    elif verdict == "TDS":
-        status_line_g = (f'<b>{ch_link_g} HIT LIVE [3DS] '
-                         f'<tg-emoji emoji-id="{live_eid_g}">✅</tg-emoji></b>')
-        gate_txt  = "Gate ➛ Shopify"
-        resp_te_g = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
-    else:
-        status_line_g = (f'<b>{ch_link_g} HIT LIVE '
-                         f'<tg-emoji emoji-id="{live_eid_g}">✅</tg-emoji></b>')
-        gate_txt  = "Gate ➛ Shopify"
-        resp_te_g = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
-
-    compact_html = (
-        f"{status_line_g}\n"
-        f"<b>──────────</b>\n"
-        f"<b>{resp_te_g} Resp ➛ {resp_disp}</b>\n"
-        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {ulink} '
-        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+    uname_display = (
+        f"@{user.username}" if getattr(user, "username", None)
+        else getattr(user, "first_name", None) or "User"
     )
 
-    grp_kb = RawMarkup([[
-        _btn("Open Bot", url=BOT_PLANS_LINK,  style="primary"),
-        _btn("Channel",  url=MY_CHANNEL_LINK, style="primary"),
+    log_html = (
+        f'<b>HIT ➛ CHARGED '
+        f'<tg-emoji emoji-id="6253354142526345892">💎</tg-emoji></b>\n'
+        f'<b>{gate_txt}</b>\n'
+        f'<b><tg-emoji emoji-id="6220029508456548253">👁</tg-emoji> ORDER_PAID</b>\n'
+        f'<b>User ➛ {escape(uname_display)}</b>'
+    )
+
+    log_kb = RawMarkup([[
+        _btn("⚡ @Batxchk_bot", url=BOT_USERNAME_LINK, style="danger"),
     ]])
 
     # ── 1. DM — animation + full result card as caption ───────────────────────
@@ -1941,8 +1948,8 @@ async def _send_hit(bot, user, text: str, verdict: str,
     if HIT_LOG_GROUP_ID:
         try:
             await _send_as_media(bot, HIT_LOG_GROUP_ID, eid,
-                                 caption=compact_html, parse_mode="HTML",
-                                 reply_markup=grp_kb)
+                                 caption=log_html, parse_mode="HTML",
+                                 reply_markup=log_kb)
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
 
@@ -1952,8 +1959,8 @@ async def _send_hit(bot, user, text: str, verdict: str,
             await asyncio.sleep(0.3)
             eid_x = get_random_charged_emoji()
             await _send_as_media(bot, EXTRA_CHARGED_GROUP_ID, eid_x,
-                                 caption=compact_html, parse_mode="HTML",
-                                 reply_markup=grp_kb)
+                                 caption=log_html, parse_mode="HTML",
+                                 reply_markup=log_kb)
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
@@ -2061,6 +2068,9 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies):
             if verdict == "CHARGED":
                 sess["charged"] += 1
                 sess["charged_cards"].append(rec)
+                # Track lifetime charged count for /me
+                _ud_msh = _get_ud(user.id, context)
+                _ud_msh["total_charged"] = _ud_msh.get("total_charged", 0) + 1
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2302,6 +2312,9 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Works for ALL users regardless of Telegram Premium status.
     if verdict == "CHARGED":
         _cmd_eid = get_random_charged_emoji()
+        # Track lifetime charged count for /me
+        _ud_sh = _get_ud(user.id, context)
+        _ud_sh["total_charged"] = _ud_sh.get("total_charged", 0) + 1
     elif verdict in ("LIVE", "TDS"):
         _cmd_eid = get_random_live_emoji()
     else:
@@ -2990,13 +3003,55 @@ def get_sitechk_handlers() -> list:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /me — user's lifetime charged card stats
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_ME_CROWN_EID = "6181649972757271368"   # ⚜
+_ME_SMILE_EID = "6264538349034281099"   # 😃
+_ME_KING_EID  = "6271506980716680365"   # 👑
+
+
+async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the calling user's lifetime CHARGED card count."""
+    user    = update.effective_user
+    ud      = _get_ud(user.id, context)
+    charged = ud.get("total_charged", 0)
+
+    if getattr(user, "username", None):
+        display = f"@{user.username}"
+    else:
+        display = user.first_name or "User"
+
+    mb = MsgBuilder()
+    # Line 1: ⚜Total charge cards➳{count}
+    mb.emoji("6181649972757271368", "⚜")
+    mb.bold(f"Total charge cards➳{charged}")
+    mb.nl()
+    # Line 2: 😃{display}
+    mb.emoji("6264538349034281099", "😃")
+    mb.italic(display)
+    mb.nl()
+    # Line 3: 👑Bot➳@Batxchk_bot
+    mb.emoji("6271506980716680365", "👑")
+    mb.bold("Bot➳")
+    mb.mention("@Batxchk_bot")
+
+    text, entities = mb.build()
+    await update.message.reply_text(text, entities=entities)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # EXPORT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_sh_handler() -> CommandHandler:
     return CommandHandler("sh", cmd_sh)
 
+def get_me_handler() -> CommandHandler:
+    return CommandHandler("me", cmd_me)
+
 __all__ = [
     "get_sh_handler",
+    "get_me_handler",
     "_check_card_with_retry", "SITE_RETRIES", "SITE_TIMEOUT",
     "MSH_SESSIONS", "run_mass_batch", "create_msh_session",
     "cb_msh_result", "cb_msh_stop", "build_result_msg",
