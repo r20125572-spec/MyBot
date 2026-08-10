@@ -1945,7 +1945,7 @@ async def _send_hit(bot, user, text: str, verdict: str,
     )
 
     log_kb = RawMarkup([[
-        _btn("𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
+        _btn("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
              icon=CARD_CHK_BTN_EMOJI_ID),
     ]])
 
@@ -1958,23 +1958,30 @@ async def _send_hit(bot, user, text: str, verdict: str,
         except Exception as e:
             logging.warning(f"[HIT] DM uid={user.id}: {e}")
 
-    # ── 2. Hit-log group — animation + compact card ───────────────────────────
+    # ── 2. Hit-log group — compact card with HTML parse_mode (premium emoji) ──
     if HIT_LOG_GROUP_ID:
         try:
-            await _send_as_media(bot, HIT_LOG_GROUP_ID, eid,
-                                 caption=log_html, parse_mode="HTML",
-                                 reply_markup=log_kb)
+            await bot.send_message(
+                chat_id=HIT_LOG_GROUP_ID,
+                text=log_html,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=log_kb,
+            )
         except Exception as e:
             logging.warning(f"[HIT] log group: {e}")
 
-    # ── 3. Extra charged group — animation + compact card ────────────────────
+    # ── 3. Extra charged group — compact card with HTML parse_mode ────────────
     if verdict == "CHARGED" and EXTRA_CHARGED_GROUP_ID:
         try:
             await asyncio.sleep(0.3)
-            eid_x = get_random_charged_emoji()
-            await _send_as_media(bot, EXTRA_CHARGED_GROUP_ID, eid_x,
-                                 caption=log_html, parse_mode="HTML",
-                                 reply_markup=log_kb)
+            await bot.send_message(
+                chat_id=EXTRA_CHARGED_GROUP_ID,
+                text=log_html,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=log_kb,
+            )
         except Exception as e:
             logging.warning(f"[HIT] extra group: {e}")
 
