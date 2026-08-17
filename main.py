@@ -1658,46 +1658,26 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ban_str    = f"{E_ERRORS} {B('Banned')}" if ud_t.get("banned") else f"{E_LIVE} {B('Active')}"
 
     if premium:
-        rem    = expires - now
-        rem_d  = int(rem // 86400)
-        rem_h  = int((rem % 86400) // 3600)
-        rem_m  = int((rem % 3600) // 60)
-        exp_dt = datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')
-
-        # detect hour-based vs day-based plan
-        hr_hrs = ud_t.get("hr_hours")   # set when an /hr key is redeemed
-        if rem_d == 0:
-            # less than 1 day left — show hours + minutes
-            time_left  = f"{rem_h}h {rem_m}m"
-            plan_type  = "⏱ Hour Plan"
-        else:
-            time_left  = f"{rem_d}d {rem_h}h"
-            plan_type  = "📅 Day Plan"
-
-        hr_tag = f" <i>({hr_hrs}h key)</i>" if hr_hrs else ""
+        rem = expires - now
         expire_line = (
-            f"<b>Plan Type</b>  ➳ {plan_type}{hr_tag}\n"
-            f"<b>Expires</b>    ➳ {exp_dt}\n"
-            f"<b>Remaining</b>  ➳ <b>{time_left}</b>"
+            f"<b>Expires</b>    ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+            f"<b>Remaining</b>  ➳ <b>{int(rem//86400)}d {int((rem%86400)//3600)}h</b>"
         )
     else:
-        expire_line = (
-            f"<b>Plan Type</b>  ➳ 🆓 Trial\n"
-            f"<b>Expires</b>    ➳ Never"
-        )
+        expire_line = f"<b>Expires</b>    ➳ Trial (no expiry)"
 
     txt = (
         f"<b>{E_USER} {B('User Found')}</b>\n──────────\n"
-        f"<b>Name</b>       ➳ {ud_t.get('name','Unknown')}\n"
-        f"<b>Username</b>   ➳ {uname_d}\n"
-        f"<b>ID</b>         ➳ <code>{uid}</code>\n"
-        f"<b>Status</b>     ➳ {ban_str}\n"
+        f"<b>Name</b>      ➳ {ud_t.get('name','Unknown')}\n"
+        f"<b>Username</b>  ➳ {uname_d}\n"
+        f"<b>ID</b>        ➳ <code>{uid}</code>\n"
+        f"<b>Status</b>    ➳ {ban_str}\n"
         f"──────────\n"
-        f"<b>Plan</b>       ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
-        f"<b>Credits</b>    ➳ {ud_t.get('credits', 150)}\n"
+        f"<b>Plan</b>      ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>   ➳ {ud_t.get('credits', 150)}\n"
         f"{expire_line}\n"
         f"──────────\n"
-        f"<b>Joined</b>     ➳ {ud_t.get('joined', 'N/A')}\n"
+        f"<b>Joined</b>    ➳ {ud_t.get('joined', 'N/A')}\n"
         f"<b>Last Active</b> ➳ {ud_t.get('last_active', 'N/A')}\n"
         f"<b>Total Checks</b> ➳ {ud_t.get('total_checks', 0)}\n"
         f"<b>Total Refs</b>   ➳ {ud_t.get('total_refs', 0)}\n"
@@ -2940,7 +2920,6 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ud["pre_premium_credits"] = ud.get("credits", 150)
             ud["plan"]         = p.upper()
             ud["expires"]      = expires_ts
-            ud["hr_hours"]     = hours     # ← tagged so /find shows hour plan details
             receipt            = gen_receipt()
             ud["last_receipt"] = receipt
             await _save_premium(context.bot_data)
