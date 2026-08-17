@@ -1,22 +1,23 @@
 """
-database.py  —  Railway PostgreSQL persistence for premium user data.
-════════════════════════════════════════════════════════════════════════
+database.py  —  Railway PostgreSQL persistence for premium + user stats.
+════════════════════════════════════════════════════════════════════════════
+
 main.py needs only THREE lines:
 
     import database as db                  # top of file
     await db.attach(app)                   # end of _post_init
     await db.close_db(app.bot_data)        # inside _post_shutdown
 
-IMPORTANT: Every time a plan is granted/removed, call:
-    await db.save_all_now(context.bot_data.get("user_data", {}))
-This saves instantly instead of waiting for the 60-second flush.
+After every plan grant/remove:
+    await db.save_premium_now(context.bot_data.get("user_data", {}))
 
-How it works
-────────────
-• attach()      → connect, load saved users into bot_data, schedule 60s flush
-• save_all_now()→ immediate upsert — call after every plan grant/remove
-• close_db()    → FINAL SAVE then close pool — no data lost on redeploy
-• If DATABASE_URL absent/fails → silent no-op, JSON fallback only
+After every CHARGED card (in sh.py, both places where total_charged increments):
+    await db.save_user_stats_now(user_id, ud)
+
+Two tables:
+  • premium_users  — plan / expires / receipt (unchanged)
+  • user_stats     — total_charged, name, username, joined, last_active
+                     for EVERY user (not just premium)
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 
 logger = logging.getLogger(__name__)
@@ -31,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ── Connection pool ───────────────────────────────────────────────────────────
 _pool = None   # asyncpg.Pool | None
 
-# Try all Railway variable names in order
+
 def _find_db_url() -> str:
     for key in ("DATABASE_URL", "DATABASE_PRIVATE_URL",
                 "PGURL", "POSTGRES_URL", "POSTGRESQL_URL"):
@@ -41,11 +43,12 @@ def _find_db_url() -> str:
             return val
     return ""
 
+
 DATABASE_URL: str = _find_db_url()
 PREMIUM_FILE: str = os.environ.get("PREMIUM_FILE", "premium_users.json")
 
 # ── Schema ────────────────────────────────────────────────────────────────────
-_CREATE_TABLE = """
+_CREATE_PREMIUM_TABLE = """
 CREATE TABLE IF NOT EXISTS premium_users (
     user_id      BIGINT           PRIMARY KEY,
     plan         TEXT             NOT NULL DEFAULT 'TRIAL',
@@ -57,27 +60,37 @@ CREATE TABLE IF NOT EXISTS premium_users (
 );
 """
 
+# NEW: stores total_charged and all user stats — persists across redeploys
+_CREATE_STATS_TABLE = """
+CREATE TABLE IF NOT EXISTS user_stats (
+    user_id       BIGINT           PRIMARY KEY,
+    total_charged BIGINT           NOT NULL DEFAULT 0,
+    name          TEXT             NOT NULL DEFAULT '',
+    first_name    TEXT             NOT NULL DEFAULT '',
+    username      TEXT             NOT NULL DEFAULT '',
+    joined        TEXT             NOT NULL DEFAULT '',
+    last_active   TEXT             NOT NULL DEFAULT '',
+    total_checks  BIGINT           NOT NULL DEFAULT 0,
+    approved_checks BIGINT         NOT NULL DEFAULT 0,
+    declined_checks BIGINT         NOT NULL DEFAULT 0,
+    total_refs    BIGINT           NOT NULL DEFAULT 0,
+    updated_at    DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+"""
+
+
 def _strip_sslmode(url: str) -> str:
-    """Remove ?sslmode=... from the URL — asyncpg takes SSL via its own ssl= arg."""
-    import re
     url = re.sub(r'[?&]sslmode=[^&]*', '', url)
-    url = re.sub(r'\?$', '', url)   # remove trailing ? if now empty
+    url = re.sub(r'\?$', '', url)
     return url
 
 
 # ── Connection ────────────────────────────────────────────────────────────────
 async def _connect() -> bool:
-    """
-    Try every SSL combination until one works.
-    Railway PostgreSQL 18 behaviour varies by plan and URL type:
-      • railway.internal URL  →  no SSL needed
-      • proxy URL (rlwy.net)  →  may or may not need SSL
-    We try all modes so the bot auto-negotiates regardless.
-    """
     global _pool
     if not DATABASE_URL:
         logger.warning("[DB] ⚠️  No DATABASE_URL found — "
-                       "premium users will NOT persist across redeploys!")
+                       "user stats will NOT persist across redeploys!")
         return False
 
     import asyncpg, ssl as _ssl
@@ -88,7 +101,6 @@ async def _connect() -> bool:
 
     clean_url = _strip_sslmode(DATABASE_URL)
 
-    # Internal Railway URLs never need SSL; try only ssl=False
     if "railway.internal" in clean_url:
         ssl_candidates = [False]
     else:
@@ -106,14 +118,19 @@ async def _connect() -> bool:
                 command_timeout=30,
             )
             async with pool.acquire() as conn:
-                await conn.execute(_CREATE_TABLE)
+                await conn.execute(_CREATE_PREMIUM_TABLE)
+                await conn.execute(_CREATE_STATS_TABLE)
             _pool = pool
-            label = "none" if ssl_opt is False else ("unverified" if ssl_opt is _unverified else "verified")
+            label = "none" if ssl_opt is False else (
+                "unverified" if ssl_opt is _unverified else "verified"
+            )
             logger.info(f"[DB] ✅ PostgreSQL connected (ssl={label}) — "
-                        "premium_users table ready.")
+                        "premium_users + user_stats tables ready.")
             return True
         except Exception as exc:
-            label = "none" if ssl_opt is False else ("unverified" if ssl_opt is _unverified else "verified")
+            label = "none" if ssl_opt is False else (
+                "unverified" if ssl_opt is _unverified else "verified"
+            )
             logger.warning(f"[DB] ssl={label} attempt failed: {exc}")
             last_exc = exc
             if pool:
@@ -125,8 +142,11 @@ async def _connect() -> bool:
     return False
 
 
-# ── Read ──────────────────────────────────────────────────────────────────────
-async def _load_from_db(bot_data: dict) -> int:
+# ══════════════════════════════════════════════════════════════════════════════
+#  PREMIUM USERS  (plan / expires — unchanged logic)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _load_premium_from_db(bot_data: dict) -> int:
     if not _pool:
         return 0
     now = time.time()
@@ -136,7 +156,7 @@ async def _load_from_db(bot_data: dict) -> int:
                 "SELECT * FROM premium_users WHERE expires > $1", now
             )
     except Exception as exc:
-        logger.warning(f"[DB] load error: {exc}")
+        logger.warning(f"[DB] load premium error: {exc}")
         return 0
 
     user_data = bot_data.setdefault("user_data", {})
@@ -154,8 +174,7 @@ async def _load_from_db(bot_data: dict) -> int:
     return len(rows)
 
 
-# ── Write (shared logic) ──────────────────────────────────────────────────────
-_UPSERT_SQL = """
+_PREMIUM_UPSERT = """
     INSERT INTO premium_users
         (user_id, plan, expires, name, username, last_receipt, granted_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -168,41 +187,34 @@ _UPSERT_SQL = """
         granted_at   = EXCLUDED.granted_at
 """
 
-async def _upsert_records(records: list) -> int:
-    """Upsert a list of tuples into premium_users. Retries once on failure."""
+async def _upsert_premium_records(records: list) -> int:
     if not _pool or not records:
         return 0
     for attempt in (1, 2):
         try:
             async with _pool.acquire() as conn:
-                await conn.executemany(_UPSERT_SQL, records)
-            logger.debug(f"[DB] upsert OK: {len(records)} record(s).")
+                await conn.executemany(_PREMIUM_UPSERT, records)
             return len(records)
         except Exception as exc:
-            logger.warning(f"[DB] upsert attempt {attempt}/2 failed: {exc}")
+            logger.warning(f"[DB] premium upsert attempt {attempt}/2 failed: {exc}")
             if attempt == 1:
-                await asyncio.sleep(1)   # brief pause before retry
-    # Both attempts failed — try to reconnect and do one final attempt
-    logger.error("[DB] ❌ Both upsert attempts failed — trying reconnect...")
+                await asyncio.sleep(1)
     reconnected = await _connect()
     if reconnected:
         try:
             async with _pool.acquire() as conn:
-                await conn.executemany(_UPSERT_SQL, records)
-            logger.info(f"[DB] ✅ Upsert succeeded after reconnect: {len(records)} record(s).")
+                await conn.executemany(_PREMIUM_UPSERT, records)
             return len(records)
         except Exception as exc:
-            logger.error(f"[DB] ❌ Upsert failed even after reconnect: {exc}")
+            logger.error(f"[DB] ❌ Premium upsert failed after reconnect: {exc}")
     return 0
 
 
-# ── Public write helpers ──────────────────────────────────────────────────────
-
-async def save_all_now(user_data: dict) -> int:
+async def save_premium_now(user_data: dict) -> int:
     """
-    Immediately upsert ALL active premium users to Postgres.
-    Call this right after every plan grant or removal — don't wait for the
-    60-second flush job.
+    Immediately upsert ALL active premium users.
+    Call after every plan grant or removal.
+    (Was: save_all_now — old name still works via alias below.)
     """
     if not _pool:
         return 0
@@ -224,24 +236,24 @@ async def save_all_now(user_data: dict) -> int:
             ud.get("last_receipt", ""),
             ud.get("granted_at", now),
         ))
-    saved = await _upsert_records(records)
+    saved = await _upsert_premium_records(records)
     if saved:
-        logger.info(f"[DB] ✅ Instant save: {saved} premium user(s) written to Postgres.")
+        logger.info(f"[DB] ✅ Instant save: {saved} premium user(s) written.")
     return saved
 
 
+# Keep old name for backward compatibility with existing main.py calls
+save_all_now = save_premium_now
+
+
 async def save_user_now(user_id: int, ud: dict) -> bool:
-    """
-    Immediately upsert ONE user to Postgres.
-    Use when you know exactly which user changed.
-    """
+    """Immediately upsert ONE user's premium record."""
     if not _pool:
         return False
     now     = time.time()
     plan    = ud.get("plan", "TRIAL").upper()
     expires = ud.get("expires", 0)
     if plan == "TRIAL" or expires <= now:
-        # Plan removed — delete from DB
         try:
             async with _pool.acquire() as conn:
                 await conn.execute(
@@ -253,17 +265,192 @@ async def save_user_now(user_id: int, ud: dict) -> bool:
             logger.warning(f"[DB] delete error uid={user_id}: {exc}")
             return False
 
-    saved = await _upsert_records([(
+    saved = await _upsert_premium_records([(
         user_id, plan, expires,
         ud.get("name", ""),
         ud.get("username", ""),
         ud.get("last_receipt", ""),
         ud.get("granted_at", now),
     )])
-    if saved:
-        logger.info(f"[DB] ✅ Instant save: user {user_id} plan={plan}.")
     return saved > 0
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  USER STATS  (total_charged + activity — NEW, survives redeploys)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_STATS_UPSERT = """
+    INSERT INTO user_stats
+        (user_id, total_charged, name, first_name, username,
+         joined, last_active, total_checks, approved_checks,
+         declined_checks, total_refs, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    ON CONFLICT (user_id) DO UPDATE SET
+        total_charged   = GREATEST(user_stats.total_charged, EXCLUDED.total_charged),
+        name            = EXCLUDED.name,
+        first_name      = EXCLUDED.first_name,
+        username        = EXCLUDED.username,
+        last_active     = EXCLUDED.last_active,
+        total_checks    = GREATEST(user_stats.total_checks,   EXCLUDED.total_checks),
+        approved_checks = GREATEST(user_stats.approved_checks,EXCLUDED.approved_checks),
+        declined_checks = GREATEST(user_stats.declined_checks,EXCLUDED.declined_checks),
+        total_refs      = GREATEST(user_stats.total_refs,     EXCLUDED.total_refs),
+        updated_at      = EXCLUDED.updated_at
+"""
+# Note: GREATEST() ensures we never overwrite a higher value with a lower one —
+# protects against race conditions during mass-check sessions.
+
+
+async def _upsert_stats_records(records: list) -> int:
+    if not _pool or not records:
+        return 0
+    for attempt in (1, 2):
+        try:
+            async with _pool.acquire() as conn:
+                await conn.executemany(_STATS_UPSERT, records)
+            return len(records)
+        except Exception as exc:
+            logger.warning(f"[DB] stats upsert attempt {attempt}/2 failed: {exc}")
+            if attempt == 1:
+                await asyncio.sleep(1)
+    reconnected = await _connect()
+    if reconnected:
+        try:
+            async with _pool.acquire() as conn:
+                await conn.executemany(_STATS_UPSERT, records)
+            return len(records)
+        except Exception as exc:
+            logger.error(f"[DB] ❌ Stats upsert failed after reconnect: {exc}")
+    return 0
+
+
+def _make_stats_record(uid_int: int, ud: dict) -> tuple:
+    now = time.time()
+    return (
+        uid_int,
+        ud.get("total_charged", 0),
+        ud.get("name", "") or ud.get("first_name", ""),
+        ud.get("first_name", ""),
+        ud.get("username", ""),
+        ud.get("joined", ""),
+        ud.get("last_active", ""),
+        ud.get("total_checks", 0),
+        ud.get("approved_checks", 0),
+        ud.get("declined_checks", 0),
+        ud.get("total_refs", 0),
+        now,
+    )
+
+
+async def save_user_stats_now(user_id: int, ud: dict) -> bool:
+    """
+    Immediately save ONE user's stats (total_charged, checks, etc.) to Postgres.
+
+    Call this in sh.py right after every CHARGED card:
+        await db.save_user_stats_now(user.id, ud)
+
+    Works even for TRIAL users — this table is NOT gated on premium status.
+    """
+    if not _pool:
+        return False
+    saved = await _upsert_stats_records([_make_stats_record(user_id, ud)])
+    if saved:
+        logger.debug(f"[DB] Stats saved: user {user_id} "
+                     f"total_charged={ud.get('total_charged', 0)}")
+    return saved > 0
+
+
+async def save_all_stats_now(user_data: dict) -> int:
+    """
+    Immediately upsert stats for ALL users that have at least one charged card.
+    Called by the periodic flush job and on shutdown.
+    """
+    if not _pool:
+        return 0
+    records = []
+    for uid_str, ud in user_data.items():
+        if ud.get("total_charged", 0) <= 0:
+            continue
+        try:
+            uid = int(uid_str)
+        except ValueError:
+            continue
+        records.append(_make_stats_record(uid, ud))
+    saved = await _upsert_stats_records(records)
+    if saved:
+        logger.info(f"[DB] ✅ Stats flush: {saved} user(s) written.")
+    return saved
+
+
+async def _load_stats_from_db(bot_data: dict) -> int:
+    """
+    Load user_stats rows into bot_data["user_data"].
+    Called on startup — restores total_charged so /me and /status work immediately.
+    """
+    if not _pool:
+        return 0
+    try:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM user_stats")
+    except Exception as exc:
+        logger.warning(f"[DB] load stats error: {exc}")
+        return 0
+
+    user_data = bot_data.setdefault("user_data", {})
+    for row in rows:
+        uid_str = str(row["user_id"])
+        ud      = user_data.setdefault(uid_str, {})
+
+        # Use GREATEST so we never downgrade an in-memory value
+        # (shouldn't happen on startup, but be safe)
+        db_charged = row["total_charged"] or 0
+        mem_charged = ud.get("total_charged", 0)
+        ud["total_charged"] = max(db_charged, mem_charged)
+
+        # Restore other stats only if not already set in memory
+        if not ud.get("name")        and row["name"]:
+            ud["name"]        = row["name"]
+        if not ud.get("first_name")  and row["first_name"]:
+            ud["first_name"]  = row["first_name"]
+        if not ud.get("username")    and row["username"]:
+            ud["username"]    = row["username"]
+        if not ud.get("joined")      and row["joined"]:
+            ud["joined"]      = row["joined"]
+        if not ud.get("last_active") and row["last_active"]:
+            ud["last_active"] = row["last_active"]
+
+        db_checks = row["total_checks"] or 0
+        ud["total_checks"] = max(ud.get("total_checks", 0), db_checks)
+
+        db_approved = row["approved_checks"] or 0
+        ud["approved_checks"] = max(ud.get("approved_checks", 0), db_approved)
+
+        db_declined = row["declined_checks"] or 0
+        ud["declined_checks"] = max(ud.get("declined_checks", 0), db_declined)
+
+        db_refs = row["total_refs"] or 0
+        ud["total_refs"] = max(ud.get("total_refs", 0), db_refs)
+
+    logger.info(f"[DB] ✅ Restored stats for {len(rows)} user(s) from PostgreSQL "
+                f"(total_charged, checks, etc. safe across redeploys).")
+    return len(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PTB PERIODIC FLUSH  (every 60 s — saves BOTH tables)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _flush_job(context) -> None:
+    user_data = context.bot_data.get("user_data", {})
+    # Save premium plans
+    await save_premium_now(user_data)
+    # Save user stats (total_charged, checks, etc.)
+    await save_all_stats_now(user_data)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  JSON FALLBACK (unchanged)
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _read_json() -> dict:
     if not os.path.exists(PREMIUM_FILE):
@@ -276,23 +463,25 @@ def _read_json() -> dict:
         return {}
 
 
-# ── PTB periodic flush ────────────────────────────────────────────────────────
-async def _flush_job(context) -> None:
-    user_data = context.bot_data.get("user_data", {})
-    await save_all_now(user_data)
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  PUBLIC API
+# ══════════════════════════════════════════════════════════════════════════════
 
 async def attach(app) -> None:
-    """Call once at the end of _post_init."""
+    """
+    Call once at the end of _post_init.
+    Connects to Postgres, restores BOTH premium plans AND user stats,
+    then schedules the 60-second periodic flush.
+    """
     ok = await _connect()
     if not ok:
         return
 
-    restored = await _load_from_db(app.bot_data)
+    # Restore premium plans first
+    restored_premium = await _load_premium_from_db(app.bot_data)
 
-    if restored == 0:
+    # Seed from JSON if DB was empty (first-ever deploy)
+    if restored_premium == 0:
         saved_json = _read_json()
         if saved_json:
             now       = time.time()
@@ -311,29 +500,35 @@ async def attach(app) -> None:
                     "last_receipt": pdata.get("last_receipt", ""),
                     "granted_at":   pdata.get("granted_at", now),
                 })
-            seeded = await save_all_now(app.bot_data.get("user_data", {}))
+            seeded = await save_premium_now(app.bot_data.get("user_data", {}))
             if seeded:
-                logger.info(f"[DB] Seeded {seeded} user(s) from JSON → Postgres.")
+                logger.info(f"[DB] Seeded {seeded} premium user(s) from JSON → Postgres.")
 
-    # Schedule 60-second periodic flush
+    # ★ NEW: Restore user stats (total_charged etc.) — critical for /me and /status
+    await _load_stats_from_db(app.bot_data)
+
+    # Schedule 60-second periodic flush for both tables
     if app.job_queue:
         app.job_queue.run_repeating(
             _flush_job, interval=60, first=30, name="db_premium_flush"
         )
-        logger.info("[DB] Periodic flush scheduled (every 60 s).")
+        logger.info("[DB] Periodic flush scheduled (every 60 s) — both tables.")
 
 
 async def close_db(bot_data: dict | None = None) -> None:
     """
-    Call inside _post_shutdown — ALWAYS pass app.bot_data.
-    Does a FINAL SAVE before closing so no data is lost on redeploy.
+    Call inside _post_shutdown.
+    Does a FINAL SAVE of both tables before closing — no data lost on redeploy.
     """
     global _pool
     if not _pool:
         return
     if bot_data:
-        saved = await save_all_now(bot_data.get("user_data", {}))
-        logger.info(f"[DB] 🔒 Final save on shutdown: {saved} premium user(s) saved.")
+        user_data = bot_data.get("user_data", {})
+        saved_p = await save_premium_now(user_data)
+        saved_s = await save_all_stats_now(user_data)
+        logger.info(f"[DB] 🔒 Final save on shutdown: "
+                    f"{saved_p} premium, {saved_s} stats user(s) saved.")
     else:
         logger.warning("[DB] close_db called without bot_data — skipping final save.")
     try:
@@ -354,4 +549,4 @@ def status_text() -> str:
         return "❌ No DATABASE_URL set — data lost on redeploy!"
     if not _pool:
         return "❌ DATABASE_URL set but connection failed — check Railway logs."
-    return "✅ PostgreSQL connected — premium users are safe."
+    return "✅ PostgreSQL connected — premium plans + user stats are safe across redeploys."
