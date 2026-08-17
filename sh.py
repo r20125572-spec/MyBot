@@ -35,6 +35,7 @@ EXPORTS:
 from __future__ import annotations
 
 import asyncio
+import database as db
 import json as _json
 import logging
 import random
@@ -2095,6 +2096,7 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies, 
                     _ud_store = bot_data.setdefault("user_data", {})
                     _ud_msh   = _ud_store.setdefault(str(user.id), {})
                     _ud_msh["total_charged"] = _ud_msh.get("total_charged", 0) + 1
+                    asyncio.create_task(db.save_user_stats_now(user.id, _ud_msh))  # persist total_charged
                 _dm_html = build_result_msg(card_fmt, resp, verdict, bin_data,
                                             price, currency, elapsed, user, plan)
                 asyncio.create_task(_send_hit(
@@ -2339,6 +2341,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Track lifetime charged count for /me
         _ud_sh = _get_ud(user.id, context)
         _ud_sh["total_charged"] = _ud_sh.get("total_charged", 0) + 1
+        asyncio.create_task(db.save_user_stats_now(user.id, _ud_sh))  # persist total_charged
     elif verdict in ("LIVE", "TDS"):
         _cmd_eid = get_random_live_emoji()
     else:
