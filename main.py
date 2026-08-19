@@ -3876,7 +3876,9 @@ def main():
         app.add_handler(CommandHandler("dbstatus", _dbstatus_cmd))
 
         # ── Fake logs system (all handlers registered by fake_logs.py) ──
-        fake_logs.register(app)
+        # Pass the main configuration explicitly so owner-only commands use
+        # exactly the same owner identity as the rest of this bot.
+        fake_logs.register(app, owner_id=OWNER_ID)
 
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
