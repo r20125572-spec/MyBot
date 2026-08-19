@@ -3742,6 +3742,52 @@ async def _post_init(app: Application) -> None:
         logger.warning(f"[PROBE] Could not start background prober: {exc}")
 
 
+async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner-only PostgreSQL status and persistence diagnostic."""
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    now = time.time()
+    status = db.status_text()
+    connected = db.is_connected()
+    user_data = context.bot_data.get("user_data", {})
+    premium = [
+        ud for ud in user_data.values()
+        if ud.get("plan", "TRIAL").upper() != "TRIAL"
+        and ud.get("expires", 0) > now
+    ]
+    lines = [
+        "<b>🗄 Database Status</b>",
+        "──────────",
+        f"<b>DB ➛</b> {status}",
+        f"<b>Premium users in memory ➛</b> <code>{len(premium)}</code>",
+    ]
+
+    if connected and premium:
+        try:
+            saved = await db.save_all_now(user_data)
+            lines.append(
+                f"<b>Just saved to Postgres ➛</b> <code>{saved}</code> user(s) ✅"
+            )
+        except Exception as exc:
+            logger.exception("dbstatus save failed")
+            lines.append(
+                f"<b>Save error ➛</b> "
+                f"<code>{escape(str(exc))[:300]}</code>"
+            )
+
+    if not connected:
+        lines += [
+            "",
+            "<b>Fix:</b>",
+            "1. Create or attach a PostgreSQL database.",
+            "2. Add the <code>DATABASE_URL</code> reference to this service.",
+            "3. Restart the bot and run /dbstatus again.",
+        ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FAKE LOGS — handled entirely by fake_logs.py
 # Register with: fake_logs.register(app)  [done in main()]
