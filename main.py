@@ -9,8 +9,12 @@ import fcntl
 import json
 import hmac
 import hashlib
+import importlib
+import importlib.util
+from importlib.machinery import SourceFileLoader
 from io import BytesIO
 from html import escape
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from telegram import Update, TelegramObject, MessageEntity, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
@@ -24,7 +28,44 @@ from telegram.request import HTTPXRequest
 import aiohttp as _aiohttp
 
 import database as db   # PostgreSQL premium persistence (Railway)
-import fake_logs         # owner-only advanced fake logs system
+
+
+def _load_fake_logs_module():
+    """Load fake_logs beside main.py, even when the process cwd is different.
+
+    Some deployment panels rename uploaded text attachments to .txt. Supporting
+    that filename here prevents a misleading ModuleNotFoundError while keeping
+    the normal import path fast.
+    """
+    try:
+        return importlib.import_module("fake_logs")
+    except ModuleNotFoundError as exc:
+        if exc.name != "fake_logs":
+            raise
+
+    app_dir = Path(__file__).resolve().parent
+    candidates = [
+        app_dir / "fake_logs.py",
+        app_dir / "fake_logs.txt",
+        *sorted(app_dir.glob("fake_logs_*.txt")),
+    ]
+    module_path = next((path for path in candidates if path.is_file()), None)
+    if module_path is None:
+        raise ModuleNotFoundError(
+            "No module named 'fake_logs'. Put fake_logs.py in the same folder "
+            "as main.py and restart the bot."
+        )
+
+    loader = SourceFileLoader("fake_logs", str(module_path))
+    spec = importlib.util.spec_from_loader("fake_logs", loader)
+    if spec is None:
+        raise ImportError(f"Could not load fake logs module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+fake_logs = _load_fake_logs_module()
 
 from mst import get_bin_handler as get_bin_lookup_handler
 
