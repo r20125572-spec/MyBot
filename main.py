@@ -3697,7 +3697,34 @@ async def _post_init(app: Application) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 from sh import LOGS_CHANNEL_LINK as _FL_CH_LINK   # [❆] in fake logs links back to the hits channel
 
-_FL_CHANNEL_ID = int(os.environ.get("FAKE_LOG_CHANNEL_ID", "0"))
+_FL_DEFAULT_CHANNEL_ID = -1004361062205
+_FL_DEFAULT_FAKE_UID = "8283904645"
+
+
+def _fl_read_channel_id() -> int:
+    """Read the Railway target and repair the common missing-minus typo."""
+    raw = os.environ.get("FAKE_LOG_CHANNEL_ID", "").strip()
+    if not raw:
+        return _FL_DEFAULT_CHANNEL_ID
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.error(
+            "[FAKELOGS] FAKE_LOG_CHANNEL_ID must be numeric; using %s.",
+            _FL_DEFAULT_CHANNEL_ID,
+        )
+        return _FL_DEFAULT_CHANNEL_ID
+    # Railway screenshots often show 100... without the required leading '-'.
+    if value == abs(_FL_DEFAULT_CHANNEL_ID):
+        logger.warning(
+            "[FAKELOGS] Normalizing FAKE_LOG_CHANNEL_ID=%s to %s.",
+            raw, _FL_DEFAULT_CHANNEL_ID,
+        )
+        return _FL_DEFAULT_CHANNEL_ID
+    return value
+
+
+_FL_CHANNEL_ID = _fl_read_channel_id()
 _FL_JOB        = "fake_hit_stream"
 _FL_ACTIVE     = "fakelogs_active"
 
@@ -3737,7 +3764,18 @@ def _fl_log_msg(id_entry: dict) -> str:
 
 
 def _fl_get_ids(bd: dict) -> list:
-    return bd.setdefault("fl_ids", [])
+    ids = bd.setdefault("fl_ids", [])
+    # The owner supplied this ID as the identity to display in fake logs.
+    # Seed it once so Start Logs works immediately after a fresh deployment.
+    if not ids:
+        ids.append({
+            "uid": _FL_DEFAULT_FAKE_UID,
+            "display": f"user_{_FL_DEFAULT_FAKE_UID}",
+            "link": f"tg://user?id={_FL_DEFAULT_FAKE_UID}",
+            "enabled": True,
+            "count": 0,
+        })
+    return ids
 
 
 def _fl_get_speed(bd: dict) -> str:
@@ -3919,7 +3957,7 @@ def _fl_show_kb() -> InlineKeyboardMarkup:
 async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner only — /fakeon opens the fake logs control panel.
     Completely silent (no reply) to any non-owner user."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return  # silent — not even a "permission denied" message
 
     bd     = context.bot_data
@@ -3944,7 +3982,7 @@ async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner only — /fakeoff stops the stream."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     context.bot_data[_FL_ACTIVE] = False
     _fl_stop(context)
@@ -3957,7 +3995,7 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles all fl_* / fltog_* / flrem_* / flspd_* callbacks.
     Owner-only and completely silent to everyone else."""
     q = update.callback_query
-    if q.from_user.id != OWNER_ID:
+    if not q.from_user or q.from_user.id != OWNER_ID:
         await q.answer("⛔ Owner only.", show_alert=True)
         return
     await q.answer()
@@ -4081,7 +4119,7 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Captures owner's next message when fl_state == 'awaiting_id'.
     Only fires for the owner; all other users pass through silently."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     bd = context.bot_data
     if bd.get("fl_state") != "awaiting_id":
@@ -4174,7 +4212,7 @@ async def _getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Owner only — reply with the numeric chat ID of the current chat.
     Run this inside the target channel to discover its ID, then set
     FAKE_LOG_CHANNEL_ID=<id> on Railway and restart."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     chat = update.effective_chat
     cid  = chat.id
@@ -4186,6 +4224,21 @@ async def _getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Set <code>FAKE_LOG_CHANNEL_ID={cid}</code> on Railway to make this permanent.",
         parse_mode="HTML",
     )
+
+
+async def _myid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Diagnostic helper: show the caller's ID so OWNER_ID can be corrected."""
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    await update.message.reply_text(
+        "<b>Your Telegram user ID</b>\n"
+        f"<code>{user.id}</code>\n\n"
+        "Set this exact number as Railway variable <code>OWNER_ID</code>, "
+        "then redeploy. Only that account can use /fakeon and /getid.",
+        parse_mode="HTML",
+    )
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -4269,6 +4322,7 @@ def main():
         app.add_handler(CommandHandler("dbstatus", _dbstatus_cmd))
 
         # ── Fake logs system — registered BEFORE the generic handler ───────
+        app.add_handler(CommandHandler("myid",    _myid_cmd))
         app.add_handler(CommandHandler("fakeon",  _fakeon_cmd))
         app.add_handler(CommandHandler("fakeoff", _fakeoff_cmd))
         app.add_handler(CommandHandler("getid",   _getid_cmd))
@@ -4290,6 +4344,10 @@ def main():
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_error_handler(error_handler)
 
+        logger.info(
+            "[FAKELOGS] target=%s owner=%s default_display_id=%s",
+            _FL_CHANNEL_ID, OWNER_ID, _FL_DEFAULT_FAKE_UID,
+        )
         logger.info(f"Batamanchk Bot {VERSION} starting...")
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,
