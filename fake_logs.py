@@ -107,23 +107,60 @@ _PRICES = [
 # BOT-DATA HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _read_env_target_id() -> int | None:
-    """Read the optional FAKE_LOG_CHANNEL_ID once at startup.
+def _read_env_target() -> int | str | None:
+    """Read the optional fake-log target once at startup.
 
     A configured environment target is added automatically, so deploying with
-    FAKE_LOG_CHANNEL_ID=-100... works without any owner-panel setup.
+    FAKE_LOG_CHANNEL_ID=-100... or @publicchannel works without panel setup.
     """
-    raw = os.environ.get("FAKE_LOG_CHANNEL_ID", "").strip()
+    raw = (
+        os.environ.get("FAKE_LOG_CHANNEL_ID", "").strip()
+        or os.environ.get("FAKE_LOG_CHANNEL", "").strip()
+    )
     if not raw:
         return None
     try:
         return int(raw)
     except ValueError:
-        logger.error("[FAKELOGS] FAKE_LOG_CHANNEL_ID must be a numeric chat ID; value ignored.")
-        return None
+        if raw.startswith("@") and len(raw) > 1:
+            return raw
+        if raw.startswith("https://t.me/") and not raw.startswith("https://t.me/+"):
+            username = raw.removeprefix("https://t.me/").split("/", 1)[0]
+            if username:
+                return f"@{username.lstrip('@')}"
+        logger.error(
+            "[FAKELOGS] Invalid fake-log target %r. Use a negative Telegram "
+            "channel/group ID or a public @username.", raw,
+        )
+        return raw
 
 
-_ENV_TARGET_ID = _read_env_target_id()
+_ENV_TARGET_ID = _read_env_target()
+
+
+def _target_issue(chat_id: object) -> str:
+    """Return an actionable configuration error, or an empty string."""
+    if isinstance(chat_id, int):
+        if chat_id > 0:
+            return (
+                f"{chat_id} is a positive user-style ID, not a channel/group ID. "
+                "Use the target chat's negative ID (usually -100...) or forward "
+                "a message from that chat to /fakeon → Add Target."
+            )
+        return ""
+    if isinstance(chat_id, str):
+        if chat_id.startswith("@") and len(chat_id) > 1:
+            return ""
+        if chat_id.startswith("https://t.me/+"):
+            return (
+                "Invite links cannot be used as send targets. Forward any message "
+                "from the private channel/group to /fakeon → Add Target."
+            )
+        return (
+            "Target must be a negative numeric channel/group ID or a public "
+            "@channelusername."
+        )
+    return "Target is empty or invalid."
 
 
 def _targets(bd: dict) -> list:
@@ -143,7 +180,7 @@ def _sync_environment_target(bd: dict) -> None:
     ]
     existing_ids = {target.get("id") for target in targets}
     for chat_id, title in candidates:
-        if isinstance(chat_id, int) and chat_id not in existing_ids:
+        if chat_id is not None and chat_id not in existing_ids:
             targets.append({
                 "id": chat_id,
                 "title": title,
@@ -279,6 +316,11 @@ async def _send_with_retry(
 ) -> bool:
     """Send once per target, retrying temporary Telegram/API failures."""
     target_id = target["id"]
+    issue = _target_issue(target_id)
+    if issue:
+        _record_delivery(ctx.bot_data, target, succeeded=False, error=issue)
+        logger.error("[FAKELOGS] Target %s rejected: %s", target_id, issue)
+        return False
     last_error = ""
     for attempt in range(1, _MAX_SEND_ATTEMPTS + 1):
         try:
@@ -431,9 +473,11 @@ def _targets_text(bd: dict) -> str:
         source = " <i>(env)</i>" if t.get("source") == "environment" else ""
         failures = t.get("failed", 0)
         health = f" • {failures} error{'s' if failures != 1 else ''}" if failures else ""
+        issue = _target_issue(t.get("id"))
+        warning = f"\n   ⚠️ {html.escape(issue)}" if issue else ""
         lines.append(
             f"{icon} {html.escape(str(t.get('title', 'Unknown')))}{source}"
-            f"  <code>{t['id']}</code>{health}"
+            f"  <code>{html.escape(str(t.get('id', '')))}</code>{health}{warning}"
         )
     lines.append("──────────────────")
     return "\n".join(lines)
@@ -633,6 +677,48 @@ async def _cmd_fakeoff(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _clear(ctx.bot_data)
     await upd.message.reply_text("<b>⛔ Fake logs stopped.</b>", parse_mode="HTML")
 
+
+async def _cmd_getid(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Save the current channel/group as a fake-log target for the owner."""
+    if upd.effective_user.id != OWNER_ID:
+        return
+
+    chat = upd.effective_chat
+    if chat.type == "private":
+        await upd.message.reply_text(
+            "<b>⚠️ Run /getid inside the target channel or group.</b>\n"
+            "Or open /fakeon in DM and use <b>➕ Add Target</b> to forward a post.",
+            parse_mode="HTML",
+        )
+        return
+
+    bd = ctx.bot_data
+    _sync_environment_target(bd)
+    targets = _targets(bd)
+    if any(target.get("id") == chat.id for target in targets):
+        await upd.message.reply_text(
+            f"<b>✅ This chat is already a fake-log target.</b>\n"
+            f"<code>{chat.id}</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    title = chat.title or chat.username or str(chat.id)
+    targets.append({
+        "id": chat.id,
+        "title": title,
+        "enabled": True,
+        "source": "getid",
+    })
+    await upd.message.reply_text(
+        f"<b>✅ Fake-log target saved.</b>\n"
+        f"<b>Title ➛</b> {html.escape(title)}\n"
+        f"<b>ID ➛</b> <code>{chat.id}</code>\n\n"
+        f"Open /fakeon in DM, then tap <b>🧪 Test Send</b>.",
+        parse_mode="HTML",
+    )
+
+
 async def _cmd_fakestatus(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner-only delivery diagnostics, including the latest Telegram error."""
     if upd.effective_user.id != OWNER_ID:
@@ -665,7 +751,15 @@ async def _cb(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif dat == "fl_start":
         _sync_environment_target(bd)
-        if not [t for t in _targets(bd) if t.get("enabled", True)]:
+        active_targets = [t for t in _targets(bd) if t.get("enabled", True)]
+        invalid_target = next(
+            (_target_issue(t.get("id")) for t in active_targets if _target_issue(t.get("id"))),
+            "",
+        )
+        if invalid_target:
+            await q.answer(f"⚠️ {invalid_target}", show_alert=True)
+            return
+        if not active_targets:
             await q.answer("⚠️ Add at least one target channel/group first.", show_alert=True)
             return
         if not [e for e in _ids(bd) if e.get("enabled", True)]:
@@ -837,6 +931,13 @@ async def _cb(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         active_targets = [target for target in _targets(bd) if target.get("enabled", True)]
         if not active_targets:
             await q.answer("⚠️ Add or enable a target first.", show_alert=True)
+            return
+        invalid_target = next(
+            (_target_issue(t.get("id")) for t in active_targets if _target_issue(t.get("id"))),
+            "",
+        )
+        if invalid_target:
+            await q.answer(f"⚠️ {invalid_target}", show_alert=True)
             return
         test_text = (
             "<b>🧪 Fake-log delivery test</b>\n"
@@ -1112,6 +1213,7 @@ def register(app: Application) -> None:
     """Call this inside main() before app.run_polling()."""
     app.add_handler(CommandHandler("fakeon",  _cmd_fakeon))
     app.add_handler(CommandHandler("fakeoff", _cmd_fakeoff))
+    app.add_handler(CommandHandler("getid", _cmd_getid))
     app.add_handler(CommandHandler("fakestatus", _cmd_fakestatus))
 
     app.add_handler(CallbackQueryHandler(
