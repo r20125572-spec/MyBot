@@ -53,6 +53,8 @@ logger = logging.getLogger(__name__)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# This value is set again by register(..., owner_id=...) from main.py.
+# Reading the environment here remains a useful fallback for simple bots.
 OWNER_ID        = int(os.environ.get("OWNER_ID", "0"))
 _DEFAULT_BOT_URL = "https://t.me/Batxchk_bot"
 _MAX_SEND_ATTEMPTS = 3
@@ -101,6 +103,12 @@ _PRICES = [
     "1.99", "2.99", "3.99", "4.99", "5.00",
     "7.99", "9.99", "12.99", "14.99", "19.99",
 ]
+
+
+def _is_owner(update: Update) -> bool:
+    """Safely check command ownership, including channel-originated updates."""
+    user = update.effective_user
+    return bool(user and OWNER_ID > 0 and user.id == OWNER_ID)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -659,8 +667,22 @@ def _link_edit_kb(idx: int) -> InlineKeyboardMarkup:
 # COMMAND HANDLERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+async def _cmd_myid(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the caller's Telegram ID for correcting OWNER_ID."""
+    user = upd.effective_user
+    if not user or not upd.message:
+        return
+    await upd.message.reply_text(
+        "<b>Your Telegram ID</b>\n"
+        f"<code>{user.id}</code>\n\n"
+        "Set this exact number as Railway variable <code>OWNER_ID</code>, "
+        "then restart the bot. Only that account can use /fakeon and /getid.",
+        parse_mode="HTML",
+    )
+
+
 async def _cmd_fakeon(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if upd.effective_user.id != OWNER_ID:
+    if not _is_owner(upd):
         return
     bd = ctx.bot_data
     _sync_environment_target(bd)
@@ -670,7 +692,7 @@ async def _cmd_fakeon(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def _cmd_fakeoff(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if upd.effective_user.id != OWNER_ID:
+    if not _is_owner(upd):
         return
     ctx.bot_data[_K_ACTIVE] = False
     _stop_job(ctx)
@@ -680,10 +702,17 @@ async def _cmd_fakeoff(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _cmd_getid(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Save the current channel/group as a fake-log target for the owner."""
-    if upd.effective_user.id != OWNER_ID:
+    chat = upd.effective_chat
+    user = upd.effective_user
+
+    # Normal user-sent commands must come from the configured owner. Telegram
+    # channel posts may not contain a user at all (anonymous/channel identity);
+    # allow that specific case so /getid works inside the target channel.
+    if user and not _is_owner(upd):
+        return
+    if user is None and (chat is None or chat.type != "channel"):
         return
 
-    chat = upd.effective_chat
     if chat.type == "private":
         await upd.message.reply_text(
             "<b>⚠️ Run /getid inside the target channel or group.</b>\n"
@@ -721,7 +750,7 @@ async def _cmd_getid(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _cmd_fakestatus(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner-only delivery diagnostics, including the latest Telegram error."""
-    if upd.effective_user.id != OWNER_ID:
+    if not _is_owner(upd):
         return
     _sync_environment_target(ctx.bot_data)
     await upd.message.reply_text(
@@ -735,7 +764,7 @@ async def _cmd_fakestatus(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _cb(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = upd.callback_query
-    if q.from_user.id != OWNER_ID:
+    if OWNER_ID <= 0 or q.from_user.id != OWNER_ID:
         await q.answer("⛔ Owner only.", show_alert=True)
         return
     await q.answer()
@@ -1023,7 +1052,7 @@ async def _cb(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def _msg(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if upd.effective_user.id != OWNER_ID:
+    if not _is_owner(upd):
         return
 
     bd    = ctx.bot_data
@@ -1209,8 +1238,20 @@ async def _msg(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # REGISTER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def register(app: Application) -> None:
-    """Call this inside main() before app.run_polling()."""
+def register(app: Application, owner_id: int | None = None) -> None:
+    """Register handlers, using the same owner ID as the main bot."""
+    global OWNER_ID
+    if owner_id is not None:
+        OWNER_ID = int(owner_id)
+    if OWNER_ID <= 0:
+        logger.error(
+            "[FAKELOGS] OWNER_ID is missing or invalid. /fakeon and /getid "
+            "will remain unavailable until OWNER_ID is set and the bot restarts."
+        )
+    else:
+        logger.info("[FAKELOGS] Owner command handlers registered for owner ID %s.", OWNER_ID)
+
+    app.add_handler(CommandHandler("myid",    _cmd_myid))
     app.add_handler(CommandHandler("fakeon",  _cmd_fakeon))
     app.add_handler(CommandHandler("fakeoff", _cmd_fakeoff))
     app.add_handler(CommandHandler("getid", _cmd_getid))
