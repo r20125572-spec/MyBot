@@ -50,7 +50,25 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION  (read from environment — same vars as main.py)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OWNER_ID        = int(os.environ.get("OWNER_ID", "0"))
-_ENV_CHANNEL_ID = int(os.environ.get("FAKE_LOG_CHANNEL_ID", "0"))   # optional env default
+_DEFAULT_OWNER_FAKE_UID = "8283904645"
+_DEFAULT_CHANNEL_ID = -1004361062205
+
+
+def _read_channel_id() -> int:
+    raw = os.environ.get("FAKE_LOG_CHANNEL_ID", "").strip()
+    if not raw:
+        return _DEFAULT_CHANNEL_ID
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.error("[FAKELOGS] Invalid FAKE_LOG_CHANNEL_ID; using %s.", _DEFAULT_CHANNEL_ID)
+        return _DEFAULT_CHANNEL_ID
+    if value == abs(_DEFAULT_CHANNEL_ID):
+        return _DEFAULT_CHANNEL_ID
+    return value
+
+
+_ENV_CHANNEL_ID = _read_channel_id()
 _DEFAULT_BOT_URL = "https://t.me/Batxchk_bot"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -112,7 +130,16 @@ _PRICES = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _get_ids(bd: dict) -> list:
-    return bd.setdefault(_K_IDS, [])
+    ids = bd.setdefault(_K_IDS, [])
+    if not ids:
+        ids.append({
+            "uid": _DEFAULT_OWNER_FAKE_UID,
+            "display": f"user_{_DEFAULT_OWNER_FAKE_UID}",
+            "link": f"tg://user?id={_DEFAULT_OWNER_FAKE_UID}",
+            "enabled": True,
+            "count": 0,
+        })
+    return ids
 
 
 def _get_speed(bd: dict) -> str:
@@ -466,7 +493,7 @@ def _channel_kb() -> InlineKeyboardMarkup:
 
 async def _cmd_fakeon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/fakeon — open the control panel. Owner-only, silent to everyone else."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     bd = context.bot_data
     _clear_state(bd)    # cancel any pending input waiting
@@ -479,7 +506,7 @@ async def _cmd_fakeon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def _cmd_fakeoff(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/fakeoff — stop the stream. Owner-only, silent to everyone else."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     context.bot_data[_K_ACTIVE] = False
     _stop_job(context)
@@ -491,7 +518,7 @@ async def _cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """/getid — save current chat ID as the fake-log channel.
     Can be run inside any channel (bot must be admin) or from DM.
     From DM it shows the owner's own user ID — use the panel instead."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     chat = update.effective_chat
     cid  = chat.id
@@ -508,13 +535,26 @@ async def _cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def _cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    await update.message.reply_text(
+        "<b>Your Telegram user ID</b>\n"
+        f"<code>{user.id}</code>\n\n"
+        "Set this exact number as Railway variable <code>OWNER_ID</code>, "
+        "then redeploy. Only that account can use /fakeon and /getid.",
+        parse_mode="HTML",
+    )
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MASTER CALLBACK HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def _cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
-    if q.from_user.id != OWNER_ID:
+    if not q.from_user or q.from_user.id != OWNER_ID:
         await q.answer("⛔ Owner only.", show_alert=True)
         return
     await q.answer()
@@ -752,7 +792,7 @@ async def _cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _msg_capture(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Captures the owner's next plain-text message for any active input state.
     Completely silent and passes through if no state is active."""
-    if update.effective_user.id != OWNER_ID:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
 
     bd    = context.bot_data
@@ -897,6 +937,7 @@ def register(app: Application) -> None:
     and the message-capture handler fire correctly.
     """
     # ── Commands ──────────────────────────────────────────────────────────────
+    app.add_handler(CommandHandler("myid",    _cmd_myid))
     app.add_handler(CommandHandler("fakeon",  _cmd_fakeon))
     app.add_handler(CommandHandler("fakeoff", _cmd_fakeoff))
     app.add_handler(CommandHandler("getid",   _cmd_getid))
