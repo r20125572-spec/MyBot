@@ -175,11 +175,12 @@ def _clear_state(bd: dict) -> None:
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FAKE LOG MESSAGE BUILDER
-# Produces a message identical to the real hit log in sh.py.
+# Produces a compact, clearly marked test event without payment data.
 # Format:
+#   🧪 TEST ONLY • NOT A REAL PAYMENT
 #   HIT → CHARGED 💎
-#   Gate → Shopify • X.XX USD
-#   ✅ ORDER_PAID
+#   Gate → Shopify • 5.47 USD
+#   ✅ TEST_ORDER_PAID
 #   User → @username ⭐
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -188,11 +189,12 @@ def _build_log_text(id_entry: dict) -> str:
     eid   = _rand_eid()
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     return (
+        
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{_HIT_RESP_EID}">✅</tg-emoji>'
-        f' <code>ORDER_PAID</code></b>\n'
+        f' <code>TEST_ORDER_PAID</code></b>\n'
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{_PRO_EID}">⭐</tg-emoji></b>'
     )
@@ -245,15 +247,6 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
             # ── per-ID hit counter ────────────────────────────────────────────
             entry["count"] = entry.get("count", 0) + 1
             bd["fl_last_error"] = ""
-
-            # ── propagate into total_charged so /me & /status reflect it ─────
-            uid_str = str(entry.get("uid", ""))
-            if uid_str and uid_str.lstrip("-").isdigit():
-                ud_store = bd.setdefault("user_data", {})
-                if uid_str in ud_store:
-                    ud_store[uid_str]["total_charged"] = (
-                        ud_store[uid_str].get("total_charged", 0) + 1
-                    )
         except Exception as exc:
             bd["fl_failed"] = bd.get("fl_failed", 0) + 1
             bd["fl_last_error"] = str(exc)[:500]
