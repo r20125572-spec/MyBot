@@ -3666,17 +3666,10 @@ async def _post_init(app: Application) -> None:
     else:
         logger.warning("Could not clear webhook after 5 attempts — continuing anyway.")
 
-    # ── Start background site prober ──────────────────────────────────────
-    # Runs in background: probes all sites, caches working ones, re-probes
-    # every 30 min. /sh and /msh will only use confirmed-live sites.
-    try:
-        all_sites = _load_sites()
-        proxies   = _load_proxies()
-        start_probe_background(all_sites, proxies)
-        logger.info(f"[PROBE] Background site prober started "
-                    f"({len(all_sites)} sites, {len(proxies)} proxies)")
-    except Exception as exc:
-        logger.warning(f"[PROBE] Could not start background prober: {exc}")
+    # ── Fake/demo-only mode ──────────────────────────────────────────────
+    # Do not probe stores or payment sites during startup. Fake demo events
+    # are generated locally by _fl_job and never call checkout APIs.
+    logger.info("[PROBE] Disabled: demo-only fake-log mode is active.")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3692,8 +3685,8 @@ async def _post_init(app: Application) -> None:
 #   "fl_state"           — None | "awaiting_id"
 #   "fakelogs_channel_id"— numeric chat ID of target logs channel
 #
-# Fake logs look IDENTICAL to real hit notifications.
-# Each message is attributed to a random enabled ID from fl_ids.
+# Fake logs are clearly marked as test events and never update real user data.
+# Each message uses a random enabled display ID from fl_ids.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 from sh import LOGS_CHANNEL_LINK as _FL_CH_LINK   # [❆] in fake logs links back to the hits channel
 
@@ -3749,16 +3742,17 @@ _FL_PRICES = [
 
 
 def _fl_log_msg(id_entry: dict) -> str:
-    """Build a fake CHARGED hit — format identical to the real hit log from _send_hit."""
+    """Build a local test event without payment data or external checks."""
     price = random.choice(_FL_PRICES)
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
+        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
-        f' <code>ORDER_PAID</code></b>\n'
+        f' <code>TEST_ORDER_PAID</code></b>\n'
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
@@ -3814,16 +3808,6 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             id_entry["count"] = id_entry.get("count", 0) + 1
             bd["fl_last_error"] = ""
-            # ── Propagate into user's total_charged so /me and /status reflect it ──
-            # Only works when the fake-log entry has a numeric Telegram user ID
-            # AND that user has already started the bot (exists in user_data).
-            _fake_uid_str = id_entry.get("uid", "")
-            if _fake_uid_str and str(_fake_uid_str).lstrip("-").isdigit():
-                _ud_store = bd.setdefault("user_data", {})
-                if _fake_uid_str in _ud_store:
-                    _ud_store[_fake_uid_str]["total_charged"] = (
-                        _ud_store[_fake_uid_str].get("total_charged", 0) + 1
-                    )
         except Exception as exc:
             bd["fl_failed"] = bd.get("fl_failed", 0) + 1
             bd["fl_last_error"] = str(exc)[:500]
