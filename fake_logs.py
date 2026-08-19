@@ -63,7 +63,7 @@ def _read_channel_id() -> int:
     except ValueError:
         logger.error("[FAKELOGS] Invalid FAKE_LOG_CHANNEL_ID; using %s.", _DEFAULT_CHANNEL_ID)
         return _DEFAULT_CHANNEL_ID
-    if value == abs(_DEFAULT_CHANNEL_ID):
+    if value > 0:
         return _DEFAULT_CHANNEL_ID
     return value
 
@@ -244,6 +244,7 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             # ── per-ID hit counter ────────────────────────────────────────────
             entry["count"] = entry.get("count", 0) + 1
+            bd["fl_last_error"] = ""
 
             # ── propagate into total_charged so /me & /status reflect it ─────
             uid_str = str(entry.get("uid", ""))
@@ -254,6 +255,8 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
                         ud_store[uid_str].get("total_charged", 0) + 1
                     )
         except Exception as exc:
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = str(exc)[:500]
             logger.warning(f"[FAKELOGS] send failed (chat={target}): {exc}")
 
     if bd.get(_K_ACTIVE):
@@ -388,6 +391,12 @@ def _show_text(bd: dict) -> str:
         f"<b>Total fake hits sent ➛ {total}</b>",
         f"<b>Speed ➛ {_SPEED_LABELS[speed]}</b>",
     ]
+    failed = bd.get("fl_failed", 0)
+    last_error = bd.get("fl_last_error", "")
+    if failed:
+        lines.append(f"<b>Failed deliveries ➛ {failed}</b>")
+        if last_error:
+            lines.append(f"<b>Last error ➛</b> <code>{last_error}</code>")
     return "\n".join(lines)
 
 
@@ -580,7 +589,14 @@ async def _cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         bd[_K_ACTIVE] = True
         _stop_job(context)
-        context.job_queue.run_once(_job, 3, name=_JOB)
+        # Send the first log immediately; _job schedules the next randomized
+        # delivery and records any Telegram error for the Stats panel.
+        await _job(context)
+        if bd.get("fl_last_error"):
+            await q.answer(
+                f"⚠️ Telegram delivery failed: {bd['fl_last_error'][:180]}",
+                show_alert=True,
+            )
         await q.edit_message_text(
             _main_text(bd), parse_mode="HTML",
             reply_markup=_main_kb(bd),
