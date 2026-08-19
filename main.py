@@ -3714,10 +3714,11 @@ def _fl_read_channel_id() -> int:
             _FL_DEFAULT_CHANNEL_ID,
         )
         return _FL_DEFAULT_CHANNEL_ID
-    # Railway screenshots often show 100... without the required leading '-'.
-    if value == abs(_FL_DEFAULT_CHANNEL_ID):
+    # Any positive numeric value is a user-style ID, not a channel/group.
+    # Use the supplied Batlogs target instead of repeatedly attempting a bad send.
+    if value > 0:
         logger.warning(
-            "[FAKELOGS] Normalizing FAKE_LOG_CHANNEL_ID=%s to %s.",
+            "[FAKELOGS] Positive FAKE_LOG_CHANNEL_ID=%s is invalid; using %s.",
             raw, _FL_DEFAULT_CHANNEL_ID,
         )
         return _FL_DEFAULT_CHANNEL_ID
@@ -3812,6 +3813,7 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                 disable_web_page_preview=True,
             )
             id_entry["count"] = id_entry.get("count", 0) + 1
+            bd["fl_last_error"] = ""
             # ── Propagate into user's total_charged so /me and /status reflect it ──
             # Only works when the fake-log entry has a numeric Telegram user ID
             # AND that user has already started the bot (exists in user_data).
@@ -3823,6 +3825,8 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                         _ud_store[_fake_uid_str].get("total_charged", 0) + 1
                     )
         except Exception as exc:
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = str(exc)[:500]
             logger.warning(f"[FAKELOGS] send failed (chat={target}): {exc}")
 
     if bd.get(_FL_ACTIVE):
@@ -3942,6 +3946,12 @@ def _fl_show_text(bd: dict) -> str:
         f"<b>Total fake hits sent ➛ {total}</b>",
         f"<b>Speed ➛ {_FL_SPEED_LABELS[speed]}</b>",
     ]
+    failed = bd.get("fl_failed", 0)
+    last_error = bd.get("fl_last_error", "")
+    if failed:
+        lines.append(f"<b>Failed deliveries ➛ {failed}</b>")
+        if last_error:
+            lines.append(f"<b>Last error ➛</b> <code>{escape(last_error)}</code>")
     return "\n".join(lines)
 
 
@@ -4020,7 +4030,14 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         bd[_FL_ACTIVE] = True
         _fl_stop(context)
-        context.job_queue.run_once(_fl_job, 3, name=_FL_JOB)
+        # Send the first log immediately so configuration problems are visible
+        # at once; _fl_job schedules the next randomized delivery.
+        await _fl_job(context)
+        if bd.get("fl_last_error"):
+            await q.answer(
+                f"⚠️ Telegram delivery failed: {bd['fl_last_error'][:180]}",
+                show_alert=True,
+            )
         await q.edit_message_text(
             _fl_main_text(bd), parse_mode="HTML",
             reply_markup=_fl_main_kb(bd),
