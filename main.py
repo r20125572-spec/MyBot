@@ -3747,7 +3747,7 @@ def _fl_log_msg(id_entry: dict) -> str:
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
-        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
+       
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
