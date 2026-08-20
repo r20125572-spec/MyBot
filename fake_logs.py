@@ -104,6 +104,7 @@ _K_LINKS    = "fl_links"            # list  — 3 button link dicts
 _K_STATE    = "fl_state"            # str   — current awaiting-input state
 _K_EDIT_IDX = "fl_edit_link_idx"    # int   — which link slot is being edited
 _JOB        = "fake_hit_stream"
+_K_TASK     = "fakelogs_stream_task"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SPEED PRESETS  (min_delay, max_delay) in seconds
@@ -174,6 +175,12 @@ def _get_links(bd: dict) -> list:
 
 
 def _stop_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop only an explicitly requested stream and legacy scheduled jobs."""
+    task = context.bot_data.get(_K_TASK)
+    if task is not None and not task.done():
+        task.cancel()
+    context.bot_data.pop(_K_TASK, None)
+
     job_queue = context.job_queue
     if job_queue is None:
         return
@@ -261,17 +268,14 @@ def _build_log_text(id_entry: dict) -> str:
     eid   = _rand_eid()
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     return (
-        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{_HIT_RESP_EID}">✅</tg-emoji>'
-        f' <code>TEST_ORDER_PAID</code></b>\n'
+        f' <code>ORDER_PAID</code></b>\n'
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{_PRO_EID}">⭐</tg-emoji></b>'
     )
-
-
 def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
     """Build the inline keyboard from the 3 configurable link slots."""
     links = _get_links(bd)
@@ -288,7 +292,7 @@ def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BACKGROUND JOB — fires one fake log then reschedules itself
+# ONE DELIVERY ATTEMPT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -342,23 +346,29 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
         bd["fl_last_error"] = str(exc)[:500]
         logger.warning(f"[FAKELOGS] temporary send failure (chat={target}): {exc}")
 
-    if bd.get(_K_ACTIVE):
-        job_queue = context.job_queue
-        if job_queue is None:
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = (
-                "Job queue is unavailable. Install python-telegram-bot[job-queue]."
-            )
-            bd[_K_ACTIVE] = False
-            logger.error("[FAKELOGS] Job queue unavailable; stream stopped.")
-            return
-        try:
-            job_queue.run_once(_job, random.uniform(lo, hi), name=_JOB)
-        except Exception as exc:
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = f"Could not schedule next event: {str(exc)[:400]}"
-            bd[_K_ACTIVE] = False
-            logger.warning("[FAKELOGS] scheduling failed; stream stopped: %s", exc)
+async def _stream(application) -> None:
+    """Keep delivery alive in the bot process, not in the owner's chat session."""
+    bd = application.bot_data
+    try:
+        while bd.get(_K_ACTIVE):
+            lo, hi = _SPEEDS[_get_speed(bd)]
+            await asyncio.sleep(random.uniform(lo, hi))
+            if not bd.get(_K_ACTIVE):
+                break
+            try:
+                await _job(application)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+                bd["fl_last_error"] = f"Unexpected stream error: {str(exc)[:400]}"
+                logger.exception("[FAKELOGS] stream iteration failed; continuing")
+    except asyncio.CancelledError:
+        # Cancellation is the normal result of Stop Logs or /fakeoff.
+        raise
+    finally:
+        if bd.get(_K_TASK) is asyncio.current_task():
+            bd.pop(_K_TASK, None)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -712,9 +722,10 @@ async def _cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         bd[_K_ACTIVE] = True
         _stop_job(context)
-        # Send the first log immediately; _job schedules the next randomized
-        # delivery and records any Telegram error for the Stats panel.
+        # Send immediately, then run continuously in the server-side task.
         await _job(context)
+        if bd.get(_K_ACTIVE):
+            bd[_K_TASK] = asyncio.create_task(_stream(context.application))
         if bd.get("fl_last_error"):
             await q.answer(
                 f"⚠️ Telegram delivery failed: {bd['fl_last_error'][:180]}",
