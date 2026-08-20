@@ -3721,6 +3721,7 @@ def _fl_read_channel_id() -> int:
 _FL_CHANNEL_ID = _fl_read_channel_id()
 _FL_JOB        = "fake_hit_stream"
 _FL_ACTIVE     = "fakelogs_active"
+_FL_TASK       = "fakelogs_stream_task"
 
 # ── Speed presets: (min_delay, max_delay) in seconds ─────────────────────────
 _FL_SPEEDS = {
@@ -3756,7 +3757,6 @@ def _fl_log_msg(id_entry: dict) -> str:
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
-
 
 def _fl_get_ids(bd: dict) -> list:
     ids = bd.setdefault("fl_ids", [])
@@ -3840,7 +3840,7 @@ async def _fl_send_with_retry(context, target: int, text: str, reply_markup) -> 
             await asyncio.sleep(delay)
 
 
-# ── Background job ────────────────────────────────────────────────────────────
+# ── One delivery attempt ──────────────────────────────────────────────────────
 
 async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     bd     = context.bot_data
@@ -3892,33 +3892,45 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         bd["fl_last_error"] = str(exc)[:500]
         logger.warning(f"[FAKELOGS] temporary send failure (chat={target}): {exc}")
 
-    if bd.get(_FL_ACTIVE):
-        job_queue = context.job_queue
-        if job_queue is None:
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = (
-                "Job queue is unavailable. Install python-telegram-bot[job-queue]."
-            )
-            bd[_FL_ACTIVE] = False
-            logger.error("[FAKELOGS] Job queue unavailable; stream stopped.")
-            return
-        try:
-            job_queue.run_once(
-                _fl_job, random.uniform(lo, hi), name=_FL_JOB
-            )
-        except Exception as exc:
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = f"Could not schedule next event: {str(exc)[:400]}"
-            bd[_FL_ACTIVE] = False
-            logger.warning("[FAKELOGS] scheduling failed; stream stopped: %s", exc)
-
-
 def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop only an explicitly requested stream and any legacy scheduled jobs."""
+    task = context.bot_data.get(_FL_TASK)
+    if task is not None and not task.done():
+        task.cancel()
+    context.bot_data.pop(_FL_TASK, None)
+
     job_queue = context.job_queue
     if job_queue is None:
         return
     for job in job_queue.get_jobs_by_name(_FL_JOB):
         job.schedule_removal()
+
+
+async def _fl_stream(application) -> None:
+    """Keep sending from the bot process, independently of the owner's chat."""
+    bd = application.bot_data
+    try:
+        while bd.get(_FL_ACTIVE):
+            lo, hi = _FL_SPEEDS[_fl_get_speed(bd)]
+            await asyncio.sleep(random.uniform(lo, hi))
+            if not bd.get(_FL_ACTIVE):
+                break
+            try:
+                # Application exposes bot and bot_data, which are the only
+                # context attributes used by a single delivery attempt.
+                await _fl_job(application)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+                bd["fl_last_error"] = f"Unexpected stream error: {str(exc)[:400]}"
+                logger.exception("[FAKELOGS] stream iteration failed; continuing")
+    except asyncio.CancelledError:
+        # Cancellation is the normal result of pressing Stop Logs or /fakeoff.
+        raise
+    finally:
+        if bd.get(_FL_TASK) is asyncio.current_task():
+            bd.pop(_FL_TASK, None)
 
 
 # ── Control panel UI builders ─────────────────────────────────────────────────
@@ -4152,9 +4164,13 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         bd[_FL_ACTIVE] = True
         _fl_stop(context)
-        # Send the first log immediately so configuration problems are visible
-        # at once; _fl_job schedules the next randomized delivery.
+        # Send once immediately, then keep the server-side background task
+        # running even when the owner leaves this Telegram chat.
         await _fl_job(context)
+        if bd.get(_FL_ACTIVE):
+            bd[_FL_TASK] = asyncio.create_task(
+                _fl_stream(context.application)
+            )
         if bd.get("fl_last_error"):
             await q.answer(
                 f"⚠️ Telegram delivery failed: {bd['fl_last_error'][:180]}",
