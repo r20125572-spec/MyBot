@@ -3736,8 +3736,9 @@ _FL_SPEED_LABELS = {
 
 # ── Prices pool (varied so logs don't look uniform) ──────────────────────────
 _FL_PRICES = [
-    "1.99", "2.99", "3.99", "4.99", "5.00",
-    "7.99", "9.99", "12.99", "14.99", "19.99",
+    # Edit this list to change the generated demo prices. Keep values below 10.
+    "0.99", "1.49", "2.29", "2.99", "3.47",
+    "4.19", "4.99", "5.47", "6.79", "8.99",
 ]
 
 
@@ -3747,12 +3748,12 @@ def _fl_log_msg(id_entry: dict) -> str:
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
-        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
+        
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
-        f' <code>TEST_ORDER_PAID</code></b>\n'
+        
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
@@ -3760,16 +3761,20 @@ def _fl_log_msg(id_entry: dict) -> str:
 
 def _fl_get_ids(bd: dict) -> list:
     ids = bd.setdefault("fl_ids", [])
-    # The owner supplied this ID as the identity to display in fake logs.
-    # Seed it once so Start Logs works immediately after a fresh deployment.
-    if not ids:
-        ids.append({
-            "uid": _FL_DEFAULT_FAKE_UID,
-            "display": f"user_{_FL_DEFAULT_FAKE_UID}",
-            "link": f"tg://user?id={_FL_DEFAULT_FAKE_UID}",
-            "enabled": True,
-            "count": 0,
-        })
+    # IDs live only in bot_data memory. They are not written to a database/file.
+    # Seed the default only on first initialization; removing the last ID must
+    # leave the list empty instead of silently recreating it.
+    if not bd.get("fl_ids_initialized"):
+        bd["fl_ids_initialized"] = True
+        if not ids:
+            bd["fl_ids_seeded"] = True
+            ids.append({
+                "uid": _FL_DEFAULT_FAKE_UID,
+                "display": f"user_{_FL_DEFAULT_FAKE_UID}",
+                "link": f"tg://user?id={_FL_DEFAULT_FAKE_UID}",
+                "enabled": True,
+                "count": 0,
+            })
     return ids
 
 
@@ -3803,6 +3808,37 @@ async def _fl_validate_target(bot, target: int) -> str:
         return f"Telegram rejected the target: {str(exc)[:300]}"
     except Exception as exc:
         return f"Could not verify the target chat: {str(exc)[:300]}"
+
+
+async def _fl_send_with_retry(context, target: int, text: str, reply_markup) -> None:
+    """Send one event with bounded retries for temporary Telegram/network errors."""
+    retry_delays = (1.0, 3.0, 8.0)
+    for attempt, delay in enumerate(retry_delays, start=1):
+        try:
+            await context.bot.send_message(
+                target, text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return
+        except RetryAfter as exc:
+            if attempt == len(retry_delays):
+                raise
+            wait_for = min(float(getattr(exc, "retry_after", delay)), 30.0)
+            logger.warning(
+                "[FAKELOGS] Telegram rate limit; retry %s/%s in %.1fs",
+                attempt, len(retry_delays), wait_for,
+            )
+            await asyncio.sleep(wait_for)
+        except (NetworkError, TimedOut, asyncio.TimeoutError) as exc:
+            if attempt == len(retry_delays):
+                raise
+            logger.warning(
+                "[FAKELOGS] temporary send failure; retry %s/%s in %.1fs: %s",
+                attempt, len(retry_delays), delay, exc,
+            )
+            await asyncio.sleep(delay)
 
 
 # ── Background job ────────────────────────────────────────────────────────────
@@ -3840,12 +3876,7 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         InlineKeyboardButton("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url="https://t.me/Batxchk_bot")
     ]])
     try:
-        await context.bot.send_message(
-            target, text,
-            parse_mode="HTML",
-            reply_markup=btn_kb,
-            disable_web_page_preview=True,
-        )
+        await _fl_send_with_retry(context, target, text, btn_kb)
         id_entry["count"] = id_entry.get("count", 0) + 1
         bd["fl_last_error"] = ""
     except Exception as exc:
@@ -3933,7 +3964,8 @@ def _fl_ids_text(bd: dict) -> str:
             "No IDs added yet.\n\n"
             "Press <b>➕ Add ID</b>, then send the ID in chat:\n"
             "<code>123456789 @username</code>\n"
-            "or just <code>@username</code>"
+            "or just <code>@username</code>\n\n"
+            "<i>Added IDs are memory-only and reset when the bot restarts.</i>"
         )
     lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
     for e in ids:
