@@ -260,17 +260,14 @@ def _build_log_text(id_entry: dict) -> str:
     eid   = _rand_eid()
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     return (
-        
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{_HIT_RESP_EID}">✅</tg-emoji>'
-      
+        f' <code>ORDER_PAID</code></b>\n'
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{_PRO_EID}">⭐</tg-emoji></b>'
     )
-
-
 def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
     """Build the inline keyboard from the 3 configurable link slots."""
     links = _get_links(bd)
