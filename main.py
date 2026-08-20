@@ -3756,6 +3756,8 @@ def _fl_log_msg(id_entry: dict) -> str:
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
+
+
 def _fl_get_ids(bd: dict) -> list:
     ids = bd.setdefault("fl_ids", [])
     # IDs live only in bot_data memory. They are not written to a database/file.
@@ -3876,13 +3878,19 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         await _fl_send_with_retry(context, target, text, btn_kb)
         id_entry["count"] = id_entry.get("count", 0) + 1
         bd["fl_last_error"] = ""
-    except Exception as exc:
+    except (Forbidden, BadRequest) as exc:
         bd["fl_failed"] = bd.get("fl_failed", 0) + 1
         bd["fl_last_error"] = str(exc)[:500]
         bd[_FL_ACTIVE] = False
         _fl_stop(context)
         logger.warning(f"[FAKELOGS] send failed (chat={target}); stream stopped: {exc}")
         return
+    except Exception as exc:
+        # Temporary failures are recorded, but the server-side stream remains
+        # active and the next event is still scheduled below.
+        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+        bd["fl_last_error"] = str(exc)[:500]
+        logger.warning(f"[FAKELOGS] temporary send failure (chat={target}): {exc}")
 
     if bd.get(_FL_ACTIVE):
         job_queue = context.job_queue
