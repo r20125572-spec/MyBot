@@ -43,6 +43,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.error import BadRequest, Forbidden
 
 logger = logging.getLogger(__name__)
 
@@ -164,13 +165,44 @@ def _get_links(bd: dict) -> list:
 
 
 def _stop_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for job in context.job_queue.get_jobs_by_name(_JOB):
+    job_queue = context.job_queue
+    if job_queue is None:
+        return
+    for job in job_queue.get_jobs_by_name(_JOB):
         job.schedule_removal()
 
 
 def _clear_state(bd: dict) -> None:
     bd[_K_STATE]    = None
     bd[_K_EDIT_IDX] = None
+
+
+async def _validate_target(bot, target: int) -> str:
+    """Return an actionable error, or an empty string when the target is usable."""
+    if not isinstance(target, int) or target >= 0:
+        return (
+            "Target must be a Telegram channel/group ID beginning with -100. "
+            "A private user/DM ID cannot receive the log stream."
+        )
+    try:
+        chat = await bot.get_chat(target)
+        if chat.type not in ("channel", "group", "supergroup"):
+            return f"Target chat type is {chat.type!r}; choose a channel or group."
+
+        me = await bot.get_me()
+        member = await bot.get_chat_member(target, me.id)
+        status = getattr(member, "status", "")
+        if chat.type == "channel" and status not in ("administrator", "creator"):
+            return "The bot must be an administrator of the target channel."
+        if chat.type != "channel" and status in ("left", "kicked"):
+            return "The bot is not a member of the target group."
+        return ""
+    except Forbidden:
+        return "Telegram denied access. Add the bot as an administrator of the target channel."
+    except BadRequest as exc:
+        return f"Telegram rejected the target: {str(exc)[:300]}"
+    except Exception as exc:
+        return f"Could not verify the target chat: {str(exc)[:300]}"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -189,7 +221,7 @@ def _build_log_text(id_entry: dict) -> str:
     eid   = _rand_eid()
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     return (
-        
+        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
@@ -234,26 +266,56 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
     ids = [e for e in _get_ids(bd) if e.get("enabled", True)]
     lo, hi = _SPEEDS[_get_speed(bd)]
 
-    if ids:
-        entry = random.choice(ids)
-        text  = _build_log_text(entry)
-        try:
-            await context.bot.send_message(
-                target, text,
-                parse_mode="HTML",
-                reply_markup=_build_log_buttons(bd),
-                disable_web_page_preview=True,
-            )
-            # ── per-ID hit counter ────────────────────────────────────────────
-            entry["count"] = entry.get("count", 0) + 1
-            bd["fl_last_error"] = ""
-        except Exception as exc:
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = str(exc)[:500]
-            logger.warning(f"[FAKELOGS] send failed (chat={target}): {exc}")
+    if not isinstance(target, int) or target >= 0:
+        bd["fl_last_error"] = (
+            "Invalid target ID. Set FAKE_LOG_CHANNEL_ID to a negative channel/group ID."
+        )
+        bd[_K_ACTIVE] = False
+        _stop_job(context)
+        return
+
+    if not ids:
+        bd["fl_last_error"] = "No enabled display IDs are configured."
+        bd[_K_ACTIVE] = False
+        _stop_job(context)
+        return
+
+    entry = random.choice(ids)
+    text  = _build_log_text(entry)
+    try:
+        await context.bot.send_message(
+            target, text,
+            parse_mode="HTML",
+            reply_markup=_build_log_buttons(bd),
+            disable_web_page_preview=True,
+        )
+        entry["count"] = entry.get("count", 0) + 1
+        bd["fl_last_error"] = ""
+    except Exception as exc:
+        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+        bd["fl_last_error"] = str(exc)[:500]
+        bd[_K_ACTIVE] = False
+        _stop_job(context)
+        logger.warning(f"[FAKELOGS] send failed (chat={target}); stream stopped: {exc}")
+        return
 
     if bd.get(_K_ACTIVE):
-        context.job_queue.run_once(_job, random.uniform(lo, hi), name=_JOB)
+        job_queue = context.job_queue
+        if job_queue is None:
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = (
+                "Job queue is unavailable. Install python-telegram-bot[job-queue]."
+            )
+            bd[_K_ACTIVE] = False
+            logger.error("[FAKELOGS] Job queue unavailable; stream stopped.")
+            return
+        try:
+            job_queue.run_once(_job, random.uniform(lo, hi), name=_JOB)
+        except Exception as exc:
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = f"Could not schedule next event: {str(exc)[:400]}"
+            bd[_K_ACTIVE] = False
+            logger.warning("[FAKELOGS] scheduling failed; stream stopped: %s", exc)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -523,6 +585,20 @@ async def _cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text(
+            "<b>⚠️ /getid must be run in the target channel or group.</b>\n"
+            "For a channel, add this bot as an administrator first.\n"
+            "You can also set <code>FAKE_LOG_CHANNEL_ID=-100...</code> on Railway.",
+            parse_mode="HTML",
+        )
+        return
+    if chat.type not in ("channel", "group", "supergroup"):
+        await update.message.reply_text(
+            "<b>⚠️ This chat cannot be used as a log target.</b>",
+            parse_mode="HTML",
+        )
+        return
     cid  = chat.id
     context.bot_data[_K_CHANNEL] = cid
     title = chat.title or "this DM"
@@ -579,6 +655,17 @@ async def _cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         if not _get_channel(bd):
             await q.answer("⚠️ Set a channel ID first (📡 Channel).", show_alert=True)
+            return
+        target_error = await _validate_target(context.bot, _get_channel(bd))
+        if target_error:
+            bd[_K_ACTIVE] = False
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = target_error
+            await q.answer(f"⚠️ {target_error}", show_alert=True)
+            await q.edit_message_text(
+                _main_text(bd), parse_mode="HTML",
+                reply_markup=_main_kb(bd),
+            )
             return
         bd[_K_ACTIVE] = True
         _stop_job(context)
