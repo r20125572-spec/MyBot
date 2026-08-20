@@ -276,6 +276,8 @@ def _build_log_text(id_entry: dict) -> str:
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{_PRO_EID}">⭐</tg-emoji></b>'
     )
+
+
 def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
     """Build the inline keyboard from the 3 configurable link slots."""
     links = _get_links(bd)
