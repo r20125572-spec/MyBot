@@ -3747,7 +3747,7 @@ def _fl_log_msg(id_entry: dict) -> str:
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
-       
+        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
@@ -3777,6 +3777,34 @@ def _fl_get_speed(bd: dict) -> str:
     return bd.get("fl_speed", "normal")
 
 
+async def _fl_validate_target(bot, target: int) -> str:
+    """Return an actionable error, or an empty string when the target is usable."""
+    if not isinstance(target, int) or target >= 0:
+        return (
+            "Target must be a Telegram channel/group ID beginning with -100. "
+            "A private user/DM ID cannot receive the log stream."
+        )
+    try:
+        chat = await bot.get_chat(target)
+        if chat.type not in ("channel", "group", "supergroup"):
+            return f"Target chat type is {chat.type!r}; choose a channel or group."
+
+        me = await bot.get_me()
+        member = await bot.get_chat_member(target, me.id)
+        status = getattr(member, "status", "")
+        if chat.type == "channel" and status not in ("administrator", "creator"):
+            return "The bot must be an administrator of the target channel."
+        if chat.type != "channel" and status in ("left", "kicked"):
+            return "The bot is not a member of the target group."
+        return ""
+    except Forbidden:
+        return "Telegram denied access. Add the bot as an administrator of the target channel."
+    except BadRequest as exc:
+        return f"Telegram rejected the target: {str(exc)[:300]}"
+    except Exception as exc:
+        return f"Could not verify the target chat: {str(exc)[:300]}"
+
+
 # ── Background job ────────────────────────────────────────────────────────────
 
 async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3788,37 +3816,72 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("[FAKELOGS] No channel ID configured — stopping.")
         bd[_FL_ACTIVE] = False
         return
+    if not isinstance(target, int) or target >= 0:
+        bd["fl_last_error"] = (
+            "Invalid target ID. Set FAKE_LOG_CHANNEL_ID to a negative channel/group ID."
+        )
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        return
 
     ids = [e for e in _fl_get_ids(bd) if e.get("enabled", True)]
     speed = _fl_get_speed(bd)
     lo, hi = _FL_SPEEDS[speed]
 
-    if ids:
-        id_entry = random.choice(ids)
-        text     = _fl_log_msg(id_entry)
-        btn_kb   = InlineKeyboardMarkup([[
-            InlineKeyboardButton("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url="https://t.me/Batxchk_bot")
-        ]])
-        try:
-            await context.bot.send_message(
-                target, text,
-                parse_mode="HTML",
-                reply_markup=btn_kb,
-                disable_web_page_preview=True,
-            )
-            id_entry["count"] = id_entry.get("count", 0) + 1
-            bd["fl_last_error"] = ""
-        except Exception as exc:
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = str(exc)[:500]
-            logger.warning(f"[FAKELOGS] send failed (chat={target}): {exc}")
+    if not ids:
+        bd["fl_last_error"] = "No enabled display IDs are configured."
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        return
+
+    id_entry = random.choice(ids)
+    text     = _fl_log_msg(id_entry)
+    btn_kb   = InlineKeyboardMarkup([[
+        InlineKeyboardButton("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url="https://t.me/Batxchk_bot")
+    ]])
+    try:
+        await context.bot.send_message(
+            target, text,
+            parse_mode="HTML",
+            reply_markup=btn_kb,
+            disable_web_page_preview=True,
+        )
+        id_entry["count"] = id_entry.get("count", 0) + 1
+        bd["fl_last_error"] = ""
+    except Exception as exc:
+        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+        bd["fl_last_error"] = str(exc)[:500]
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        logger.warning(f"[FAKELOGS] send failed (chat={target}); stream stopped: {exc}")
+        return
 
     if bd.get(_FL_ACTIVE):
-        context.job_queue.run_once(_fl_job, random.uniform(lo, hi), name=_FL_JOB)
+        job_queue = context.job_queue
+        if job_queue is None:
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = (
+                "Job queue is unavailable. Install python-telegram-bot[job-queue]."
+            )
+            bd[_FL_ACTIVE] = False
+            logger.error("[FAKELOGS] Job queue unavailable; stream stopped.")
+            return
+        try:
+            job_queue.run_once(
+                _fl_job, random.uniform(lo, hi), name=_FL_JOB
+            )
+        except Exception as exc:
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = f"Could not schedule next event: {str(exc)[:400]}"
+            bd[_FL_ACTIVE] = False
+            logger.warning("[FAKELOGS] scheduling failed; stream stopped: %s", exc)
 
 
 def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for job in context.job_queue.get_jobs_by_name(_FL_JOB):
+    job_queue = context.job_queue
+    if job_queue is None:
+        return
+    for job in job_queue.get_jobs_by_name(_FL_JOB):
         job.schedule_removal()
 
 
@@ -3832,15 +3895,19 @@ def _fl_main_text(bd: dict) -> str:
     status  = "🟢 RUNNING" if active else "🔴 STOPPED"
     target  = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
     cid_str = f"<code>{target}</code>" if target else "<i>not set</i>"
-    return (
+    lines = [
         f"<b>🎭 Fake Logs Control Panel</b>\n"
         f"──────────\n"
         f"<b>Status  ➛</b> {status}\n"
         f"<b>Channel ➛</b> {cid_str}\n"
         f"<b>Speed   ➛</b> {_FL_SPEED_LABELS[speed]}\n"
         f"<b>IDs     ➛</b> {on_ct}/{len(ids)} enabled\n"
-        f"──────────"
-    )
+        f"──────────",
+    ]
+    last_error = bd.get("fl_last_error", "")
+    if last_error:
+        lines.append(f"<b>Last delivery error ➛</b> <code>{escape(last_error)}</code>")
+    return "\n".join(lines)
 
 
 def _fl_main_kb(bd: dict) -> InlineKeyboardMarkup:
@@ -3853,6 +3920,7 @@ def _fl_main_kb(bd: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚡ Speed", callback_data="fl_speed"),
             InlineKeyboardButton("📊 Show",  callback_data="fl_show"),
         ],
+        [InlineKeyboardButton("📡 Channel", callback_data="fl_channel")],
         [InlineKeyboardButton(toggle_lbl, callback_data=toggle_cb)],
     ])
 
@@ -3946,6 +4014,26 @@ def _fl_show_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def _fl_channel_text(bd: dict) -> str:
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    cid_str = f"<code>{target}</code>" if target else "<i>not configured</i>"
+    return (
+        "<b>📡 Fake Log Channel</b>\n"
+        "──────────\n"
+        f"<b>Current channel ID ➛</b> {cid_str}\n\n"
+        "Tap <b>Enter Channel ID</b> and send the negative channel/group ID.\n"
+        "Example: <code>-1001234567890</code>\n\n"
+        "<i>The bot must be an administrator of the target channel.</i>"
+    )
+
+
+def _fl_channel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Enter Channel ID", callback_data="fl_setchannel")],
+        [InlineKeyboardButton("🔙 Back", callback_data="fl_panel")],
+    ])
+
+
 # ── /fakeon command ───────────────────────────────────────────────────────────
 
 async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3955,6 +4043,7 @@ async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return  # silent — not even a "permission denied" message
 
     bd     = context.bot_data
+    bd["fl_state"] = None
     target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
     if not target:
         await update.message.reply_text(
@@ -4010,6 +4099,18 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await q.answer(
                 "⚠️ Enable at least one ID first (📋 IDs → 🟢 ON).",
                 show_alert=True,
+            )
+            return
+        target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+        target_error = await _fl_validate_target(context.bot, target)
+        if target_error:
+            bd[_FL_ACTIVE] = False
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = target_error
+            await q.answer(f"⚠️ {target_error}", show_alert=True)
+            await q.edit_message_text(
+                _fl_main_text(bd), parse_mode="HTML",
+                reply_markup=_fl_main_kb(bd),
             )
             return
         bd[_FL_ACTIVE] = True
@@ -4114,6 +4215,26 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=_fl_show_kb(),
         )
 
+    # ── Channel setup ─────────────────────────────────────────────────────────
+    elif dat == "fl_channel":
+        bd["fl_state"] = None
+        await q.edit_message_text(
+            _fl_channel_text(bd), parse_mode="HTML",
+            reply_markup=_fl_channel_kb(),
+        )
+
+    elif dat == "fl_setchannel":
+        bd["fl_state"] = "awaiting_channel"
+        await q.edit_message_text(
+            "<b>📡 Enter Channel ID</b>\n"
+            "──────────\n"
+            "Send the target channel/group ID in your next message.\n\n"
+            "<b>Format:</b> <code>-1001234567890</code>\n\n"
+            "The bot must already be an administrator of that channel.\n"
+            "Send /fakeon to cancel.",
+            parse_mode="HTML",
+        )
+
 
 # ── Add-ID message capture ────────────────────────────────────────────────────
 
@@ -4123,7 +4244,28 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     bd = context.bot_data
-    if bd.get("fl_state") != "awaiting_id":
+    state = bd.get("fl_state")
+    if state == "awaiting_channel":
+        raw = (update.message.text or "").strip()
+        if not raw.lstrip("-").isdigit() or int(raw) >= 0:
+            await update.message.reply_text(
+                "<b>❌ Invalid channel ID.</b>\n"
+                "Send a negative channel/group ID, for example "
+                "<code>-1001234567890</code>.",
+                parse_mode="HTML",
+            )
+            return
+        bd["fakelogs_channel_id"] = int(raw)
+        bd["fl_state"] = None
+        bd["fl_last_error"] = ""
+        await update.message.reply_text(
+            f"<b>✅ Channel ID saved:</b> <code>{raw}</code>\n"
+            "Open /fakeon and press Start Logs to verify delivery.",
+            parse_mode="HTML",
+        )
+        return
+
+    if state != "awaiting_id":
         return  # not in add-ID mode — ignore
 
     raw    = (update.message.text or "").strip()
@@ -4216,6 +4358,20 @@ async def _getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not update.effective_user or update.effective_user.id != OWNER_ID:
         return
     chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text(
+            "<b>⚠️ /getid must be run in the target channel or group.</b>\n"
+            "For a channel, add this bot as an administrator first.\n"
+            "You can also set <code>FAKE_LOG_CHANNEL_ID=-100...</code> on Railway.",
+            parse_mode="HTML",
+        )
+        return
+    if chat.type not in ("channel", "group", "supergroup"):
+        await update.message.reply_text(
+            "<b>⚠️ This chat cannot be used as a log target.</b>",
+            parse_mode="HTML",
+        )
+        return
     cid  = chat.id
     # Store it automatically so /fakeon works right away without redeploy
     context.bot_data["fakelogs_channel_id"] = cid
@@ -4332,7 +4488,7 @@ def main():
         app.add_handler(CallbackQueryHandler(
             _fl_cb,
             pattern=r"^(fl_panel|fl_start|fl_stop|fl_noop|fl_ids|fl_addid"
-                    r"|fl_speed|fl_show|fl_clrstats"
+                    r"|fl_speed|fl_show|fl_clrstats|fl_channel|fl_setchannel"
                     r"|fltog_\d+|flrem_\d+|flspd_\w+)$",
         ))
 
