@@ -30,6 +30,7 @@ import os
 import random
 import logging
 import asyncio
+from html import escape
 
 from telegram import (
     Update,
@@ -260,14 +261,17 @@ def _build_log_text(id_entry: dict) -> str:
     eid   = _rand_eid()
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     return (
+        f'<b>🧪 TEST ONLY • NOT A REAL PAYMENT</b>\n'
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{_HIT_RESP_EID}">✅</tg-emoji>'
-        f' <code>ORDER_PAID</code></b>\n'
+        f' <code>TEST_ORDER_PAID</code></b>\n'
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{_PRO_EID}">⭐</tg-emoji></b>'
     )
+
+
 def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
     """Build the inline keyboard from the 3 configurable link slots."""
     links = _get_links(bd)
@@ -324,13 +328,19 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         entry["count"] = entry.get("count", 0) + 1
         bd["fl_last_error"] = ""
-    except Exception as exc:
+    except (Forbidden, BadRequest) as exc:
         bd["fl_failed"] = bd.get("fl_failed", 0) + 1
         bd["fl_last_error"] = str(exc)[:500]
         bd[_K_ACTIVE] = False
         _stop_job(context)
         logger.warning(f"[FAKELOGS] send failed (chat={target}); stream stopped: {exc}")
         return
+    except Exception as exc:
+        # Temporary failures are recorded, but the server-side stream remains
+        # active and the next event is still scheduled below.
+        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+        bd["fl_last_error"] = str(exc)[:500]
+        logger.warning(f"[FAKELOGS] temporary send failure (chat={target}): {exc}")
 
     if bd.get(_K_ACTIVE):
         job_queue = context.job_queue
