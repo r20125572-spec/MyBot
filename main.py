@@ -3748,17 +3748,14 @@ def _fl_log_msg(id_entry: dict) -> str:
     ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
-        
         f'<b>HIT ➛ CHARGED '
         f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
         f'<b>Gate ➛ Shopify • {price} USD</b>\n'
         f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
-        
+        f' <code>ORDER_PAID</code></b>\n'
         f'<b>User ➛ {ulink}'
         f' <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
-
-
 def _fl_get_ids(bd: dict) -> list:
     ids = bd.setdefault("fl_ids", [])
     # IDs live only in bot_data memory. They are not written to a database/file.
