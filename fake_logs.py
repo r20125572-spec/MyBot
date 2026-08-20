@@ -29,6 +29,7 @@ FEATURES
 import os
 import random
 import logging
+import asyncio
 
 from telegram import (
     Update,
@@ -43,7 +44,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from telegram.error import BadRequest, Forbidden
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +122,9 @@ _SPEED_LABELS = {
 # PRICE POOL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _PRICES = [
-    "1.99", "2.99", "3.99", "4.99", "5.00",
-    "7.99", "9.99", "12.99", "14.99", "19.99",
+    # Edit this list to change the generated demo prices. Keep values below 10.
+    "0.99", "1.49", "2.29", "2.99", "3.47",
+    "4.19", "4.99", "5.47", "6.79", "8.99",
 ]
 
 
@@ -132,14 +134,20 @@ _PRICES = [
 
 def _get_ids(bd: dict) -> list:
     ids = bd.setdefault(_K_IDS, [])
-    if not ids:
-        ids.append({
-            "uid": _DEFAULT_OWNER_FAKE_UID,
-            "display": f"user_{_DEFAULT_OWNER_FAKE_UID}",
-            "link": f"tg://user?id={_DEFAULT_OWNER_FAKE_UID}",
-            "enabled": True,
-            "count": 0,
-        })
+    # IDs live only in bot_data memory. They are not written to a database/file.
+    # Seed the default only on first initialization; removing the last ID must
+    # leave the list empty instead of silently recreating it.
+    if not bd.get("fl_ids_initialized"):
+        bd["fl_ids_initialized"] = True
+        if not ids:
+            bd["fl_ids_seeded"] = True
+            ids.append({
+                "uid": _DEFAULT_OWNER_FAKE_UID,
+                "display": f"user_{_DEFAULT_OWNER_FAKE_UID}",
+                "link": f"tg://user?id={_DEFAULT_OWNER_FAKE_UID}",
+                "enabled": True,
+                "count": 0,
+            })
     return ids
 
 
@@ -203,6 +211,37 @@ async def _validate_target(bot, target: int) -> str:
         return f"Telegram rejected the target: {str(exc)[:300]}"
     except Exception as exc:
         return f"Could not verify the target chat: {str(exc)[:300]}"
+
+
+async def _send_with_retry(context, target: int, text: str, reply_markup) -> None:
+    """Send one event with bounded retries for temporary Telegram/network errors."""
+    retry_delays = (1.0, 3.0, 8.0)
+    for attempt, delay in enumerate(retry_delays, start=1):
+        try:
+            await context.bot.send_message(
+                target, text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return
+        except RetryAfter as exc:
+            if attempt == len(retry_delays):
+                raise
+            wait_for = min(float(getattr(exc, "retry_after", delay)), 30.0)
+            logger.warning(
+                "[FAKELOGS] Telegram rate limit; retry %s/%s in %.1fs",
+                attempt, len(retry_delays), wait_for,
+            )
+            await asyncio.sleep(wait_for)
+        except (NetworkError, TimedOut, asyncio.TimeoutError) as exc:
+            if attempt == len(retry_delays):
+                raise
+            logger.warning(
+                "[FAKELOGS] temporary send failure; retry %s/%s in %.1fs: %s",
+                attempt, len(retry_delays), delay, exc,
+            )
+            await asyncio.sleep(delay)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -283,11 +322,8 @@ async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
     entry = random.choice(ids)
     text  = _build_log_text(entry)
     try:
-        await context.bot.send_message(
-            target, text,
-            parse_mode="HTML",
-            reply_markup=_build_log_buttons(bd),
-            disable_web_page_preview=True,
+        await _send_with_retry(
+            context, target, text, _build_log_buttons(bd)
         )
         entry["count"] = entry.get("count", 0) + 1
         bd["fl_last_error"] = ""
@@ -376,7 +412,7 @@ def _ids_text(bd: dict) -> str:
             "No IDs added yet.\n\n"
             "Tap <b>➕ Add ID</b> then send:\n"
             "<code>123456789 @username</code>  or just  <code>@username</code>\n\n"
-            "<i>The username will appear as the checker in every fake hit.</i>"
+            "<i>Added IDs are memory-only and reset when the bot restarts.</i>"
         )
     lines = ["<b>📋 Fake Log IDs</b>", "──────────────────"]
     for e in ids:
