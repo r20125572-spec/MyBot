@@ -54,6 +54,7 @@ from sh import (
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
     _send_sticker, get_random_live_emoji,
     get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
+    CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
 )
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
