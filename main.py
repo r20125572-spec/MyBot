@@ -3872,8 +3872,9 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     id_entry = random.choice(ids)
     text     = _fl_log_msg(id_entry)
-    btn_kb   = InlineKeyboardMarkup([[
-        InlineKeyboardButton("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url="https://t.me/Batxchk_bot")
+    btn_kb = RawMarkup([[
+        _btn("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
+             icon=CARD_CHK_BTN_EMOJI_ID),
     ]])
     try:
         await _fl_send_with_retry(context, target, text, btn_kb)
