@@ -47,6 +47,9 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
+from config import RawMarkup, _btn
+from sh import CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK
+
 logger = logging.getLogger(__name__)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -278,7 +281,7 @@ def _build_log_text(id_entry: dict) -> str:
     )
 
 
-def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
+def _build_log_buttons(bd: dict):
     """Build the inline keyboard from the 3 configurable link slots."""
     links = _get_links(bd)
     row   = []
@@ -286,11 +289,11 @@ def _build_log_buttons(bd: dict) -> InlineKeyboardMarkup:
         txt = lnk.get("text", "").strip()
         url = lnk.get("url",  "").strip()
         if txt and url:
-            row.append(InlineKeyboardButton(txt, url=url))
+            row.append(_btn(txt, url=url, style="primary"))
     if not row:
-        # fallback: always show at least the bot button
-        row = [InlineKeyboardButton("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=_DEFAULT_BOT_URL)]
-    return InlineKeyboardMarkup([row])
+        # fallback: always show at least the bot button with custom emoji
+        row = [_btn("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary", icon=CARD_CHK_BTN_EMOJI_ID)]
+    return RawMarkup([row])
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
