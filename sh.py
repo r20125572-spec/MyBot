@@ -2,7 +2,7 @@
 sh.py  v28  —  /sh single-card + /msh mass Shopify checker
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Framework : python-telegram-bot v21
-API       : https://shopi.up.railway.app/shopii
+API       : https://shopixx.up.railway.app/
             GET ?cc=NUM|MM|YY|CVV&site=DOMAIN&proxy=http://ip:port
             site  = plain domain, NO https:// prefix
             proxy = http://ip:port  (WITH http:// prefix)
@@ -17,7 +17,7 @@ ROOT-CAUSE FIX:
 SITES:
   Sites are loaded exclusively from sites.txt on disk.
   _load_sites() reads sites.txt; stops with a clear error if the file is missing.
-  No built-in fallback list  keep sites.txt updated.
+  No built-in fallback list  keep sites.txt updated.
 
 DM POLICY:
   CHARGED → user DM + HIT_LOG_GROUP_ID + EXTRA_CHARGED_GROUP_ID
@@ -862,7 +862,7 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
                     timeout: float = SITE_TIMEOUT) -> tuple:
     """Call the shopi.up.railway.app checker API.
 
-    Endpoint : https://shopi.up.railway.app/shopii
+    Endpoint : https://shopi.up.railway.app/
     Method   : GET
     Params   :
         cc    = CARDNUM|MM|YY|CVV   (pipe-separated, all in one param)
@@ -1508,9 +1508,7 @@ COUNTRY_FLAGS = {
     "EG":"🇪🇬","PK":"🇵🇰","SG":"🇸🇬","MY":"🇲🇾","ID":"🇮🇩","TH":"🇹🇭",
     "PH":"🇵🇭","VN":"🇻🇳","AE":"🇦🇪","SA":"🇸🇦","TR":"🇹🇷","PL":"🇵🇱",
     "UA":"🇺🇦","AR":"🇦🇷","CO":"🇨🇴","CL":"🇨🇱","NZ":"🇳🇿","HK":"🇭🇰",
-    "TW":"🇹🇼","KR":"🇰🇷","IL":"🇮🇱","CH":"🇨🇭","BE":"🇧🇪","AT":"🇦🇹",
-    "PT":"🇵🇹","GR":"🇬🇷","CZ":"🇨🇿","HU":"🇭🇺","RO":"🇷🇴","FI":"🇫🇮",
-    "DK":"🇩🇰","NO":"🇳🇴","IE":"🇮🇪",
+    "TW":"🇹🇼","KR":"🇰🇷","IL":"🇮🇱","CH
 }
 
 
