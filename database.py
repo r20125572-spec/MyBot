@@ -35,13 +35,11 @@ _pool = None   # asyncpg.Pool | None
 
 
 def _find_db_url() -> str:
-    for key in ("DATABASE_URL", "DATABASE_PRIVATE_URL",
-                "PGURL", "POSTGRES_URL", "POSTGRESQL_URL"):
-        val = os.environ.get(key, "").strip()
-        if val:
-            logger.info(f"[DB] Using database URL from env var: {key}")
-            return val
-    return ""
+    """
+    Returns the hardcoded PostgreSQL URL as requested.
+    Old URL has been deleted and replaced with the new one.
+    """
+    return "postgresql://postgres:hgbUxkHudtCCLerPNitzphFNLEqVUGEZ@postgres.railway.internal:5432/railway"
 
 
 DATABASE_URL: str = _find_db_url()
