@@ -1,10 +1,10 @@
-mport aiohttp
+import aiohttp
 import asyncio
 import time
 import re
 import os
 from io import BytesIO
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 from config import (
     API_TIMEOUT, get_bin_info, OWNER_ID, PREMIUM_GATES,
@@ -15,6 +15,7 @@ from config import (
     PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID,
     PROG_CHARGED_EMOJI_ID, USER_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
     BTN_CHARGED_EMOJI_ID, BTN_LIVE_EMOJI_ID, BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID,
+    RawMarkup, _btn,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -452,15 +453,16 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         reply_markup=_create_result_buttons()
     )
 
-def _create_result_buttons() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+def _create_result_buttons() -> RawMarkup:
+    """Premium-emoji result buttons — uses RawMarkup so icon_custom_emoji_id renders."""
+    return RawMarkup([
         [
-            InlineKeyboardButton("CHARGED", callback_data="result_charge"),
-            InlineKeyboardButton("LIVE",    callback_data="result_live"),
+            _btn("💎 CHARGED", cb="result_charge", style="danger",   icon=BTN_CHARGED_EMOJI_ID),
+            _btn("✅ LIVE",    cb="result_live",   style="success",  icon=BTN_LIVE_EMOJI_ID),
         ],
         [
-            InlineKeyboardButton("3DS",    callback_data="result_3ds"),
-            InlineKeyboardButton("ALL",    callback_data="result_all"),
+            _btn("🔐 3DS",    cb="result_3ds",    style="primary",  icon=BTN_ALL_EMOJI_ID),
+            _btn("📁 ALL",    cb="result_all",    style="primary",  icon=BTN_ALL_EMOJI_ID),
         ],
     ])
 
@@ -501,27 +503,28 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             resp   = r.get("error") if r.get("error") else r.get("response", "N/A")
             lines.append(f"Card: {card}\nStatus: {status}\nResponse: {resp}\n{'-'*30}")
         file_content = "\n".join(lines)
-        caption      = f"All Results ({len(parsed):,} total) — @Batcardchk"
+        caption      = f"📁 All Results ({len(parsed):,} total) — @Batcardchk"
         file_name    = f"BATAMANCHK_ALL_{user_id}.txt"
         bio          = BytesIO(file_content.encode("utf-8"))
-        bio.name     = file_name
+        bio.seek(0)
         await context.bot.send_document(
-            chat_id=query.message.chat_id, document=bio,
-            filename=file_name, caption=caption
+            chat_id=query.message.chat_id,
+            document=InputFile(bio, filename=file_name),
+            caption=caption,
         )
         return
 
     if action == "result_live":
         cards_out = results.get("approved", [])
-        caption   = f"LIVE Cards ({len(cards_out):,} found) — @Batcardchk"
+        caption   = f"✅ LIVE Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"BATAMANCHK_LIVE_{user_id}.txt"
     elif action == "result_3ds":
         cards_out = results.get("threeds", [])
-        caption   = f"3DS Cards ({len(cards_out):,} found) — @Batcardchk"
+        caption   = f"🔐 3DS Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"BATAMANCHK_3DS_{user_id}.txt"
     elif action == "result_charge":
         cards_out = results.get("charged", [])
-        caption   = f"Charged Cards ({len(cards_out):,} found) — @Batcardchk"
+        caption   = f"💎 Charged Cards ({len(cards_out):,} found) — @Batcardchk"
         file_name = f"BATAMANCHK_CHARGED_{user_id}.txt"
     else:
         return
@@ -533,11 +536,12 @@ async def mass_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     file_content = "\n".join(
         f"{r['card']} | {r.get('response', 'N/A')}" for r in cards_out
     )
-    bio      = BytesIO(file_content.encode("utf-8"))
-    bio.name = file_name
+    bio = BytesIO(file_content.encode("utf-8"))
+    bio.seek(0)
     await context.bot.send_document(
-        chat_id=query.message.chat_id, document=bio,
-        filename=file_name, caption=caption
+        chat_id=query.message.chat_id,
+        document=InputFile(bio, filename=file_name),
+        caption=caption,
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
