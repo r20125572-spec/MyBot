@@ -261,15 +261,15 @@ def _kb_running(sid: str, live: int, checked: int) -> RawMarkup:
     return RawMarkup([
         [
             _btn(f"Live ({live})",   cb=f"mstr:{sid}:live", style="success", icon=BTN_LIVE_EMOJI_ID),
-            _btn(f"All ({checked})", cb=f"mstr:{sid}:all",  style="primary", icon=BTN_ALL_EMOJI_ID),
+            _btn(f"All ({checked})", cb=f"mstr:{sid}:all",  style="danger", icon=BTN_ALL_EMOJI_ID),
         ],
-        [_btn("⛔ Stop", cb=f"msts:{sid}", style="danger", icon=BTN_STOP_EMOJI_ID)],
+        [_btn("Stop", cb=f"msts:{sid}", style="danger", icon=BTN_STOP_EMOJI_ID)],
     ])
 
 def _kb_done(sid: str, live: int, total: int) -> RawMarkup:
     return RawMarkup([[
         _btn(f"Live ({live})",  cb=f"mstr:{sid}:live", style="success", icon=BTN_LIVE_EMOJI_ID),
-        _btn(f"All ({total})",  cb=f"mstr:{sid}:all",  style="primary", icon=BTN_ALL_EMOJI_ID),
+        _btn(f"All ({total})",  cb=f"mstr:{sid}:all",  style="danger", icon=BTN_ALL_EMOJI_ID),
     ]])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
