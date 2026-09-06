@@ -457,12 +457,12 @@ def _create_result_buttons() -> RawMarkup:
     """Premium-emoji result buttons — uses RawMarkup so icon_custom_emoji_id renders."""
     return RawMarkup([
         [
-            _btn("💎 CHARGED", cb="result_charge", style="danger",   icon=BTN_CHARGED_EMOJI_ID),
-            _btn("✅ LIVE",    cb="result_live",   style="success",  icon=BTN_LIVE_EMOJI_ID),
+            _btn("CHARGED", cb="result_charge", style="danger",   icon=BTN_CHARGED_EMOJI_ID),
+            _btn("LIVE",    cb="result_live",   style="success",  icon=BTN_LIVE_EMOJI_ID),
         ],
         [
-            _btn("🔐 3DS",    cb="result_3ds",    style="primary",  icon=BTN_ALL_EMOJI_ID),
-            _btn("📁 ALL",    cb="result_all",    style="primary",  icon=BTN_ALL_EMOJI_ID),
+            _btn("3DS",    cb="result_3ds",    style="primary",  icon=BTN_ALL_EMOJI_ID),
+            _btn("ALL",    cb="result_all",    style="primary",  icon=BTN_ALL_EMOJI_ID),
         ],
     ])
 
