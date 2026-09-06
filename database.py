@@ -36,14 +36,15 @@ _pool = None   # asyncpg.Pool | None
 
 def _find_db_url() -> str:
     """
-    Returns the hardcoded PostgreSQL URL as requested.
-    Old URL has been deleted and replaced with the new one.
+    Return the database URL; credentials come from protected environment
+    configuration.
     """
-    return "postgresql://postgres:hgbUxkHudtCCLerPNitzphFNLEqVUGEZ@postgres.railway.internal:5432/railway"
+    return os.environ.get("DATABASE_URL", "").strip()
+
+
 DATABASE_URL: str = _find_db_url()
-# Always prefer protected runtime configuration over any legacy source value.
-DATABASE_URL: str = os.environ.get("DATABASE_URL", "").strip()
 PREMIUM_FILE: str = os.environ.get("PREMIUM_FILE", "premium_users.json")
+
 # ── Schema ────────────────────────────────────────────────────────────────────
 _CREATE_PREMIUM_TABLE = """
 CREATE TABLE IF NOT EXISTS premium_users (
