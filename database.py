@@ -39,7 +39,7 @@ def _find_db_url() -> str:
     Returns the hardcoded PostgreSQL URL as requested.
     Old URL has been deleted and replaced with the new one.
     """
-    return "postgresql://postgres:hgbUxkHudtCCLerPNitzphFNLEqVUGEZ@postgres.railway.internal:5432/railway"
+    return "postgresql://postgres:vNnLlvBHsFcCoeqZaZTCePREnRRsQRAb@postgres.railway.internal:5432/railway"
 
 
 DATABASE_URL: str = _find_db_url()
