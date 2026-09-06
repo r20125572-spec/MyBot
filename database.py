@@ -36,10 +36,14 @@ _pool = None   # asyncpg.Pool | None
 
 def _find_db_url() -> str:
     """
-    Return the database URL; credentials come from protected environment
-    configuration.
+    Return the database URL from protected hosting environment variables.
+    Railway can provide DATABASE_URL via a Postgres variable reference, while
+    DATABASE_PRIVATE_URL is accepted as a direct fallback.
     """
-    return os.environ.get("DATABASE_URL", "").strip()
+    return (
+        os.environ.get("DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_PRIVATE_URL", "").strip()
+    )
 
 
 DATABASE_URL: str = _find_db_url()
