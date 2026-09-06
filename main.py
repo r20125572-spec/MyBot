@@ -5,18 +5,25 @@ import random
 import asyncio
 import signal
 import os
+import sys
 import fcntl
 import json
 import hmac
 import hashlib
+import re
+import uuid
+from urllib.parse import quote
 from io import BytesIO
 from html import escape
 from typing import Optional
-from datetime import datetime
-from telegram import Update, TelegramObject, MessageEntity, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from datetime import datetime, timedelta
+from telegram import (
+    Update, TelegramObject, MessageEntity, InlineKeyboardButton,
+    InlineKeyboardMarkup, InputMediaPhoto, ChatPermissions,
+)
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes,
+    MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
 )
 from telegram.error import Conflict, BadRequest, NetworkError, Forbidden, TimedOut, RetryAfter
 from telegram.request import HTTPXRequest
@@ -29,7 +36,7 @@ from mst import get_bin_handler as get_bin_lookup_handler
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
-    CHANNEL_USERNAME, CHANNEL_LINK, GROUP_LINK, SUPPORT_LINK,
+    CHANNEL_USERNAME, CHANNEL_LINK, GROUP_USERNAME, GROUP_LINK, SUPPORT_LINK,
     BOT_LINK, BOT_USERNAME,
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
@@ -52,7 +59,7 @@ from sh import (
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
-    _send_sticker, get_random_live_emoji,
+    _send_sticker, _send_as_media, get_random_live_emoji,
     get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
     CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
 )
@@ -64,6 +71,15 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger  = logging.getLogger(__name__)
 MAX_MSG = 4000
+
+# Normal administration is shared with the second owner. Fake-log controls
+# intentionally remain protected by the primary OWNER_ID checks below.
+SECOND_OWNER_ID = 8283904645
+ADMIN_IDS = frozenset((OWNER_ID, SECOND_OWNER_ID))
+
+
+def _is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PREMIUM PERSISTENCE
@@ -280,6 +296,7 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
             "total_refs": 0, "total_checks": 0, "approved_checks": 0, "declined_checks": 0,
             "last_gate": "N/A", "last_card": "N/A", "codes_redeemed": 0, "keys_redeemed": 0,
             "banned": False, "total_charged": 0,
+            "daily_activity": {}, "memberships": {},
         }
     return context.bot_data["user_data"][uid]
 
@@ -360,6 +377,26 @@ def _verify_ref_token(token: str):
 def get_referral_link(user_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref_{_ref_token(user_id)}"
 
+
+def kb_referral(user_id: int) -> RawMarkup:
+    referral_code = _ref_token(user_id)
+    referral_link = get_referral_link(user_id)
+    share_text = (
+        "Join BatCardChk for bot tools, updates, and community support.\n\n"
+        f"Bot: {BOT_LINK}\n"
+        f"Channel: {CHANNEL_LINK}\n"
+        f"Referral code: {referral_code}"
+    )
+    share_url = (
+        "https://t.me/share/url"
+        f"?url={quote(referral_link, safe='')}"
+        f"&text={quote(share_text, safe='')}"
+    )
+    return RawMarkup([
+        [_btn(B("Invite Friends"), url=share_url, style="primary")],
+        [_btn(B("Back"), cb="bmain", style="danger")],
+    ])
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UI — USER CONTROL HUB  (/start)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -424,6 +461,9 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     joined        = ud.get("joined", "N/A")
     last_active   = ud.get("last_active", "N/A")
     total_refs    = ud.get("total_refs", 0)
+    activity      = ud.get("daily_activity", {})
+    today_count   = activity.get(datetime.now().strftime("%Y-%m-%d"), 0)
+    memberships   = len(ud.get("memberships", {}))
     total_checks  = ud.get("total_checks", 0)
     approved      = ud.get("approved_checks", 0)
     declined      = ud.get("declined_checks", 0)
@@ -460,6 +500,8 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         expire_line,
         "━━━━━━━━━━━━━━━━━━━━",
         f"✰ <b>𝐋𝐚𝐬𝐭 𝐀𝐜𝐭𝐢𝐯𝐞</b>  ➔ {last_active}",
+        f"✰ <b>𝐃𝐚𝐢𝐥𝐲 𝐀𝐜𝐭𝐢𝐯𝐢𝐭𝐲</b> ➔ {today_count} update(s) today",
+        f"✰ <b>𝐆𝐫𝐨𝐮𝐩 𝐌𝐞𝐦𝐛𝐞𝐫𝐬𝐡𝐢𝐩𝐬</b> ➔ {memberships}",
         f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
         f"✰ <b>𝐀𝐩𝐩𝐫𝐨𝐯𝐞𝐝</b>   ➔ {approved}",
         f"✰ <b>𝐃𝐞𝐜𝐥𝐢𝐧𝐞𝐝</b>    ➔ {declined}",
@@ -505,7 +547,7 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     return "\n".join(lines)
 
 def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Simple welcome screen shown on /start — minimal info, no deep details."""
+    """Dashboard shown when a user opens the bot."""
     ud       = get_user_data(user.id, context)
     raw_plan = ud.get("plan", "TRIAL").upper()
     expires  = ud.get("expires", 0)
@@ -519,19 +561,70 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     access   = get_styled_plan(raw_plan)
 
     return (
-        f"<b><a href='{CHANNEL_LINK}'>[❆]</a> Welcome to Batmancardchk Bot 💎</b>\n"
-        f"────────────\n"
-        f"<b>User</b>    ➳ {uname}\n"
-        f"<b>User ID</b> ➳ <code>{user.id}</code>\n"
-        f"<b>Access</b>  ➳ {access}\n"
-        f"<b>Credits</b> ➳ {credits}\n"
-        f"<b>Joined</b>  ➳ {joined}\n"
-        f"────────────\n"
-        f"Choose an option below.\n"
-        f"────────────\n"
-        f"{E_DEV} <b>Dev</b>     ➳ <a href='{DEV_LINK}'>Batmancardchk</a> {E_PRO}\n"
-        f"<b>Version</b> ➳ {VERSION}"
+        f"<b>💎 𝗕𝗔𝗧𝗠𝗔𝗡𝗖𝗔𝗥𝗗𝗖𝗛𝗞 𝗗𝗔𝗦𝗛𝗕𝗢𝗔𝗥𝗗</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>👤 𝗔𝗰𝗰𝗼𝘂𝗻𝘁</b>\n"
+        f"├ <b>Name:</b> {uname}\n"
+        f"├ <b>ID:</b> <code>{user.id}</code>\n"
+        f"└ <b>Joined:</b> {joined}\n\n"
+        f"<b>💠 𝗠𝗲𝗺𝗯𝗲𝗿𝘀𝗵𝗶𝗽</b>\n"
+        f"├ <b>Plan:</b> {access}\n"
+        f"└ <b>Credits:</b> {credits}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Choose an option to continue.</b>\n\n"
+        f"⚡ <b>Dev:</b> <a href='{DEV_LINK}'>Batmancardchk</a>\n"
+        f"🔰 <b>Build:</b> {VERSION}"
     )
+
+
+async def welcome_new_members(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Welcome newly joined members in the configured community group."""
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat or not message.new_chat_members:
+        return
+
+    expected_username = GROUP_USERNAME.lstrip("@").lower()
+    if not chat.username or chat.username.lower() != expected_username:
+        return
+
+    await _observe_raid_joins(chat, message.new_chat_members, context)
+    for member in message.new_chat_members:
+        if member.is_bot:
+            continue
+
+        member_name = escape(member.full_name or member.first_name or "Member")
+        member_link = (
+            f'<a href="tg://user?id={member.id}"><b>{member_name}</b></a>'
+        )
+        welcome_text = (
+            f"<b>[❆] Welcome to Batmancardchk Group 💎</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 Welcome, {member_link}!\n\n"
+            f"<b>We are happy to have you here.</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ <b>Community</b> ➳ "
+            f"<a href='{GROUP_LINK}'>Batmancardchk</a> ⭐"
+        )
+        try:
+            await _send_as_media(
+                context.bot,
+                chat.id,
+                get_random_live_emoji(),
+                caption=welcome_text,
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.warning("Welcome sticker failed for uid=%s: %s", member.id, exc)
+            await message.reply_text(
+                welcome_text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+
 
 def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
     return (
@@ -556,7 +649,7 @@ async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> l
     Returns a list of (uname, link, label) tuples for channels the user
     has NOT yet joined.  Empty list = all joined → allow through.
     """
-    if user_id == OWNER_ID:
+    if _is_admin(user_id):
         return []
 
     cached = _force_sub_cache.get(user_id)
@@ -641,7 +734,7 @@ async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def require_not_banned(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user_id = update.effective_user.id
-    if user_id == OWNER_ID:
+    if _is_admin(user_id):
         return True
     ud = get_user_data(user_id, context)
     if ud.get("banned", False):
@@ -735,22 +828,29 @@ def kb_main(user_id: int) -> RawMarkup:
     ])
 
 def kb_back(cb: str) -> RawMarkup:
-    return RawMarkup([[_btn("🔙 " + B("BACK"), cb=cb, style="primary")]])
+    return RawMarkup([[_btn(B("BACK"), cb=cb, style="primary")]])
+
+def kb_profile() -> RawMarkup:
+    return RawMarkup([
+        [_btn(B("Buy"), cb="mprice", style="primary"),
+         _btn(B("Support"), url=SUPPORT_LINK, style="primary")],
+        [_btn(B("Back"), cb="bmain", style="danger")],
+    ])
 
 def kb_price() -> RawMarkup:
     return RawMarkup([
-        [_btn("⭐ " + B("1.5$ — 1 Day"),  cb="pay1d", style="primary"),
-         _btn("⭐ " + B("8$ — 7 Days"),   cb="pay10", style="primary")],
-        [_btn("⭐ " + B("12$ — 15 Days"), cb="pay15", style="primary"),
-         _btn("⭐ " + B("25$ — 30 Days"), cb="pay30", style="primary")],
-        [_btn("🆘 " + B("SUPPORT"),       url=SUPPORT_LINK, style="primary")],
-        [_btn("🔙 " + B("BACK"),          cb="bmain")],
+        [_btn(B("1.5$ — 1 Day"),  cb="pay1d", style="primary"),
+         _btn(B("8$ — 7 Days"),   cb="pay10", style="primary")],
+        [_btn(B("12$ — 15 Days"), cb="pay15", style="primary"),
+         _btn(B("25$ — 30 Days"), cb="pay30", style="primary")],
+        [_btn(B("SUPPORT"),       url=SUPPORT_LINK, style="primary")],
+        [_btn(B("BACK"),          cb="bmain")],
     ])
 
 def kb_payment() -> RawMarkup:
     return RawMarkup([
-        [_btn("🆘 " + B("CONTACT SUPPORT"), url=SUPPORT_LINK, style="primary")],
-        [_btn("🔙 " + B("BACK"), cb="mprice")],
+        [_btn(B("CONTACT SUPPORT"), url=SUPPORT_LINK, style="primary")],
+        [_btn(B("BACK"), cb="mprice")],
     ])
 
 def kb_gate_main() -> RawMarkup:
@@ -764,7 +864,7 @@ def kb_gate_main() -> RawMarkup:
 def kb_upgrade() -> RawMarkup:
     return RawMarkup([
         [_btn("💎 " + B("BUY PREMIUM"), cb="mprice",     style="primary")],
-        [_btn("🆘 " + B("SUPPORT"),     url=SUPPORT_LINK)],
+        [_btn(B("SUPPORT"),             url=SUPPORT_LINK)],
     ])
 
 def kb_cooldown() -> RawMarkup:
@@ -859,7 +959,7 @@ CMD_PAGES = {
         "       Limit ➳ 5000 cards (trial: 1 credit = 1 card)\n"
         "       Reply to a .txt file → <code>/msh</code>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Upgrade via /plan to unlock these gates</i>"
+        "<i>Upgrade via /buy to unlock these gates</i>"
     ),
     5: (
         "⭅ <b>🛠 𝗧𝗢𝗢𝗟𝗦</b> ⭆\n"
@@ -880,7 +980,7 @@ CMD_PAGES = {
         "⭅ <b>👤 𝗔𝗖𝗖𝗢𝗨𝗡𝗧</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>/start</b> ➳ Open Dashboard\n\n"
-        "<b>/plan</b>  ➳ View Premium Plans\n\n"
+        "<b>/buy</b>  ➳ View Premium Plans\n\n"
         "<b>/refer</b> ➳ Referral Program\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>{E_PRO} How Credits Work</b>\n"
@@ -952,7 +1052,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        gate_key: str, gate_name: str):
     user = update.effective_user
     if not await require_not_banned(update, context): return
-    if context.bot_data.get("maintenance") and user.id != OWNER_ID:
+    if context.bot_data.get("maintenance") and not _is_admin(user.id):
         await update.message.reply_text(
             f"<b>{E_ERRORS} {B('Maintenance')}</b>\nBot is under maintenance.", parse_mode="HTML"
         )
@@ -971,7 +1071,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     if gate_key in PREMIUM_GATES and not premium:
         await update.message.reply_text(
-            f"<b>{E_PRO} {B('Premium Only')}</b>\n──────────\nUse /plan to upgrade.",
+            f"<b>{E_PRO} {B('Premium Only')}</b>\n──────────\nUse /buy to upgrade.",
             parse_mode="HTML", reply_markup=kb_upgrade()
         )
         return
@@ -1104,7 +1204,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
 # GATE ON/OFF  (owner only)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _gate_toggle(update, context, gate: str, state: bool):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     context.bot_data[f"{gate}_on"] = state
     icon = E_LIVE if state else E_DECLINED
     await update.message.reply_text(
@@ -1123,7 +1223,7 @@ async def cmd_updatesites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Useful after updating sites.txt or when all cards come back Dead.
     """
     user = update.effective_user
-    if user.id != OWNER_ID:
+    if not _is_admin(user.id):
         await update.message.reply_text("❌ Owner only.", parse_mode="HTML")
         return
 
@@ -1262,7 +1362,7 @@ async def _grant(uid: int, plan: str, days: int,
 # OWNER COMMANDS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
             f"<b>{E_DEV} {B('Generate Code / Key')}</b>\n──────────\n"
@@ -1417,7 +1517,7 @@ async def cmd_hr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 /hr <hours> <count>    (count keys)
     Silent for everyone except the owner.
     """
-    if update.effective_user.id != OWNER_ID:
+    if not _is_admin(update.effective_user.id):
         return  # silent
 
     # Determine how many hours from the command name itself (/hr1 etc.) or args
@@ -1518,7 +1618,7 @@ async def cmd_hr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     if len(context.args) < 3:
         await update.message.reply_text(
             f"<b>{E_DEV} {B('Grant Premium')}</b>\n──────────\n"
@@ -1559,7 +1659,7 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     target = None
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         target = update.message.reply_to_message.from_user.id
@@ -1584,7 +1684,7 @@ async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #   profile — plan, credits, bans, checks, join date.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
+    if not _is_admin(update.effective_user.id):
         return
 
     if not context.args:
@@ -1694,7 +1794,7 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
 
     target_id = None
     target_name, target_uname = "Unknown", ""
@@ -1779,7 +1879,7 @@ async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=(
                 f"<b>{E_ERRORS} {B('Subscription Cancelled')}</b>\n──────────\n"
                 f"Your <b>{old_plan_str}</b> premium has been removed by the admin.\n"
-                f"Use /plan to purchase a new subscription.\n"
+                f"Use /buy to purchase a new subscription.\n"
                 f"──────────"
             ),
             parse_mode="HTML"
@@ -1796,6 +1896,14 @@ _BROADCAST_MAX_CONC    = 200   # max simultaneous sends (Telegram rate-safe)
 
 # Lock — prevents two broadcasts running at the same time
 _broadcast_lock = asyncio.Lock()
+
+
+def _broadcast_controls(broadcast_id: str) -> RawMarkup:
+    """Owner control panel shown under a completed broadcast status card."""
+    return RawMarkup([[
+        _btn("✏️ Editor", cb=f"br_edit:{broadcast_id}", style="primary"),
+        _btn("🗑 Delete", cb=f"br_delete:{broadcast_id}", style="danger"),
+    ]])
 
 
 def _broadcast_status_text(total: int, done: int, sent: int,
@@ -1819,6 +1927,7 @@ def _broadcast_status_text(total: int, done: int, sent: int,
 
 
 async def _broadcast_worker(bot, status_msg, user_ids: list,
+                             bot_data: dict, broadcast_id: str,
                              src_chat_id: int = None, src_msg_id: int = None,
                              text: str = None):
     """
@@ -1831,6 +1940,7 @@ async def _broadcast_worker(bot, status_msg, user_ids: list,
     sent    = blocked = failed = done = 0
     sem     = asyncio.Semaphore(_BROADCAST_MAX_CONC)
     counter_lock = asyncio.Lock()
+    delivered = {}
 
     async def _send_one(uid: int):
         nonlocal sent, blocked, failed, done
@@ -1838,18 +1948,19 @@ async def _broadcast_worker(bot, status_msg, user_ids: list,
             try:
                 if src_chat_id and src_msg_id:
                     # Native copy — no "Forwarded from" header
-                    await bot.copy_message(
+                    sent_message = await bot.copy_message(
                         chat_id=uid,
                         from_chat_id=src_chat_id,
                         message_id=src_msg_id,
                     )
                 else:
-                    await bot.send_message(
+                    sent_message = await bot.send_message(
                         chat_id=uid, text=text,
                         parse_mode="HTML",
                         disable_web_page_preview=True,
                     )
                 async with counter_lock:
+                    delivered[uid] = sent_message.message_id
                     sent += 1
             except Forbidden:
                 async with counter_lock:
@@ -1900,11 +2011,21 @@ async def _broadcast_worker(bot, status_msg, user_ids: list,
     async with counter_lock:
         fs, fb, ff = sent, blocked, failed
 
+    bot_data.setdefault("broadcast_records", {})[broadcast_id] = {
+        "messages": delivered,
+        "deleted": False,
+        "created_at": time.time(),
+        "owner_chat_id": status_msg.chat_id,
+        "status_message_id": status_msg.message_id,
+    }
+    await _save_state(bot_data)
+
     # Final status card
     try:
         await status_msg.edit_text(
             _broadcast_status_text(total, total, fs, fb, ff, finished=True),
             parse_mode="HTML",
+            reply_markup=_broadcast_controls(broadcast_id),
         )
     except Exception:
         pass
@@ -1927,7 +2048,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
       2. /broadcast <text>                     → sends a plain-text HTML message
     Runs in the BACKGROUND — other commands still work while it runs.
     """
-    if update.effective_user.id != OWNER_ID:
+    if not _is_admin(update.effective_user.id):
         return
 
     # ── Usage check ──────────────────────────────────────────────────────────
@@ -1979,6 +2100,10 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = " ".join(context.args)
 
+        broadcast_id = (
+            f"{int(time.time())}{random.randint(100, 999)}"
+        )
+
         # Initial status card
         status_msg = await update.message.reply_text(
             _broadcast_status_text(total, 0, 0, 0, 0),
@@ -1996,6 +2121,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(
             _broadcast_worker(
                 context.bot, status_msg, user_ids,
+                context.bot_data, broadcast_id,
                 src_chat_id=src_chat_id, src_msg_id=src_msg_id,
                 text=text,
             )
@@ -2010,7 +2136,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_bstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check whether a broadcast is currently running."""
-    if update.effective_user.id != OWNER_ID:
+    if not _is_admin(update.effective_user.id):
         return
     if _broadcast_lock.locked():
         await update.message.reply_text(
@@ -2023,8 +2149,191 @@ async def cmd_bstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
 
+
+async def _delete_broadcast_messages(bot, messages: dict) -> tuple[int, int]:
+    """Delete tracked broadcast copies with bounded concurrency."""
+    deleted = failed = 0
+    lock = asyncio.Lock()
+    sem = asyncio.Semaphore(50)
+
+    async def _delete_one(chat_id: int, message_id: int) -> None:
+        nonlocal deleted, failed
+        async with sem:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                async with lock:
+                    deleted += 1
+            except Exception:
+                async with lock:
+                    failed += 1
+
+    await asyncio.gather(
+        *[
+            asyncio.create_task(_delete_one(int(chat_id), int(message_id)))
+            for chat_id, message_id in messages.items()
+        ],
+        return_exceptions=True,
+    )
+    return deleted, failed
+
+
+async def broadcast_control_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Handle owner-only Editor/Delete buttons under completed broadcasts."""
+    query = update.callback_query
+    if not query or not query.from_user or not _is_admin(query.from_user.id):
+        if query:
+            await query.answer("⛔ Owner only.", show_alert=True)
+        return
+
+    action, broadcast_id = query.data.split(":", 1)
+    records = context.bot_data.setdefault("broadcast_records", {})
+    record = records.get(broadcast_id)
+    if not record:
+        await query.answer("This broadcast record has expired.", show_alert=True)
+        return
+    if record.get("busy"):
+        await query.answer("This broadcast is already being updated.", show_alert=True)
+        return
+    if record.get("deleted"):
+        await query.answer("This broadcast was already deleted.", show_alert=True)
+        return
+
+    if action == "br_edit":
+        pending = context.bot_data.setdefault("broadcast_edit_pending", {})
+        pending[query.from_user.id] = broadcast_id
+        await query.answer()
+        await query.message.reply_text(
+            "✏️ <b>Broadcast Editor</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Send the replacement message now.\n\n"
+            "<i>The previous broadcast will be deleted from every reachable "
+            "user, then this new message will be sent.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    record["busy"] = True
+    await query.answer("Deleting broadcast from all users…")
+    try:
+        deleted, failed = await _delete_broadcast_messages(
+            context.bot,
+            dict(record.get("messages", {})),
+        )
+        record["messages"] = {}
+        record["deleted"] = True
+        await query.message.edit_text(
+            "🗑 <b>Broadcast Deleted</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>Deleted</b> ➛ {deleted}\n"
+            f"❌ <b>Failed</b>  ➛ {failed}",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    finally:
+        record["busy"] = False
+
+
+async def broadcast_edit_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Use an owner's next message to replace a previously sent broadcast."""
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not _is_admin(user.id):
+        return
+
+    pending = context.bot_data.setdefault("broadcast_edit_pending", {})
+    broadcast_id = pending.pop(user.id, None)
+    if not broadcast_id:
+        return
+
+    record = context.bot_data.setdefault("broadcast_records", {}).get(broadcast_id)
+    if not record or record.get("deleted"):
+        await message.reply_text("⚠️ This broadcast is no longer available.")
+        return
+    if record.get("busy"):
+        await message.reply_text("⚠️ This broadcast is already being updated.")
+        return
+
+    record["busy"] = True
+    old_messages = dict(record.get("messages", {}))
+    progress = await message.reply_text(
+        f"✏️ Replacing the broadcast for <b>{len(old_messages)}</b> users…",
+        parse_mode="HTML",
+    )
+
+    sent = failed = 0
+    new_messages = {}
+    counter_lock = asyncio.Lock()
+    sem = asyncio.Semaphore(50)
+
+    async def _replace_one(chat_id: int, old_message_id: int) -> None:
+        nonlocal sent, failed
+        async with sem:
+            try:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=chat_id,
+                        message_id=old_message_id,
+                    )
+                except Exception:
+                    pass
+
+                copied = await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=message.chat_id,
+                    message_id=message.message_id,
+                )
+                async with counter_lock:
+                    new_messages[chat_id] = copied.message_id
+                    sent += 1
+            except Exception:
+                async with counter_lock:
+                    failed += 1
+
+    try:
+        await asyncio.gather(
+            *[
+                asyncio.create_task(_replace_one(int(chat_id), int(message_id)))
+                for chat_id, message_id in old_messages.items()
+            ],
+            return_exceptions=True,
+        )
+        record["messages"] = new_messages
+        record["updated_at"] = time.time()
+
+        await progress.edit_text(
+            "✅ <b>Broadcast Updated</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            f"📨 <b>Replaced</b> ➛ {sent}\n"
+            f"❌ <b>Failed</b>   ➛ {failed}",
+            parse_mode="HTML",
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=record["owner_chat_id"],
+                message_id=record["status_message_id"],
+                text=(
+                    "✅ <b>Broadcast Updated</b>\n"
+                    "━━━━━━━━━━━━━━━━\n"
+                    f"📨 <b>Active copies</b> ➛ {sent}\n"
+                    f"❌ <b>Failed</b>        ➛ {failed}"
+                ),
+                parse_mode="HTML",
+                reply_markup=_broadcast_controls(broadcast_id),
+            )
+        except Exception:
+            pass
+    finally:
+        record["busy"] = False
+
+
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     uid = None
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         uid = update.message.reply_to_message.from_user.id
@@ -2035,9 +2344,14 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Usage:</b> /ban @user|ID or reply → /ban", parse_mode="HTML"
         )
         return
-    if uid == OWNER_ID:
-        await update.message.reply_text(f"{E_ERRORS} Cannot ban the owner.", parse_mode="HTML"); return
+    if _is_admin(uid):
+        await update.message.reply_text(f"{E_ERRORS} Cannot ban an owner.", parse_mode="HTML"); return
     get_user_data(uid, context)["banned"] = True
+    if update.effective_chat.type in ("group", "supergroup"):
+        try:
+            await context.bot.ban_chat_member(update.effective_chat.id, uid)
+        except Exception as exc:
+            logger.warning("Group ban failed for uid=%s: %s", uid, exc)
     await update.message.reply_text(
         f"<b>{E_ERRORS} User <code>{uid}</code> has been banned.</b>", parse_mode="HTML"
     )
@@ -2055,7 +2369,7 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception: pass
 
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     uid = None
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         uid = update.message.reply_to_message.from_user.id
@@ -2067,6 +2381,15 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     get_user_data(uid, context)["banned"] = False
+    if update.effective_chat.type in ("group", "supergroup"):
+        try:
+            await context.bot.unban_chat_member(
+                update.effective_chat.id,
+                uid,
+                only_if_banned=True,
+            )
+        except Exception as exc:
+            logger.warning("Group unban failed for uid=%s: %s", uid, exc)
     await update.message.reply_text(
         f"<b>{E_LIVE} User <code>{uid}</code> has been unbanned.</b>", parse_mode="HTML"
     )
@@ -2081,36 +2404,169 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception: pass
 
+
+async def cmd_mute_minutes(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Reply with /mute10, /mute30, etc. to mute a member for that many minutes."""
+    actor = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+    if not actor or not message or not chat or not _is_admin(actor.id):
+        return
+    if chat.type not in ("group", "supergroup"):
+        await message.reply_text("Use this command inside the group.")
+        return
+
+    match = re.match(r"^/mute(\d+)(?:@\w+)?(?:\s|$)", message.text or "", re.I)
+    if not match:
+        return
+    minutes = min(max(int(match.group(1)), 1), 10080)
+
+    replied = message.reply_to_message
+    target = replied.from_user if replied else None
+    if not target:
+        await message.reply_text(
+            "<b>Reply to a member with:</b> <code>/mute10</code>\n"
+            "Change 10 to any number of minutes.",
+            parse_mode="HTML",
+        )
+        return
+    if _is_admin(target.id) or target.is_bot:
+        await message.reply_text("❌ Owners and bots cannot be muted.")
+        return
+
+    until = datetime.now().astimezone() + timedelta(minutes=minutes)
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until,
+        )
+        name = escape(target.full_name or target.first_name or "Member")
+        await message.reply_text(
+            f"🔇 <b>{name}</b> has been muted for "
+            f"<b>{minutes} minute{'s' if minutes != 1 else ''}</b>.",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("Mute failed for uid=%s: %s", target.id, exc)
+        await message.reply_text(
+            "❌ I could not mute this member. Give the bot permission to restrict members."
+        )
+
+
+async def cmd_unmute(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Reply with /unmute to restore a member's group messaging permissions."""
+    actor = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+    if not actor or not message or not chat or not _is_admin(actor.id):
+        return
+    if chat.type not in ("group", "supergroup"):
+        await message.reply_text("Use this command inside the group.")
+        return
+
+    replied = message.reply_to_message
+    target = replied.from_user if replied else None
+    if not target:
+        await message.reply_text(
+            "<b>Reply to a muted member with:</b> <code>/unmute</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_invite_users=True,
+            ),
+        )
+        name = escape(target.full_name or target.first_name or "Member")
+        await message.reply_text(
+            f"🔊 <b>{name}</b> has been unmuted.",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("Unmute failed for uid=%s: %s", target.id, exc)
+        await message.reply_text(
+            "❌ I could not unmute this member. Check the bot's administrator permissions."
+        )
+
+
+async def replace_external_group_links(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Reply with the official group link when a member posts another link."""
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat or not user or user.is_bot:
+        return
+    if chat.type not in ("group", "supergroup"):
+        return
+    if not chat.username or chat.username.lower() != GROUP_USERNAME.lstrip("@").lower():
+        return
+    if _is_admin(user.id):
+        return
+
+    text = message.text or message.caption or ""
+    if GROUP_LINK.lower() in text.lower() or "t.me/batcardchkgroup" in text.lower():
+        return
+
+    await message.reply_text(
+        f"🔗 <b>Official group link:</b>\n"
+        f"<a href='{GROUP_LINK}'>{GROUP_LINK}</a>",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     await update.message.reply_text(
-        "<b>🦇 ALL COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>{E_DEV} OWNER ONLY:</b>\n"
-        "/allcm ➳ Show all commands\n"
-        "/allsub ➳ All live premium users\n"
-        "/info [user] ➳ Full user info\n"
-        "/find @user|ID ➳ Search any user + full profile\n"
-        "/gen code &lt;val&gt; [count] ➳ Gen credit code(s)\n"
-        "/gen key &lt;plan&gt; &lt;days&gt; [count] ➳ Gen premium key(s)\n"
-        "/1day [count] ➳ Gen 1-day CORE key(s)\n"
-        "/add @user PLAN DAYS ➳ Grant premium\n"
-        "/sub @user|ID ➳ View user sub + grant plan buttons\n"
-        "/resub @user|ID ➳ Remove active premium\n"
-        "/rsub @user|ID ➳ Same as /resub\n"
-        "/rem &lt;user&gt; ➳ Remove premium (legacy)\n"
-        "/ban &lt;user&gt; ➳ Ban user\n"
-        "/unban &lt;user&gt; ➳ Unban user\n"
-        "/broadcast &lt;msg&gt; ➳ Broadcast\n"
-        "/maintenance on|off ➳ Maintenance mode\n"
-        "/onsh /offsh ➳ Toggle Shopify gate\n"
-        "/onmsh /offmsh ➳ Toggle Shopify Mass gate\n"
+        "<b>🦇 ADMINISTRATION COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Owners / admins</b>\n"
+        "/warn, /warnings, /clearwarnings — group warnings\n"
+        "/ban, /unban, /mute&lt;minutes&gt;, /unmute — moderation\n"
+        "/raid status|off — community raid controls\n"
+        "/user &lt;id|@username&gt; (or reply) — safe user panel\n"
+        "/note &lt;text&gt; (reply or ID), /clearnotes — private notes\n"
+        "/maintenance on|off|status — public-command maintenance mode\n"
+        "/broadcast, /bstatus — broadcasts\n"
+        "/add, /sub, /resub, /rsub, /rem — subscription administration\n"
+        "/gen, /1day — codes and keys\n/find, /info, /allsub — user/subscription lookup\n"
+        "/dbstatus, /updatesites, /onsh, /offsh, /onmsh, /offmsh — diagnostics/gates\n"
+        "/admin — public current group admin list\n"
+        "\n<b>Primary owner only</b>\n"
+        "/boton, /botoff — enable or disable access for all public users\n"
+        "/restart — restart service\n/backup — state export\n/restore — confirmed state import\n"
+        "/fakeon, /fakeoff, /getid, /myid — fake-log controls\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
         "/sh ➳ Shopify Single Checker\n"
         "/msh ➳ Shopify Mass 0-20$ (trial: 1cr=1card, limit 5000)\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
-        "/start ➳ Dashboard\n/plan ➳ Premium plans\n"
+        "/start ➳ Dashboard\n/buy ➳ Premium plans\n"
         "/sub ➳ My subscription\n/sub @user|ID ➳ [Owner] View & grant plan\n/bin ➳ BIN lookup\n"
         "/refer ➳ Referral link\n/rm ➳ Redeem code or key\n"
         "/ping ➳ Bot speed test\n/fb ➳ Send feedback\n"
@@ -2118,8 +2574,108 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+
+async def _panel_admin_allowed(update: Update, context) -> bool:
+    actor, chat = update.effective_user, update.effective_chat
+    if not actor:
+        return False
+    if _is_admin(actor.id):
+        return True
+    return bool(chat and chat.type in ("group", "supergroup")
+                and await _is_chat_admin(chat.id, actor.id, context))
+
+
+def _stored_user_matches(raw: str, context) -> list[tuple[str, dict]]:
+    needle = raw.lstrip("@").strip().lower()
+    return [(uid, ud) for uid, ud in context.bot_data.get("user_data", {}).items()
+            if ud.get("username", "").lstrip("@").lower() == needle]
+
+
+async def _panel_target(update: Update, context):
+    reply = update.effective_message.reply_to_message if update.effective_message else None
+    if reply and reply.from_user:
+        return str(reply.from_user.id), get_user_data(reply.from_user.id, context), None
+    if not context.args:
+        return None, None, "Reply to a member or use /user <id|@username>."
+    raw = context.args[0]
+    if raw.lstrip("-").isdigit():
+        uid = raw.lstrip("+")
+        return uid, context.bot_data.get("user_data", {}).get(uid, {}), None
+    matches = _stored_user_matches(raw, context)
+    if len(matches) != 1:
+        return None, None, ("No stored user has that username." if not matches
+                            else "More than one stored user matches; use their numeric ID.")
+    return matches[0][0], matches[0][1], None
+
+
+async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _panel_admin_allowed(update, context):
+        await update.effective_message.reply_text("❌ Admin access required.")
+        return
+    uid, ud, error = await _panel_target(update, context)
+    if error:
+        await update.effective_message.reply_text(error)
+        return
+    now, plan, expires = time.time(), ud.get("plan", "TRIAL").upper(), ud.get("expires", 0)
+    if plan != "TRIAL" and expires <= now:
+        plan, expires = "TRIAL", 0
+    warnings = context.bot_data.get("warnings", {})
+    warning_rows = [f"{escape(group)}: {len(users.get(uid, []))}" for group, users in warnings.items() if users.get(uid)]
+    memberships = ud.get("memberships", {})
+    notes = context.bot_data.get("admin_notes", {}).get(uid, [])
+    name = escape(ud.get("name") or ud.get("first_name") or "Unknown")
+    username = f"@{escape(ud['username'])}" if ud.get("username") else "None"
+    activity = ud.get("daily_activity", {})
+    recent = sum(activity.get((datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d"), 0) for i in range(7))
+    text = (
+        f"<b>👤 User panel</b>\n<b>Name:</b> {name}\n<b>Username:</b> {username}\n"
+        f"<b>ID:</b> <code>{uid}</code>\n<b>Plan:</b> {escape(plan)}\n"
+        f"<b>Credits:</b> {'Unlimited' if plan != 'TRIAL' else ud.get('credits', 150)}\n"
+        f"<b>Banned:</b> {'Yes' if ud.get('banned') else 'No'}\n<b>Referrals:</b> {ud.get('total_refs', 0)}\n"
+        f"<b>Last active:</b> {escape(str(ud.get('last_active', 'N/A')))}\n"
+        f"<b>Recent activity:</b> {recent} updates / 7 days\n"
+        f"<b>Groups seen:</b> {len(memberships)}\n<b>Warnings by group:</b> {', '.join(warning_rows) or 'None'}\n"
+        f"<b>Private notes:</b> {escape(' | '.join(notes[-5:])) or 'None'}"
+    )
+    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+
+async def cmd_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _panel_admin_allowed(update, context):
+        await update.effective_message.reply_text("❌ Admin access required.")
+        return
+    reply = update.effective_message.reply_to_message
+    if reply and reply.from_user:
+        uid, text = str(reply.from_user.id), " ".join(context.args).strip()
+    else:
+        if len(context.args) < 2 or not context.args[0].lstrip("-").isdigit():
+            await update.effective_message.reply_text("Use /note <user_id> <text>, or reply with /note <text>.")
+            return
+        uid, text = context.args[0], " ".join(context.args[1:]).strip()
+    if not text:
+        await update.effective_message.reply_text("A note cannot be empty.")
+        return
+    notes = context.bot_data.setdefault("admin_notes", {}).setdefault(uid, [])
+    notes.append(text[:500])
+    del notes[:-20]  # bounded private operational notes
+    await _save_state(context.bot_data)
+    await update.effective_message.reply_text("✅ Private admin note saved.")
+
+
+async def cmd_clearnotes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _panel_admin_allowed(update, context):
+        await update.effective_message.reply_text("❌ Admin access required.")
+        return
+    uid, _, error = await _panel_target(update, context)
+    if error:
+        await update.effective_message.reply_text(error.replace("/user", "/clearnotes"))
+        return
+    context.bot_data.setdefault("admin_notes", {}).pop(uid, None)
+    await _save_state(context.bot_data)
+    await update.effective_message.reply_text("✅ Private notes cleared.")
+
 async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     now     = time.time()
     all_u   = context.bot_data.get("user_data", {})
     premium = [
@@ -2160,7 +2716,7 @@ async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     now = time.time()
 
     if not context.args and not (
@@ -2310,28 +2866,63 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=action_kb)
 
 async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args:
+    if not _is_admin(update.effective_user.id): return
+    if not context.args or context.args[0].lower() == "status":
         state = context.bot_data.get("maintenance", False)
         await update.message.reply_text(
             f"Maintenance is currently: <b>{'ON' if state else 'OFF'}</b>\n"
-            "Use: /maintenance on|off",
+            "Use: /maintenance on|off|status",
             parse_mode="HTML"
         )
         return
     arg = context.args[0].lower()
     if arg in ("on", "1", "true"):
         context.bot_data["maintenance"] = True
+        await _save_state(context.bot_data)
         await update.message.reply_text(
             f"<b>{E_ERRORS} {B('Maintenance Mode ON.')}</b> Users cannot use commands.", parse_mode="HTML"
         )
     elif arg in ("off", "0", "false"):
         context.bot_data["maintenance"] = False
+        await _save_state(context.bot_data)
         await update.message.reply_text(
             f"<b>{E_LIVE} {B('Maintenance Mode OFF.')}</b> Bot is live.", parse_mode="HTML"
         )
     else:
-        await update.message.reply_text("Use: /maintenance on|off")
+        await update.message.reply_text("Use: /maintenance on|off|status")
+
+
+async def cmd_botoff(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Primary owner only — disable all public bot access."""
+    user, message = update.effective_user, update.effective_message
+    if not user or user.id != OWNER_ID or not message:
+        return
+    if context.bot_data.get("bot_off", False):
+        await message.reply_text("<b>Bot access is already OFF.</b>", parse_mode="HTML")
+        return
+    context.bot_data["bot_off"] = True
+    await _save_state(context.bot_data)
+    await message.reply_text(
+        "<b>Bot access is now OFF.</b>\n"
+        "Only the primary owner can use the bot. Use /boton to enable access again.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_boton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Primary owner only — restore normal bot access."""
+    user, message = update.effective_user, update.effective_message
+    if not user or user.id != OWNER_ID or not message:
+        return
+    if not context.bot_data.get("bot_off", False):
+        await message.reply_text("<b>Bot access is already ON.</b>", parse_mode="HTML")
+        return
+    context.bot_data["bot_off"] = False
+    await _save_state(context.bot_data)
+    await message.reply_text(
+        "<b>Bot access is now ON.</b>\nAll users can use the bot normally.",
+        parse_mode="HTML",
+    )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # USER COMMANDS
@@ -2349,7 +2940,7 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update.message.reply_to_message and
         update.message.reply_to_message.from_user
     )
-    if user.id == OWNER_ID and has_target:
+    if _is_admin(user.id) and has_target:
         # ── Resolve target ──────────────────────────────────
         if update.message.reply_to_message and update.message.reply_to_message.from_user:
             ru = update.message.reply_to_message.from_user
@@ -2485,7 +3076,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if referrer_id:
                 await process_referral(user.id, referrer_id, context)
 
-    if ud.get("banned", False) and user.id != OWNER_ID:
+    if ud.get("banned", False) and not _is_admin(user.id):
         await update.message.reply_text(
             f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
             "You have been banned from using this bot.\n──────────",
@@ -2498,7 +3089,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
         return
 
-    await update.message.reply_text(ui_start_screen(user, context), parse_mode="HTML", reply_markup=kb_main(user.id), disable_web_page_preview=True)
+    await _send_as_media(
+        context.bot,
+        update.effective_chat.id,
+        get_random_live_emoji(),
+        caption=ui_start_screen(user, context),
+        parse_mode="HTML",
+        reply_markup=kb_main(user.id),
+        reply_to_message_id=update.message.message_id,
+    )
 
 MSH_LIMIT           = 5000   # absolute hard cap
 TRIAL_MASS_DAY_LIMIT = 500   # trial users: max cards per day
@@ -2507,7 +3106,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mass Shopify Checker — /msh  (new UI: Gate/Progress/Charged/Live/Dead/Errors/Time)."""
     user = update.effective_user
     if not await require_not_banned(update, context): return
-    if context.bot_data.get("maintenance") and user.id != OWNER_ID:
+    if context.bot_data.get("maintenance") and not _is_admin(user.id):
         await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.", parse_mode="HTML")
         return
     if not context.bot_data.get("msh_on", True):
@@ -2517,7 +3116,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ud        = get_user_data(user.id, context)
     premium   = is_user_premium(ud)
-    is_trial  = not premium and user.id != OWNER_ID
+    is_trial  = not premium and not _is_admin(user.id)
     today_str = datetime.now().strftime("%Y-%m-%d")
     _update_user_meta(ud, user)
     plan      = ud.get("plan", "TRIAL")
@@ -2675,7 +3274,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_1day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Owner-only shortcut: /1day [count] — generate 1-day CORE premium keys."""
-    if update.effective_user.id != OWNER_ID: return
+    if not _is_admin(update.effective_user.id): return
     count = 1
     if context.args:
         try:
@@ -2854,7 +3453,7 @@ async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(
         txt, parse_mode="HTML",
-        reply_markup=kb_back("bmain"),
+        reply_markup=kb_referral(user.id),
         disable_web_page_preview=True,
     )
 
@@ -3307,14 +3906,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
             "Share your link to earn free credits!",
             parse_mode="HTML",
-            reply_markup=kb_back("bmain"),
+            reply_markup=kb_referral(user.id),
             disable_web_page_preview=True,
         )
         return
     if data == "mprofile":
         await query.message.edit_text(
             ui_full_profile(user, context), parse_mode="HTML",
-            reply_markup=kb_back("bmain"), disable_web_page_preview=True
+            reply_markup=kb_profile(), disable_web_page_preview=True
         )
         return
     if data == "mgates":
@@ -3489,7 +4088,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if user.id == OWNER_ID:
+    if _is_admin(user.id):
         # ── /sub grant plan buttons: ogs_PLAN_DAYS_UID ──────────────
         if data.startswith("ogs_"):
             parts    = data.split("_")           # ["ogs","PLAN","DAYS","UID"]
@@ -3558,6 +4157,495 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ERROR HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STATE_FILE = os.environ.get("BOT_STATE_FILE", "bot_state.json")
+BACKUP_DIR = os.environ.get("BOT_BACKUP_DIR", "backups")
+MAX_BACKUP_BYTES = 10 * 1024 * 1024
+RAID_WINDOW_SECONDS = int(os.environ.get("RAID_WINDOW_SECONDS", "60"))
+RAID_JOIN_THRESHOLD = int(os.environ.get("RAID_JOIN_THRESHOLD", "12"))
+RAID_DURATION_SECONDS = int(os.environ.get("RAID_DURATION_SECONDS", "900"))
+_RAID_RESTRICT_PERMISSIONS = ChatPermissions(can_send_messages=False)
+
+
+def _state_payload(bot_data: dict) -> dict:
+    """The durable, non-secret portion of bot state."""
+    return {
+        "version": 1,
+        "saved_at": datetime.utcnow().isoformat() + "Z",
+        "user_data": bot_data.get("user_data", {}),
+        "warnings": bot_data.get("warnings", {}),
+        "group_bans": bot_data.get("group_bans", {}),
+        "broadcast_records": bot_data.get("broadcast_records", {}),
+        "admin_notes": bot_data.get("admin_notes", {}),
+        "raid_state": bot_data.get("raid_state", {}),
+        "maintenance": bool(bot_data.get("maintenance", False)),
+        "bot_off": bool(bot_data.get("bot_off", False)),
+    }
+
+
+def _write_json_atomic(path: str, value: dict) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temporary = f"{path}.{uuid.uuid4().hex}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, path)
+
+
+def _rotate_restore_points(bot_data: dict) -> None:
+    """Create daily/weekly/monthly snapshots and prune only managed snapshots."""
+    now = datetime.utcnow()
+    payload = _state_payload(bot_data)
+    periods = (("daily", now.strftime("%Y%m%d"), 14),
+               ("weekly", now.strftime("%G-W%V"), 8),
+               ("monthly", now.strftime("%Y%m"), 12))
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    for period, label, keep in periods:
+        path = os.path.join(BACKUP_DIR, f"{period}-{label}.json")
+        if not os.path.exists(path):
+            _write_json_atomic(path, payload)
+        managed = sorted(
+            name for name in os.listdir(BACKUP_DIR)
+            if re.fullmatch(rf"{period}-[A-Za-z0-9-]+\.json", name)
+        )
+        for old in managed[:-keep]:
+            os.unlink(os.path.join(BACKUP_DIR, old))
+
+
+async def _automatic_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await asyncio.to_thread(_rotate_restore_points, context.bot_data)
+    except Exception as exc:
+        logger.warning("Automatic backup rotation failed: %s", exc)
+        try:
+            await context.bot.send_message(OWNER_ID, f"⚠️ Automatic backup failed: {escape(str(exc))}", parse_mode="HTML")
+        except Exception:
+            pass
+
+
+async def _expire_raid_modes(context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = time.time()
+    raids = context.bot_data.get("raid_state", {})
+    expired = [chat_id for chat_id, state in raids.items()
+               if state.get("expires_at", 0) <= now]
+    for chat_id in expired:
+        raids.pop(chat_id, None)
+    if expired:
+        await _save_state(context.bot_data)
+
+
+async def _maintenance_jobs_loop(app: Application) -> None:
+    """Scheduler fallback when PTB's optional JobQueue dependency is absent."""
+    last_backup_day = datetime.utcnow().strftime("%Y-%m-%d")
+    while True:
+        await asyncio.sleep(60)
+        await _expire_raid_modes(app)
+        current_day = datetime.utcnow().strftime("%Y-%m-%d")
+        if current_day != last_backup_day:
+            await _automatic_backup(app)
+            last_backup_day = current_day
+
+
+async def _save_state(bot_data: dict) -> None:
+    try:
+        await asyncio.to_thread(_write_json_atomic, STATE_FILE, _state_payload(bot_data))
+    except Exception as exc:
+        logger.warning("State save failed: %s", exc)
+
+
+def _valid_state(value: object) -> bool:
+    required = ("user_data", "warnings", "group_bans", "broadcast_records")
+    optional = ("admin_notes", "raid_state")
+    return (isinstance(value, dict) and value.get("version") == 1
+            and all(isinstance(value.get(key), dict) for key in required)
+            and all(key not in value or isinstance(value[key], dict) for key in optional))
+
+
+def _load_state(bot_data: dict) -> None:
+    if not os.path.exists(STATE_FILE):
+        return
+    try:
+        if os.path.getsize(STATE_FILE) > MAX_BACKUP_BYTES:
+            raise ValueError("state file exceeds size limit")
+        with open(STATE_FILE, encoding="utf-8") as handle:
+            state = json.load(handle)
+        if not _valid_state(state):
+            raise ValueError("invalid state schema")
+        for key in ("user_data", "warnings", "group_bans", "broadcast_records",
+                    "admin_notes", "raid_state"):
+            bot_data[key] = state.get(key, {})
+        bot_data["maintenance"] = bool(state.get("maintenance", False))
+        bot_data["bot_off"] = bool(state.get("bot_off", False))
+        logger.info("Restored durable bot state from %s", STATE_FILE)
+    except Exception as exc:
+        logger.warning("State restore failed: %s", exc)
+
+
+def _is_community_group(chat) -> bool:
+    if not chat or chat.type not in ("group", "supergroup"):
+        return False
+    expected = GROUP_USERNAME.lstrip("@").lower()
+    return bool(chat.username and chat.username.lower() == expected)
+
+
+async def _community_admins(chat_id: int, context) -> list:
+    """Fetch current Telegram administrators; callers handle permission failures."""
+    return await context.bot.get_chat_administrators(chat_id)
+
+
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Public, group-only view of the current Telegram administration team."""
+    message, chat = update.effective_message, update.effective_chat
+    if not message or not chat or chat.type not in ("group", "supergroup"):
+        await message.reply_text("Use /admin in a group to view its administrators.")
+        return
+    try:
+        administrators = await _community_admins(chat.id, context)
+    except (Forbidden, BadRequest) as exc:
+        await message.reply_text(f"⚠️ I cannot read this group's administrators: {escape(str(exc))}", parse_mode="HTML")
+        return
+    except Exception:
+        await message.reply_text("⚠️ Administrator list is temporarily unavailable. Please try again.")
+        return
+    by_id = {item.user.id: item.user for item in administrators}
+    ordered_ids = [uid for uid in (OWNER_ID, SECOND_OWNER_ID) if uid in by_id]
+    ordered_ids.extend(uid for uid in by_id if uid not in ordered_ids)
+    lines = ["<b>👥 Group Administrators</b>"]
+    for number, uid in enumerate(ordered_ids, 1):
+        user = by_id[uid]
+        label = "Owner" if uid == OWNER_ID else "Second Owner" if uid == SECOND_OWNER_ID else "Admin"
+        name = escape(user.full_name or user.first_name or "Administrator")
+        username = f" (@{escape(user.username)})" if user.username else ""
+        lines.append(f"{number}. <b>{name}</b>{username} — {label}")
+    await message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def _notify_raid(chat, text: str, context) -> None:
+    recipient_ids = {OWNER_ID}
+    try:
+        recipient_ids.update(member.user.id for member in await _community_admins(chat.id, context))
+    except Exception as exc:
+        logger.warning("Raid admin lookup failed chat=%s: %s", chat.id, exc)
+    for uid in recipient_ids:
+        try:
+            await context.bot.send_message(uid, text, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+async def _observe_raid_joins(chat, members, context) -> None:
+    """Conservative join burst detector; only restricts people joining after detection."""
+    if not _is_community_group(chat):
+        return
+    now = time.time()
+    state = context.bot_data.setdefault("raid_state", {}).setdefault(str(chat.id), {})
+    joins = [stamp for stamp in state.get("joins", []) if now - stamp < RAID_WINDOW_SECONDS]
+    joins.extend([now] * sum(1 for member in members if not member.is_bot))
+    state["joins"] = joins[-RAID_JOIN_THRESHOLD:]  # bounded, transient evidence
+    expires = state.get("expires_at", 0)
+    if expires <= now and len(joins) >= RAID_JOIN_THRESHOLD:
+        expires = now + RAID_DURATION_SECONDS
+        state.update({"active": True, "expires_at": expires, "activated_at": now})
+        await _save_state(context.bot_data)
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Disable raid mode", callback_data=f"raid_off:{chat.id}")
+        ]])
+        alert = (
+            f"⚠️ <b>Raid mode enabled</b> in {escape(chat.title or 'the community group')}.\n"
+            f"{len(joins)} joins in {RAID_WINDOW_SECONDS}s; new arrivals will be temporarily restricted "
+            f"until {datetime.fromtimestamp(expires).strftime('%H:%M')}."
+        )
+        try:
+            await context.bot.send_message(chat.id, alert, parse_mode="HTML", reply_markup=markup)
+        except Exception as exc:
+            logger.warning("Raid group alert failed: %s", exc)
+        await _notify_raid(chat, alert, context)
+    if state.get("active") and state.get("expires_at", 0) > now:
+        for member in members:
+            if member.is_bot or await _is_chat_admin(chat.id, member.id, context):
+                continue
+            try:
+                await context.bot.restrict_chat_member(
+                    chat.id, member.id, permissions=_RAID_RESTRICT_PERMISSIONS,
+                    until_date=int(state["expires_at"]),
+                )
+            except (Forbidden, BadRequest) as exc:
+                logger.warning("Raid restriction failed chat=%s user=%s: %s", chat.id, member.id, exc)
+                await _notify_raid(chat, f"⚠️ Raid restriction failed for <code>{member.id}</code>: {escape(str(exc))}", context)
+    elif state.get("active"):
+        # Keep a tiny expired marker only until the next observed join, then prune it.
+        context.bot_data["raid_state"].pop(str(chat.id), None)
+        await _save_state(context.bot_data)
+
+
+async def cmd_raid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or not _is_community_group(chat):
+        return
+    if not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can manage raid mode.")
+        return
+    state = context.bot_data.setdefault("raid_state", {}).get(str(chat.id), {})
+    arg = (context.args[0].lower() if context.args else "status")
+    if arg in ("off", "disable"):
+        context.bot_data["raid_state"].pop(str(chat.id), None)
+        await _save_state(context.bot_data)
+        await message.reply_text("✅ Raid mode disabled. Existing temporary restrictions retain their Telegram expiry.")
+    elif arg == "status":
+        active = state.get("active") and state.get("expires_at", 0) > time.time()
+        await message.reply_text("🛡 Raid mode: " + (f"ON until {datetime.fromtimestamp(state['expires_at']).strftime('%Y-%m-%d %H:%M')}" if active else "OFF"))
+    else:
+        await message.reply_text("Use /raid off or /raid status.")
+
+
+async def raid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data.startswith("raid_off:"):
+        return
+    chat_id = int(query.data.split(":", 1)[1])
+    if not await _is_chat_admin(chat_id, query.from_user.id, context):
+        await query.answer("Only group administrators can disable raid mode.", show_alert=True)
+        return
+    context.bot_data.setdefault("raid_state", {}).pop(str(chat_id), None)
+    await _save_state(context.bot_data)
+    await query.answer("Raid mode disabled.")
+    await query.message.edit_reply_markup(reply_markup=None)
+
+
+async def _is_chat_admin(chat_id: int, user_id: int, context) -> bool:
+    if _is_admin(user_id):
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        return member.status in ("administrator", "creator", "owner")
+    except Exception:
+        return False
+
+
+async def _issue_warning(chat, target, moderator, reason: str, context,
+                         automated: bool = False) -> int:
+    """Single warning pathway used by both moderators and anti-spam."""
+    if target.is_bot or _is_admin(target.id):
+        return 0
+    warnings = context.bot_data.setdefault("warnings", {})
+    history = warnings.setdefault(str(chat.id), {}).setdefault(str(target.id), [])
+    history.append({
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "reason": reason[:300],
+        "moderator_id": moderator.id,
+        "moderator_name": getattr(moderator, "full_name", None)
+        or getattr(moderator, "first_name", None) or "Moderator",
+        "automated": automated,
+    })
+    number = len(history)
+    if number >= 3:
+        context.bot_data.setdefault("group_bans", {}).setdefault(str(chat.id), {})[str(target.id)] = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "reason": "Three warnings",
+        }
+        try:
+            await context.bot.ban_chat_member(chat.id, target.id)
+            outcome = " Permanently banned after the third warning."
+        except Exception as exc:
+            logger.warning("Third-warning ban failed chat=%s user=%s: %s", chat.id, target.id, exc)
+            outcome = " Third-warning ban failed; grant me ban permissions."
+    else:
+        outcome = f" ({3 - number} warning(s) remain before a ban.)"
+    await _save_state(context.bot_data)
+    return number
+
+
+async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or chat.type not in ("group", "supergroup"):
+        return
+    if not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can issue warnings.")
+        return
+    target = message.reply_to_message.from_user if message.reply_to_message else None
+    if not target:
+        await message.reply_text("Reply to a group member with /warn <reason>.")
+        return
+    if target.is_bot or await _is_chat_admin(chat.id, target.id, context):
+        await message.reply_text("❌ Administrators and bots cannot be warned.")
+        return
+    reason = " ".join(context.args).strip() or "No reason provided"
+    count = await _issue_warning(chat, target, actor, reason, context)
+    await message.reply_text(
+        f"⚠️ <b>{escape(target.full_name or 'Member')}</b> received warning {count}/3.\n"
+        f"<b>Reason:</b> {escape(reason)}",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or chat.type not in ("group", "supergroup"):
+        return
+    target = message.reply_to_message.from_user if message.reply_to_message else actor
+    if target.id != actor.id and not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can view another member's warnings.")
+        return
+    history = context.bot_data.get("warnings", {}).get(str(chat.id), {}).get(str(target.id), [])
+    if not history:
+        await message.reply_text(f"✅ No warning history for {escape(target.full_name or 'this member')}.", parse_mode="HTML")
+        return
+    rows = []
+    for index, item in enumerate(history[-10:], 1):
+        rows.append(f"{index}. <b>{escape(item.get('timestamp', 'unknown'))}</b> — "
+                    f"{escape(item.get('reason', 'No reason'))} "
+                    f"(by {escape(item.get('moderator_name', 'Unknown'))})")
+    await message.reply_text(
+        f"⚠️ <b>Warnings for {escape(target.full_name or 'member')} ({len(history)}/3)</b>\n" + "\n".join(rows),
+        parse_mode="HTML",
+    )
+
+
+async def cmd_clearwarnings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or not message.reply_to_message:
+        return
+    if not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can clear warnings.")
+        return
+    target = message.reply_to_message.from_user
+    context.bot_data.setdefault("warnings", {}).setdefault(str(chat.id), {}).pop(str(target.id), None)
+    await _save_state(context.bot_data)
+    await message.reply_text(f"✅ Cleared warnings for {escape(target.full_name or 'member')}.", parse_mode="HTML")
+
+
+async def track_activity_and_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Low-priority normal-update tracker plus conservative community anti-spam."""
+    message, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not message or not user or user.is_bot:
+        return
+    ud = get_user_data(user.id, context)
+    _update_user_meta(ud, user)
+    today = datetime.now().strftime("%Y-%m-%d")
+    activity = ud.setdefault("daily_activity", {})
+    activity[today] = activity.get(today, 0) + 1
+    # Retain just one month of activity counters.
+    for day in list(activity):
+        if day < (datetime.now() - timedelta(days=31)).strftime("%Y-%m-%d"):
+            activity.pop(day, None)
+    if chat and chat.type in ("group", "supergroup"):
+        ud.setdefault("memberships", {})[str(chat.id)] = {
+            "title": chat.title or "", "last_seen": ud["last_active"],
+        }
+    # This covers credits/profile metadata changed by normal command updates too.
+    await _save_state(context.bot_data)
+    if not _is_community_group(chat) or await _is_chat_admin(chat.id, user.id, context):
+        return
+    text = (message.text or message.caption or "").strip().lower()
+    now = time.time()
+    tracker = context.bot_data.setdefault("spam_tracker", {}).setdefault(str(chat.id), {}).setdefault(
+        str(user.id), {"times": [], "texts": [], "forward_times": [], "last_warning": 0}
+    )
+    tracker["times"] = [item for item in tracker["times"] if now - item < 20] + [now]
+    tracker["texts"] = [item for item in tracker["texts"] if now - item[0] < 300]
+    if text:
+        tracker["texts"].append((now, text[:500]))
+    repeated = bool(text) and sum(1 for _, prior in tracker["texts"] if prior == text[:500]) >= 3
+    flooding = len(tracker["times"]) >= 6
+    entities = message.entities or message.caption_entities or []
+    mentions = len(entities) and sum(
+        1 for entity in entities if entity.type in ("mention", "text_mention")
+    ) >= 6
+    forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_date", None))
+    if forwarded:
+        tracker["forward_times"] = [item for item in tracker["forward_times"] if now - item < 60] + [now]
+    forwarded_spam = forwarded and (len(tracker["forward_times"]) >= 2 or "http" in text or "t.me/" in text)
+    if not (repeated or flooding or mentions or forwarded_spam) or now - tracker["last_warning"] < 600:
+        return
+    tracker["last_warning"] = now
+    reason = "Automated anti-spam: " + ("repeated messages" if repeated else "flooding" if flooding else "excessive mentions" if mentions else "forwarded spam")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    count = await _issue_warning(chat, user, context.bot, reason, context, automated=True)
+    if count:
+        await context.bot.send_message(chat.id, f"⚠️ {escape(user.full_name or 'Member')}: warning {count}/3 for spam.", parse_mode="HTML")
+
+
+async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    path = os.path.join(BACKUP_DIR, f"bot-backup-{stamp}.json")
+    try:
+        await asyncio.to_thread(_write_json_atomic, path, _state_payload(context.bot_data))
+        with open(path, "rb") as handle:
+            await update.effective_message.reply_document(
+                handle, filename=os.path.basename(path),
+                caption="✅ Versioned state backup (contains no bot configuration or secrets).",
+            )
+    except Exception as exc:
+        logger.warning("Backup failed: %s", exc)
+        await update.effective_message.reply_text(f"❌ Backup failed: {escape(str(exc))}", parse_mode="HTML")
+
+
+async def cmd_restore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    message = update.effective_message
+    source = message.reply_to_message.document if message and message.reply_to_message else None
+    if not source or not (source.file_name or "").lower().endswith(".json"):
+        await message.reply_text("Reply to a JSON backup document with /restore.")
+        return
+    if source.file_size and source.file_size > MAX_BACKUP_BYTES:
+        await message.reply_text("❌ Restore refused: backup exceeds the 10 MB limit.")
+        return
+    try:
+        payload = BytesIO()
+        await (await context.bot.get_file(source.file_id)).download_to_memory(payload)
+        if payload.tell() > MAX_BACKUP_BYTES:
+            raise ValueError("backup exceeds the 10 MB limit")
+        state = json.loads(payload.getvalue().decode("utf-8"))
+        if not _valid_state(state):
+            raise ValueError("expected version 1 state with object user_data, warnings, group_bans, and broadcast_records")
+    except Exception as exc:
+        await message.reply_text(f"❌ Restore validation failed: {escape(str(exc))}", parse_mode="HTML")
+        return
+    context.bot_data.setdefault("restore_pending", {})[str(OWNER_ID)] = state
+    markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Confirm restore", callback_data="restore_confirm"),
+        InlineKeyboardButton("Cancel", callback_data="restore_cancel"),
+    ]])
+    await message.reply_text(
+        "⚠️ <b>Restore confirmation required</b>\nThis replaces current durable state. "
+        "A safety backup will be made first.",
+        parse_mode="HTML", reply_markup=markup,
+    )
+
+
+async def restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or query.from_user.id != OWNER_ID:
+        return
+    await query.answer()
+    pending = context.bot_data.setdefault("restore_pending", {}).pop(str(OWNER_ID), None)
+    if query.data == "restore_cancel":
+        await query.message.edit_text("Restore cancelled.")
+        return
+    if not pending:
+        await query.message.edit_text("❌ Restore request expired; reply to the backup again.")
+        return
+    try:
+        safety = os.path.join(BACKUP_DIR, f"pre-restore-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.json")
+        await asyncio.to_thread(_write_json_atomic, safety, _state_payload(context.bot_data))
+        for key in ("user_data", "warnings", "group_bans", "broadcast_records",
+                    "admin_notes", "raid_state"):
+            context.bot_data[key] = pending.get(key, {})
+        context.bot_data["maintenance"] = bool(pending.get("maintenance", False))
+        context.bot_data["bot_off"] = bool(pending.get("bot_off", False))
+        await _save_state(context.bot_data)
+        await query.message.edit_text("✅ Restore completed. A pre-restore safety backup was saved.")
+    except Exception as exc:
+        logger.warning("Restore failed: %s", exc)
+        await query.message.edit_text(f"❌ Restore failed: {escape(str(exc))}", parse_mode="HTML")
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     if isinstance(err, Conflict):
@@ -3571,11 +4659,62 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     logger.error(f"Unhandled exception: {err}", exc_info=err)
 
+
+async def maintenance_command_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop public command dispatch during maintenance without blocking admins."""
+    user, chat, message = update.effective_user, update.effective_chat, update.effective_message
+    if context.bot_data.get("bot_off", False):
+        if user and user.id == OWNER_ID:
+            return
+        if message:
+            await message.reply_text(
+                "⛔ <b>Bot access is currently OFF.</b>\nPlease try again later.",
+                parse_mode="HTML",
+            )
+        raise ApplicationHandlerStop
+    if not context.bot_data.get("maintenance"):
+        return
+    if not user or not message:
+        return
+    allowed = _is_admin(user.id)
+    if not allowed and chat and chat.type in ("group", "supergroup"):
+        allowed = await _is_chat_admin(chat.id, user.id, context)
+    if allowed:
+        return
+    await message.reply_text("⚠️ <b>Maintenance notice:</b> this bot is temporarily unavailable. Please try again later.", parse_mode="HTML")
+    raise ApplicationHandlerStop
+
+
+async def bot_off_callback_guard(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Block public inline-button actions while bot access is disabled."""
+    query = update.callback_query
+    if not query or not context.bot_data.get("bot_off", False):
+        return
+    if query.from_user and query.from_user.id == OWNER_ID:
+        return
+    await query.answer(
+        "Bot access is currently OFF. Please try again later.",
+        show_alert=True,
+    )
+    raise ApplicationHandlerStop
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def _post_shutdown(app: Application) -> None:
     """Final save → Postgres, stop prober, close DB pool."""
+    maintenance_task = app.bot_data.pop("_maintenance_jobs_task", None)
+    if maintenance_task:
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
+    await _save_state(app.bot_data)
     # ── CRITICAL: save all premium users to Postgres before exit ──────────
     # Passing app.bot_data ensures no data is lost on Railway redeploy.
     await db.close_db(app.bot_data)
@@ -3598,7 +4737,26 @@ async def _post_init(app: Application) -> None:
     # ── Load premium from JSON backup (always) ─────────────────────────────
     # Run in thread pool — json.load() on a large file would otherwise block
     # the event loop during startup.
+    _load_state(app.bot_data)
     await asyncio.to_thread(_load_premium_file, app.bot_data)
+    try:
+        await asyncio.to_thread(_rotate_restore_points, app.bot_data)
+    except Exception as exc:
+        logger.warning("Startup backup rotation failed: %s", exc)
+        try:
+            await app.bot.send_message(OWNER_ID, f"⚠️ Automatic backup failed: {escape(str(exc))}", parse_mode="HTML")
+        except Exception:
+            pass
+    if app.job_queue:
+        app.job_queue.run_repeating(_automatic_backup, interval=86400, first=86400,
+                                    name="state_backup_rotation")
+        app.job_queue.run_repeating(_expire_raid_modes, interval=60, first=60,
+                                    name="raid_mode_expiry")
+    else:
+        app.bot_data["_maintenance_jobs_task"] = asyncio.create_task(
+            _maintenance_jobs_loop(app),
+            name="maintenance-jobs",
+        )
     # ── Connect to Postgres & sync — all logic lives in database.py ────────
     await db.attach(app)
 
@@ -4377,7 +5535,7 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner only — show live PostgreSQL connection status."""
-    if update.effective_user.id != OWNER_ID:
+    if not _is_admin(update.effective_user.id):
         return
     now       = time.time()
     status    = db.status_text()
@@ -4452,6 +5610,22 @@ async def _myid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def _restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Primary-owner-only command that replaces the current bot process."""
+    user = update.effective_user
+    message = update.effective_message
+    if not user or user.id != OWNER_ID or not message:
+        return
+
+    await message.reply_text(
+        "<b>Restarting bot...</b>\nThe bot will be available again shortly.",
+        parse_mode="HTML",
+    )
+    logger.warning("Bot restart requested by primary owner %s", user.id)
+    await asyncio.sleep(1)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def main():
@@ -4490,10 +5664,14 @@ def main():
             .build()
         )
 
+        # Generic metadata tracking runs first and never consumes updates.
+        app.add_handler(MessageHandler(filters.ALL, track_activity_and_spam), group=-1)
+        # Must precede public command handlers so maintenance is explicit, not silent.
+        app.add_handler(MessageHandler(filters.COMMAND, maintenance_command_guard), group=-2)
         app.add_handler(CommandHandler("start",   cmd_start))
         app.add_handler(CommandHandler("ping",    cmd_ping))
         app.add_handler(CommandHandler("status",  cmd_status))   # /status — live leaderboard
-        app.add_handler(CommandHandler("plan",    cmd_plan))
+        app.add_handler(CommandHandler("buy",     cmd_plan))
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
         app.add_handler(CommandHandler("rm",      cmd_rm))
@@ -4512,8 +5690,26 @@ def main():
         app.add_handler(CommandHandler("rsub",        cmd_resub))
         app.add_handler(CommandHandler("ban",         cmd_ban))
         app.add_handler(CommandHandler("unban",       cmd_unban))
+        app.add_handler(CommandHandler("unmute",      cmd_unmute))
+        app.add_handler(CommandHandler("warn",        cmd_warn))
+        app.add_handler(CommandHandler("warnings",    cmd_warnings))
+        app.add_handler(CommandHandler("clearwarnings", cmd_clearwarnings))
+        app.add_handler(CommandHandler("admin",       cmd_admin))
+        app.add_handler(CommandHandler("raid",        cmd_raid))
+        app.add_handler(CommandHandler("user",        cmd_user))
+        app.add_handler(CommandHandler("note",        cmd_note))
+        app.add_handler(CommandHandler("clearnotes",  cmd_clearnotes))
+        app.add_handler(MessageHandler(
+            filters.Regex(r"(?i)^/mute\d+(?:@\w+)?(?:\s|$)"),
+            cmd_mute_minutes,
+        ))
         app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
         app.add_handler(CommandHandler("bstatus",     cmd_bstatus))
+        app.add_handler(CommandHandler("backup",      cmd_backup))
+        app.add_handler(CommandHandler("restore",     cmd_restore))
+        app.add_handler(CommandHandler("botoff",      cmd_botoff))
+        app.add_handler(CommandHandler("boton",       cmd_boton))
+        app.add_handler(CallbackQueryHandler(raid_callback, pattern=r"^raid_off:-?\d+$"))
         app.add_handler(CommandHandler("info",        cmd_info))
         app.add_handler(CommandHandler("allcm",       cmd_allcm))
         app.add_handler(CommandHandler("allsub",      cmd_allsub))
@@ -4524,6 +5720,21 @@ def main():
         app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
         app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
 
+        # Welcome every new member who joins the configured community group.
+        app.add_handler(MessageHandler(
+            filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            welcome_new_members,
+        ))
+
+        # Replace member-posted external links with the official group link.
+        app.add_handler(MessageHandler(
+            filters.Entity(MessageEntity.URL)
+            | filters.Entity(MessageEntity.TEXT_LINK)
+            | filters.CaptionEntity(MessageEntity.URL)
+            | filters.CaptionEntity(MessageEntity.TEXT_LINK),
+            replace_external_group_links,
+        ))
+
         # ── Hour-based premium key commands (owner-only, silent to others) ──
         app.add_handler(CommandHandler("hr",  cmd_hr))
         app.add_handler(CommandHandler("hr1", cmd_hr))
@@ -4532,6 +5743,7 @@ def main():
 
         # ── Owner-only secret commands ─────────────────────────────────────
         app.add_handler(CommandHandler("dbstatus", _dbstatus_cmd))
+        app.add_handler(CommandHandler("restart",  _restart_cmd))
 
         # ── Fake logs system — registered BEFORE the generic handler ───────
         app.add_handler(CommandHandler("myid",    _myid_cmd))
@@ -4553,7 +5765,29 @@ def main():
             _fl_addid_msg,
         ))
 
+        # Completed-broadcast owner controls.
+        app.add_handler(CallbackQueryHandler(
+            broadcast_control_callback,
+            pattern=r"^br_(edit|delete):",
+        ))
+        app.add_handler(CallbackQueryHandler(
+            restore_callback,
+            pattern=r"^restore_(confirm|cancel)$",
+        ))
+
+        app.add_handler(CallbackQueryHandler(bot_off_callback_guard), group=-2)
         app.add_handler(CallbackQueryHandler(callback_handler))
+
+        # The next non-command message after pressing Editor becomes the
+        # replacement broadcast. Group 1 avoids blocking existing handlers.
+        app.add_handler(
+            MessageHandler(
+                filters.ALL & ~filters.COMMAND,
+                broadcast_edit_message,
+            ),
+            group=1,
+        )
+
         app.add_error_handler(error_handler)
 
         logger.info(
