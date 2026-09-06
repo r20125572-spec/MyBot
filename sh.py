@@ -58,7 +58,7 @@ SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
 BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
 BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
 MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channel
-LOGS_CHANNEL_LINK   = "https://t.me/+XYnHim3rGsw0Yzdk"             # hits log channel
+LOGS_CHANNEL_LINK   = "https://t.me/Batcardchk"                     # hits log channel
 
 SH_COOLDOWN    = 25
 
