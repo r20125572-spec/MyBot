@@ -72,6 +72,8 @@ PAYMENT_METHODS = {
 }
 
 _accepted_cache: tuple[float, frozenset[str]] | None = None
+ACCEPTED_CACHE_TTL = 30
+ACCEPTED_STALE_TTL = 15 * 60
 
 
 def _api_key() -> str:
@@ -107,6 +109,39 @@ def configuration_error() -> str | None:
     return None
 
 
+async def _read_oxapay_json(
+    response: aiohttp.ClientResponse,
+    operation: str,
+) -> dict:
+    """Decode an OxaPay response without exposing raw proxy/HTML errors."""
+    body = await response.text()
+    if not body.strip():
+        raise RuntimeError(
+            f"OxaPay returned an empty response while {operation}. "
+            "Please try again in a moment."
+        )
+    try:
+        result = json.loads(body)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "[OXAPAY] Non-JSON response while %s: status=%s content_type=%s bytes=%s",
+            operation,
+            response.status,
+            response.headers.get("Content-Type", ""),
+            len(body.encode("utf-8", errors="replace")),
+        )
+        raise RuntimeError(
+            f"OxaPay returned an invalid response while {operation}. "
+            "Please try again in a moment."
+        ) from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"OxaPay returned an unexpected response while {operation}. "
+            "Please try again in a moment."
+        )
+    return result
+
+
 async def get_accepted_method_keys(force: bool = False) -> list[str]:
     """Return only payment methods enabled for this OxaPay merchant."""
     global _accepted_cache
@@ -114,7 +149,11 @@ async def get_accepted_method_keys(force: bool = False) -> list[str]:
     if error:
         raise RuntimeError(error)
     now = time.monotonic()
-    if not force and _accepted_cache and now - _accepted_cache[0] < 30:
+    if (
+        not force
+        and _accepted_cache
+        and now - _accepted_cache[0] < ACCEPTED_CACHE_TTL
+    ):
         accepted = _accepted_cache[1]
     else:
         headers = {
@@ -127,19 +166,41 @@ async def get_accepted_method_keys(force: bool = False) -> list[str]:
             sock_connect=5,
             sock_read=7,
         )
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                f"{OXAPAY_API_BASE}/payment/accepted-currencies",
-                headers=headers,
-            ) as response:
-                result = await response.json(content_type=None)
-        if response.status != 200 or int(result.get("status", 0)) != 200:
-            raise RuntimeError(
-                _oxapay_error(result, "Could not load accepted OxaPay currencies.")
-            )
-        values = (result.get("data") or {}).get("list") or []
-        accepted = frozenset(str(value).upper() for value in values)
-        _accepted_cache = (now, accepted)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    f"{OXAPAY_API_BASE}/payment/accepted-currencies",
+                    headers=headers,
+                ) as response:
+                    result = await _read_oxapay_json(
+                        response,
+                        "loading payment methods",
+                    )
+                    response_status = response.status
+            if response_status != 200 or int(result.get("status", 0)) != 200:
+                raise RuntimeError(
+                    _oxapay_error(
+                        result,
+                        "Could not load accepted OxaPay currencies.",
+                    )
+                )
+            values = (result.get("data") or {}).get("list") or []
+            accepted = frozenset(str(value).upper() for value in values)
+            if not accepted:
+                raise RuntimeError("OxaPay returned no accepted currencies.")
+            _accepted_cache = (now, accepted)
+        except Exception:
+            if (
+                _accepted_cache
+                and now - _accepted_cache[0] < ACCEPTED_STALE_TTL
+            ):
+                accepted = _accepted_cache[1]
+                logger.warning(
+                    "[OXAPAY] Using cached accepted currencies after a "
+                    "temporary API response failure."
+                )
+            else:
+                raise
 
     return [
         key
@@ -210,7 +271,10 @@ async def create_white_label_payment(
                 headers=headers,
                 json=payload,
             ) as response:
-                result = await response.json(content_type=None)
+                result = await _read_oxapay_json(
+                    response,
+                    "creating the payment address",
+                )
                 if response.status != 200 or int(result.get("status", 0)) != 200:
                     raise RuntimeError(
                         _oxapay_error(
@@ -263,7 +327,10 @@ async def _fetch_payment(track_id: str) -> dict:
             f"{OXAPAY_API_BASE}/payment/{track_id}",
             headers=headers,
         ) as response:
-            result = await response.json(content_type=None)
+            result = await _read_oxapay_json(
+                response,
+                "verifying the payment",
+            )
     if response.status != 200 or int(result.get("status", 0)) != 200:
         raise RuntimeError(_oxapay_error(result, "Payment verification failed."))
     return result.get("data") or {}
