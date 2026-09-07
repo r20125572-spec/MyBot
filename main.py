@@ -28,6 +28,7 @@ from telegram.request import HTTPXRequest
 import aiohttp as _aiohttp
 
 import database as db   # PostgreSQL premium persistence (Railway)
+import payments
 
 try:
     from mst import get_bin_handler as get_bin_lookup_handler
@@ -74,15 +75,13 @@ logger  = logging.getLogger(__name__)
 
 
 async def _send_custom_html(bot, chat_id, html: str, **kwargs):
-    """Send HTML-like UI text as direct Telegram entities, including custom emoji."""
-    text, entities = html_to_entities(html)
-    return await bot.send_message(chat_id=chat_id, text=text, entities=entities, **kwargs)
+    return await bot.send_message(
+        chat_id=chat_id, text=html, parse_mode="HTML", **kwargs
+    )
 
 
 async def _edit_custom_html(message, html: str, **kwargs):
-    """Edit UI text using direct Telegram custom-emoji entities."""
-    text, entities = html_to_entities(html)
-    return await message.edit_text(text=text, entities=entities, **kwargs)
+    return await message.edit_text(text=html, parse_mode="HTML", **kwargs)
 MAX_MSG = 4000
 
 # Normal administration is shared with the second owner. Fake-log controls
@@ -117,6 +116,7 @@ def _save_premium_file(bot_data: dict) -> None:
                 "name":         ud.get("name", ""),
                 "username":     ud.get("username", ""),
                 "last_receipt": ud.get("last_receipt", ""),
+                "granted_at":   ud.get("granted_at", 0),
             }
     try:
         with open(PREMIUM_FILE, "w", encoding="utf-8") as f:
@@ -162,6 +162,7 @@ def _load_premium_file(bot_data: dict) -> None:
         if pdata.get("name"):         ud.setdefault("name",         pdata["name"])
         if pdata.get("username"):     ud.setdefault("username",     pdata["username"])
         if pdata.get("last_receipt"): ud.setdefault("last_receipt", pdata["last_receipt"])
+        if pdata.get("granted_at"):   ud.setdefault("granted_at", pdata["granted_at"])
         restored += 1
 
     logger.info(f"[PREMIUM] Restored {restored} premium user(s) from {PREMIUM_FILE}")
@@ -1151,8 +1152,7 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     _sp_html = f'<b>🔄 Gate ➳ {gate_name}</b>'
-    spinner_text, spinner_entities = html_to_entities(_sp_html)
-    msg = await update.message.reply_text(spinner_text, entities=spinner_entities)
+    msg = await update.message.reply_text(_sp_html, parse_mode="HTML")
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
     plan       = ud.get("plan", "TRIAL")
@@ -1324,6 +1324,7 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     ud["plan"]         = plan.upper()
     ud["expires"]      = expires_ts
     ud["last_receipt"] = receipt
+    ud["granted_at"]   = time.time()
     if username: ud["username"] = username
 
     # Persist premium immediately — JSON backup + instant Postgres write
@@ -1348,6 +1349,48 @@ async def send_activation_msg(user_id: int, plan: str, days: int,
     except Exception: pass
     return receipt
 
+
+async def _activate_oxapay_plan(app: Application, order: dict) -> None:
+    """Sync an atomically committed paid entitlement and notify its user."""
+    user_id = int(order["user_id"])
+    plan = str(order["plan"]).upper()
+    days = int(order["days"])
+    order_id = str(order["order_id"])
+    ud = get_user_data(user_id, app)
+    now = time.time()
+    if ud.get("plan", "TRIAL").upper() == "TRIAL":
+        ud["pre_premium_credits"] = ud.get("credits", 150)
+    expires_ts = float(order["expires"])
+    ud["plan"] = plan
+    ud["expires"] = expires_ts
+    ud["last_receipt"] = order_id
+    ud["granted_at"] = now
+    await asyncio.to_thread(_save_premium_file, app.bot_data)
+
+    plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
+    exp_date = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
+    try:
+        await app.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"<b>{E_LIVE} {B('Payment Confirmed')}</b>\n"
+                "──────────\n"
+                f"<b>Access</b>  ➳ {get_styled_plan(plan)} {plan_emoji}\n"
+                f"<b>Days</b>    ➳ {days}\n"
+                f"<b>Credits</b> ➳ Unlimited\n"
+                f"<b>Expires</b> ➳ {exp_date}\n"
+                f"<b>Receipt</b> ➳ <code>{escape(order_id)}</code>\n"
+                "──────────\n"
+                "Your plan was activated automatically."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning(
+            "[OXAPAY] Plan committed for %s but notification failed: %s",
+            user_id, exc,
+        )
+
 async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     target = target.strip().lstrip("@")
     if target.lstrip("-").isdigit(): return int(target)
@@ -1364,8 +1407,10 @@ async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optio
 async def _grant(uid: int, plan: str, days: int,
                  update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = get_user_data(uid, context)
+    granted_at = time.time()
     ud["plan"]    = plan
-    ud["expires"] = time.time() + days * 86400
+    ud["expires"] = granted_at + days * 86400
+    ud["granted_at"] = granted_at
 
     display_name  = ud.get("name", "Unknown")
     display_uname = ud.get("username", "")
@@ -3615,6 +3660,7 @@ async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ud["expires"]      = expires_ts
             receipt            = gen_receipt()
             ud["last_receipt"] = receipt
+            ud["granted_at"]   = time.time()
             await _save_premium(context.bot_data)
 
             exp_str   = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
@@ -4208,23 +4254,44 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    pay_map = {
-        "pay1d": ("Core",  1.5, 1,  "CORE"),
-        "pay10": ("Core",  8,   7,  "CORE"),
-        "pay15": ("Elite", 12,  15, "ELITE"),
-        "pay30": ("Root",  25,  30, "ROOT"),
-    }
-    if data in pay_map:
-        plan_n, price, days, plan_key = pay_map[data]
-        plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
+    if data in payments.PLANS:
+        await query.answer("Creating secure OxaPay invoice…", show_alert=False)
+        plan = payments.PLANS[data]
+        plan_emoji = tg_emoji(get_plan_emoji_id(plan["plan"]), "⭐")
+        try:
+            invoice = await payments.create_invoice(user.id, data)
+        except Exception as exc:
+            logger.error("[OXAPAY] Invoice creation failed: %s", exc)
+            await query.message.edit_text(
+                f"<b>{E_ERRORS} Payment Link Unavailable</b>\n"
+                "──────────\n"
+                f"{escape(str(exc))}\n"
+                "Please try again later or contact support.",
+                parse_mode="HTML",
+                reply_markup=kb_payment(),
+            )
+            return
         await query.message.edit_text(
-            f"<b>{plan_emoji} {B(plan_n)} Plan</b>\n──────────\n"
-            f"<b>Price</b>   ➳ ${price}\n"
-            f"<b>Days</b>    ➳ {days}\n"
-            f"<b>Credits</b> ➳ Unlimited\n"
+            f"<b>{plan_emoji} {B(plan['name'])} Plan</b>\n"
             "──────────\n"
-            "Contact support to purchase:",
-            parse_mode="HTML", reply_markup=kb_payment()
+            f"<b>Price</b>   ➳ ${plan['price']:.2f}\n"
+            f"<b>Days</b>    ➳ {plan['days']}\n"
+            f"<b>Credits</b> ➳ Unlimited\n"
+            f"<b>Order</b>   ➳ <code>{escape(invoice['order_id'])}</code>\n"
+            "──────────\n"
+            "Pay using the secure link below. Your plan activates automatically "
+            "after OxaPay confirms the payment.",
+            parse_mode="HTML",
+            reply_markup=RawMarkup([
+                [_btn(
+                    B("PAY WITH OXAPAY"),
+                    url=invoice["payment_url"],
+                    style="success",
+                    icon=BTN_LIVE_EMOJI_ID,
+                )],
+                [_btn(B("BACK"), cb="mprice")],
+            ]),
+            disable_web_page_preview=True,
         )
         return
 
@@ -4250,8 +4317,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             days     = int(parts[2])
             uid      = int(parts[3])
             ud_t     = get_user_data(uid, context)
+            grant_time = time.time()
             ud_t["plan"]    = plan_key
-            ud_t["expires"] = time.time() + days * 86400
+            ud_t["expires"] = grant_time + days * 86400
+            ud_t["granted_at"] = grant_time
             plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
             target_name = ud_t.get("name", f"User {uid}")
             exp_str = datetime.fromtimestamp(ud_t["expires"]).strftime("%Y-%m-%d %H:%M")
@@ -4882,6 +4951,7 @@ async def _post_shutdown(app: Application) -> None:
             await maintenance_task
         except asyncio.CancelledError:
             pass
+    await payments.stop_webhook(app)
     await _save_state(app.bot_data)
     # ── CRITICAL: save all premium users to Postgres before exit ──────────
     # Passing app.bot_data ensures no data is lost on Railway redeploy.
@@ -4927,6 +4997,7 @@ async def _post_init(app: Application) -> None:
         )
     # ── Connect to Postgres & sync — all logic lives in database.py ────────
     await db.attach(app)
+    await payments.start_webhook(app, _activate_oxapay_plan)
 
     # ── Startup DM to owner — confirms DB status so data loss is obvious ───
     try:
