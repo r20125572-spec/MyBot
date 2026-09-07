@@ -94,7 +94,12 @@ async def create_invoice(user_id: int, selection: str) -> dict:
     }
 
     try:
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(
+            total=15,
+            connect=5,
+            sock_connect=5,
+            sock_read=10,
+        )
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 f"{OXAPAY_API_BASE}/payment/invoice",
