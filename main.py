@@ -17,10 +17,7 @@ from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime, timedelta
-from telegram import (
-    Update, TelegramObject, MessageEntity, InlineKeyboardButton,
-    InlineKeyboardMarkup, InputMediaPhoto, ChatPermissions,
-)
+from telegram import Update, MessageEntity, InputMediaPhoto, ChatPermissions
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
@@ -45,6 +42,7 @@ from config import (
     E_CARD, E_USER, E_TIME, E_DEV, E_PRO,
     E_LIVE, E_DECLINED, E_ERRORS, E_PROGRESS, E_GATE,
     PLAN_EMOJIS, PRO_EMOJI_ID,
+    RawMarkup, _btn,
     # Button emoji IDs from mst.py
     BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID,
     PROG_GATE_EMOJI_ID, PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID,
@@ -237,40 +235,6 @@ def B(text: str) -> str:
     return "".join(bold_map.get(ch, ch) for ch in text)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# RAW MARKUP — coloured buttons (mst.py style)
-#
-# Telegram Bot API supports "style" (primary=blue, danger=red)
-# and "icon_custom_emoji_id" on inline keyboard buttons.
-# python-telegram-bot passes reply_markup by calling .to_dict(),
-# so this thin wrapper carries the raw API JSON straight through.
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-class RawMarkup(TelegramObject):
-    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
-    __slots__ = ("_data",)
-
-    def __init__(self, inline_keyboard: list):
-        super().__init__()
-        self._data = {"inline_keyboard": inline_keyboard}
-
-    def to_dict(self, api_kwargs=None) -> dict:
-        return self._data
-
-    def to_json(self) -> str:
-        return json.dumps(self._data)
-
-
-def _btn(text: str, *, cb: str = None, url: str = None,
-         style: str = None, icon: str = None) -> dict:
-    """Build a single raw button dict (mst.py style)."""
-    d: dict = {"text": text}
-    if cb:   d["callback_data"] = cb
-    if url:  d["url"]           = url
-    if style: d["style"]        = style
-    if icon:  d["icon_custom_emoji_id"] = icon
-    return d
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_styled_plan(raw_plan: str) -> str:
@@ -296,8 +260,9 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
             "total_refs": 0, "total_checks": 0, "approved_checks": 0, "declined_checks": 0,
             "last_gate": "N/A", "last_card": "N/A", "codes_redeemed": 0, "keys_redeemed": 0,
             "banned": False, "total_charged": 0,
-            "daily_activity": {}, "memberships": {},
+            "daily_activity": {}, "memberships": {}, "hide": False,
         }
+    context.bot_data["user_data"][uid].setdefault("hide", False)
     return context.bot_data["user_data"][uid]
 
 def _update_user_meta(ud: dict, user) -> None:
@@ -733,13 +698,16 @@ async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # BAN CHECK
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def require_not_banned(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    user_id = update.effective_user.id
+    user = update.effective_user
+    if not user:
+        return True
+    user_id = user.id
     if _is_admin(user_id):
         return True
     ud = get_user_data(user_id, context)
     if ud.get("banned", False):
         try:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
                 "You have been banned from using this bot.\n"
                 "Contact support if you think this is a mistake.\n"
@@ -750,6 +718,44 @@ async def require_not_banned(update: Update, context: ContextTypes.DEFAULT_TYPE)
             pass
         return False
     return True
+
+
+async def banned_update_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Globally stop banned users before any command or private update runs."""
+    user = update.effective_user
+    if not user or _is_admin(user.id):
+        return
+    if not get_user_data(user.id, context).get("banned", False):
+        return
+    message = update.effective_message
+    if message:
+        try:
+            await message.reply_text(
+                f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
+                "You have been banned from using this bot.\n"
+                "Contact support if you think this is a mistake.\n──────────",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+    raise ApplicationHandlerStop
+
+
+async def banned_callback_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Globally stop every inline-button action made by a banned user."""
+    query = update.callback_query
+    if not query or not query.from_user or _is_admin(query.from_user.id):
+        return
+    if not get_user_data(query.from_user.id, context).get("banned", False):
+        return
+    try:
+        await query.answer(
+            "You are banned from using this bot. Contact support if this is a mistake.",
+            show_alert=True,
+        )
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CARD CHECK RESULT  — mst.py _build_hit_dm() style
@@ -857,6 +863,7 @@ def kb_gate_main() -> RawMarkup:
     return RawMarkup([
         [_btn("⚡ " + B("SHOPIFY MASS"), cb="imsh",  style="primary"),
          _btn("🔥 " + B("SHOPIFY SINGLE"), cb="ish", style="primary")],
+        [_btn(B("ALLCM"), cb="allcm_show", icon=PROG_LIVE_EMOJI_ID)],
         [_btn("🔙 " + B("BACK"),    cb="bmain")],
     ])
 
@@ -2346,7 +2353,18 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if _is_admin(uid):
         await update.message.reply_text(f"{E_ERRORS} Cannot ban an owner.", parse_mode="HTML"); return
-    get_user_data(uid, context)["banned"] = True
+    ud = get_user_data(uid, context)
+    ud.update({
+        "banned": True,
+        "ban_reason": "Banned by administrator",
+        "banned_by": update.effective_user.id,
+        "banned_at": time.time(),
+    })
+    await db.save_ban_now(
+        uid, active=True, reason=ud["ban_reason"],
+        moderator_id=update.effective_user.id,
+    )
+    await _save_state(context.bot_data)
     if update.effective_chat.type in ("group", "supergroup"):
         try:
             await context.bot.ban_chat_member(update.effective_chat.id, uid)
@@ -2380,7 +2398,16 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Usage:</b> /unban @user|ID or reply → /unban", parse_mode="HTML"
         )
         return
-    get_user_data(uid, context)["banned"] = False
+    ud = get_user_data(uid, context)
+    ud["banned"] = False
+    ud.pop("ban_reason", None)
+    ud.pop("banned_by", None)
+    ud.pop("banned_at", None)
+    await db.save_ban_now(
+        uid, active=False, reason="Unbanned by administrator",
+        moderator_id=update.effective_user.id,
+    )
+    await _save_state(context.bot_data)
     if update.effective_chat.type in ("group", "supergroup"):
         try:
             await context.bot.unban_chat_member(
@@ -3246,6 +3273,7 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total=total,
         user_obj=user,
         plan=plan,
+        hide=bool(ud.get("hide", False)),
     )
     init_html = _pt(sess)   # _progress_text returns HTML string — parse_mode="HTML"
     msg = await update.message.reply_text(
@@ -3353,6 +3381,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     WHITE2  = _EM("5415982270248918567", "⚪")   # rank 3
     TOP     = _EM("6170155021070506364", "🔝")   # all ranks
     DEV_E   = _EM("6267091732861555879", "⚡")   # dev line
+    HIDDEN  = _EM(PROG_LIVE_EMOJI_ID, "🔒")
 
     rank_markers = [BLUE, WHITE1, WHITE2, "4.", "5."]
 
@@ -3366,6 +3395,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else ud.get("first_name") or ud.get("name") or "User"
                 ),
                 "count": ud.get("total_charged", 0),
+                "hidden": bool(ud.get("hide", False)),
             }
             for ud in user_data.values()
             if ud.get("total_charged", 0) > 0
@@ -3386,8 +3416,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         for i, entry in enumerate(board):
             marker = rank_markers[i]
+            display = (
+                f"{HIDDEN} <b>Hidden User</b>"
+                if entry["hidden"] else escape(entry["display"])
+            )
             lines.append(
-                f"{marker} {escape(entry['display'])} ➳ "
+                f"{marker} {display} ➳ "
                 f"<b>{entry['count']}</b> {DIAMOND} {TOP}"
             )
 
@@ -3402,6 +3436,35 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Configure identity visibility in public logs and leaderboards."""
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+
+    user = update.effective_user
+    hidden = bool(get_user_data(user.id, context).get("hide", False))
+    text = (
+        f"<b>{E_USER} {B('Hide Identity')}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Status</b> ➳ {'ON — Hidden' if hidden else 'OFF — Visible'}\n\n"
+        "When enabled, your name, username, and Telegram ID are replaced "
+        "with <b>Hidden User</b> in public result logs and the leaderboard.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Choose your privacy setting below.</i>"
+    )
+    await update.effective_message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=RawMarkup([
+            [_btn("ON — Hide My Identity", cb="hide_on",
+                  icon=PROG_LIVE_EMOJI_ID)],
+            [_btn("OFF — Show My Identity", cb="hide_off",
+                  icon=PROG_DEAD_EMOJI_ID)],
+            [_btn(B("BACK"), cb="bmain")],
+        ]),
+    )
 
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3845,7 +3908,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data.startswith("owner_resub_") or
         data.startswith("find_sub_")  or
         data.startswith("fb_ok_")     or   # _fb_approve handles its own answer
-        data.startswith("fb_no_")          # _fb_decline handles its own answer
+        data.startswith("fb_no_")     or   # _fb_decline handles its own answer
+        data in ("hide_on", "hide_off")
     )
     if not _self_answering:
         try:
@@ -3920,6 +3984,65 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(
             f"<b>{E_GATE} {B('Gates')}</b>\n──────────\nChoose a gate category:",
             parse_mode="HTML", reply_markup=kb_gate_main()
+        )
+        return
+    if data == "allcm_show":
+        await query.message.edit_text(
+            "⭅ <b>𝗔𝗟𝗟 𝗨𝗦𝗘𝗥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦</b> ⭆\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Checker Commands</b>\n"
+            "<b>/sh</b> ➳ Shopify Single Checker\n"
+            "<b>/msh</b> ➳ Shopify Mass Checker\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Account Commands</b>\n"
+            "<b>/start</b> ➳ Dashboard\n"
+            "<b>/buy</b> ➳ Premium plans\n"
+            "<b>/sub</b> ➳ My subscription\n"
+            "<b>/me</b> ➳ My charged stats\n"
+            "<b>/status</b> ➳ Leaderboard\n"
+            "<b>/hide</b> ➳ Identity privacy\n"
+            "<b>/refer</b> ➳ Referral link\n"
+            "<b>/rm</b> ➳ Redeem code or key\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Tools</b>\n"
+            "<b>/bin</b> ➳ BIN lookup\n"
+            "<b>/ping</b> ➳ Bot speed test\n"
+            "<b>/fb</b> ➳ Send feedback\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>Owner commands are hidden from this list.</i>",
+            parse_mode="HTML",
+            reply_markup=kb_back("mgates"),
+        )
+        return
+    if data in ("hide_on", "hide_off"):
+        hidden = data == "hide_on"
+        ud_h = get_user_data(user.id, context)
+        ud_h["hide"] = hidden
+        await db.save_user_stats_now(user.id, ud_h)
+        await _save_state(context.bot_data)
+        await query.answer(
+            "Identity hiding enabled." if hidden
+            else "Identity hiding disabled.",
+            show_alert=True,
+        )
+        await query.message.edit_text(
+            f"<b>{E_USER} {B('Hide Identity')}</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Status</b> ➳ {'ON — Hidden' if hidden else 'OFF — Visible'}\n\n"
+            f"Your public identity is now "
+            f"<b>{'hidden' if hidden else 'visible'}</b>.\n"
+            "━━━━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML",
+            reply_markup=RawMarkup([
+                [_btn(
+                    "Turn OFF — Show Identity" if hidden
+                    else "Turn ON — Hide Identity",
+                    cb="hide_off" if hidden else "hide_on",
+                    icon=PROG_DEAD_EMOJI_ID if hidden
+                    else PROG_LIVE_EMOJI_ID,
+                )],
+                [_btn(B("BACK"), cb="bmain")],
+            ]),
         )
         return
     if data == "mprice":
@@ -4347,8 +4470,8 @@ async def _observe_raid_joins(chat, members, context) -> None:
         expires = now + RAID_DURATION_SECONDS
         state.update({"active": True, "expires_at": expires, "activated_at": now})
         await _save_state(context.bot_data)
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Disable raid mode", callback_data=f"raid_off:{chat.id}")
+        markup = RawMarkup([[
+            _btn("Disable raid mode", cb=f"raid_off:{chat.id}")
         ]])
         alert = (
             f"⚠️ <b>Raid mode enabled</b> in {escape(chat.title or 'the community group')}.\n"
@@ -4428,9 +4551,23 @@ async def _issue_warning(chat, target, moderator, reason: str, context,
     if target.is_bot or _is_admin(target.id):
         return 0
     warnings = context.bot_data.setdefault("warnings", {})
+    if automated and await _is_chat_admin(chat.id, target.id, context):
+        return 0
     history = warnings.setdefault(str(chat.id), {}).setdefault(str(target.id), [])
+    now = datetime.utcnow()
+    # Old warnings are history, not a permanent path to an accidental ban.
+    active_cutoff = now - timedelta(days=7 if automated else 30)
+    active_history = []
+    for item in history:
+        try:
+            stamp = datetime.fromisoformat(item.get("timestamp", "").rstrip("Z"))
+        except (TypeError, ValueError):
+            continue
+        if stamp >= active_cutoff:
+            active_history.append(item)
+    history[:] = active_history
     history.append({
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": now.isoformat() + "Z",
         "reason": reason[:300],
         "moderator_id": moderator.id,
         "moderator_name": getattr(moderator, "full_name", None)
@@ -4545,17 +4682,17 @@ async def track_activity_and_spam(update: Update, context: ContextTypes.DEFAULT_
     tracker["texts"] = [item for item in tracker["texts"] if now - item[0] < 300]
     if text:
         tracker["texts"].append((now, text[:500]))
-    repeated = bool(text) and sum(1 for _, prior in tracker["texts"] if prior == text[:500]) >= 3
-    flooding = len(tracker["times"]) >= 6
+    repeated = len(text) >= 4 and sum(1 for _, prior in tracker["texts"] if prior == text[:500]) >= 5
+    flooding = len(tracker["times"]) >= 10
     entities = message.entities or message.caption_entities or []
     mentions = len(entities) and sum(
         1 for entity in entities if entity.type in ("mention", "text_mention")
-    ) >= 6
+    ) >= 8
     forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_date", None))
     if forwarded:
         tracker["forward_times"] = [item for item in tracker["forward_times"] if now - item < 60] + [now]
-    forwarded_spam = forwarded and (len(tracker["forward_times"]) >= 2 or "http" in text or "t.me/" in text)
-    if not (repeated or flooding or mentions or forwarded_spam) or now - tracker["last_warning"] < 600:
+    forwarded_spam = forwarded and len(tracker["forward_times"]) >= 4 and ("http" in text or "t.me/" in text)
+    if not (repeated or flooding or mentions or forwarded_spam) or now - tracker["last_warning"] < 1800:
         return
     tracker["last_warning"] = now
     reason = "Automated anti-spam: " + ("repeated messages" if repeated else "flooding" if flooding else "excessive mentions" if mentions else "forwarded spam")
@@ -4608,9 +4745,9 @@ async def cmd_restore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await message.reply_text(f"❌ Restore validation failed: {escape(str(exc))}", parse_mode="HTML")
         return
     context.bot_data.setdefault("restore_pending", {})[str(OWNER_ID)] = state
-    markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Confirm restore", callback_data="restore_confirm"),
-        InlineKeyboardButton("Cancel", callback_data="restore_cancel"),
+    markup = RawMarkup([[
+        _btn("Confirm restore", cb="restore_confirm"),
+        _btn("Cancel", cb="restore_cancel"),
     ]])
     await message.reply_text(
         "⚠️ <b>Restore confirmation required</b>\nThis replaces current durable state. "
@@ -5118,18 +5255,18 @@ def _fl_main_text(bd: dict) -> str:
     return "\n".join(lines)
 
 
-def _fl_main_kb(bd: dict) -> InlineKeyboardMarkup:
+def _fl_main_kb(bd: dict) -> RawMarkup:
     active     = bd.get(_FL_ACTIVE, False)
-    toggle_lbl = "⛔ Stop Logs" if active else "▶️ Start Logs"
+    toggle_lbl = "Stop Logs" if active else "Start Logs"
     toggle_cb  = "fl_stop"      if active else "fl_start"
-    return InlineKeyboardMarkup([
+    return RawMarkup([
         [
-            InlineKeyboardButton("📋 IDs",   callback_data="fl_ids"),
-            InlineKeyboardButton("⚡ Speed", callback_data="fl_speed"),
-            InlineKeyboardButton("📊 Show",  callback_data="fl_show"),
+            _btn("IDs",   cb="fl_ids"),
+            _btn("Speed", cb="fl_speed"),
+            _btn("Show",  cb="fl_show"),
         ],
-        [InlineKeyboardButton("📡 Channel", callback_data="fl_channel")],
-        [InlineKeyboardButton(toggle_lbl, callback_data=toggle_cb)],
+        [_btn("Channel", cb="fl_channel")],
+        [_btn(toggle_lbl, cb=toggle_cb)],
     ])
 
 
@@ -5153,22 +5290,22 @@ def _fl_ids_text(bd: dict) -> str:
     return "\n".join(lines)
 
 
-def _fl_ids_kb(bd: dict) -> InlineKeyboardMarkup:
+def _fl_ids_kb(bd: dict) -> RawMarkup:
     ids  = _fl_get_ids(bd)
     rows = []
     for i, e in enumerate(ids):
         on     = e.get("enabled", True)
-        toggle = "🟢 ON" if on else "🔴 OFF"
+        toggle = "ON" if on else "OFF"
         rows.append([
-            InlineKeyboardButton(e["display"],  callback_data="fl_noop"),
-            InlineKeyboardButton(toggle,         callback_data=f"fltog_{i}"),
-            InlineKeyboardButton("❌ Remove",    callback_data=f"flrem_{i}"),
+            _btn(e["display"], cb="fl_noop"),
+            _btn(toggle, cb=f"fltog_{i}"),
+            _btn("Remove", cb=f"flrem_{i}"),
         ])
     rows.append([
-        InlineKeyboardButton("➕ Add ID", callback_data="fl_addid"),
-        InlineKeyboardButton("🔙 Back",   callback_data="fl_panel"),
+        _btn("Add ID", cb="fl_addid"),
+        _btn("Back", cb="fl_panel"),
     ])
-    return InlineKeyboardMarkup(rows)
+    return RawMarkup(rows)
 
 
 def _fl_speed_text() -> str:
@@ -5179,14 +5316,14 @@ def _fl_speed_text() -> str:
     )
 
 
-def _fl_speed_kb(bd: dict) -> InlineKeyboardMarkup:
+def _fl_speed_kb(bd: dict) -> RawMarkup:
     cur  = _fl_get_speed(bd)
     rows = []
     for key, label in _FL_SPEED_LABELS.items():
-        check = "✅ " if key == cur else "     "
-        rows.append([InlineKeyboardButton(f"{check}{label}", callback_data=f"flspd_{key}")])
-    rows.append([InlineKeyboardButton("🔙 Back", callback_data="fl_panel")])
-    return InlineKeyboardMarkup(rows)
+        suffix = " — Selected" if key == cur else ""
+        rows.append([_btn(f"{label}{suffix}", cb=f"flspd_{key}")])
+    rows.append([_btn("Back", cb="fl_panel")])
+    return RawMarkup(rows)
 
 
 def _fl_show_text(bd: dict) -> str:
@@ -5216,10 +5353,10 @@ def _fl_show_text(bd: dict) -> str:
     return "\n".join(lines)
 
 
-def _fl_show_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🗑 Clear All Stats", callback_data="fl_clrstats")],
-        [InlineKeyboardButton("🔙 Back",            callback_data="fl_panel")],
+def _fl_show_kb() -> RawMarkup:
+    return RawMarkup([
+        [_btn("Clear All Stats", cb="fl_clrstats")],
+        [_btn("Back", cb="fl_panel")],
     ])
 
 
@@ -5236,10 +5373,10 @@ def _fl_channel_text(bd: dict) -> str:
     )
 
 
-def _fl_channel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏️ Enter Channel ID", callback_data="fl_setchannel")],
-        [InlineKeyboardButton("🔙 Back", callback_data="fl_panel")],
+def _fl_channel_kb() -> RawMarkup:
+    return RawMarkup([
+        [_btn("Enter Channel ID", cb="fl_setchannel")],
+        [_btn("Back", cb="fl_panel")],
     ])
 
 
@@ -5664,6 +5801,12 @@ def main():
             .build()
         )
 
+        # Access-control guards must run before every public/imported handler.
+        app.add_handler(MessageHandler(
+            filters.COMMAND | filters.ChatType.PRIVATE,
+            banned_update_guard,
+        ), group=-3)
+        app.add_handler(CallbackQueryHandler(banned_callback_guard), group=-3)
         # Generic metadata tracking runs first and never consumes updates.
         app.add_handler(MessageHandler(filters.ALL, track_activity_and_spam), group=-1)
         # Must precede public command handlers so maintenance is explicit, not silent.
@@ -5671,6 +5814,7 @@ def main():
         app.add_handler(CommandHandler("start",   cmd_start))
         app.add_handler(CommandHandler("ping",    cmd_ping))
         app.add_handler(CommandHandler("status",  cmd_status))   # /status — live leaderboard
+        app.add_handler(CommandHandler("hide",    cmd_hide))
         app.add_handler(CommandHandler("buy",     cmd_plan))
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
