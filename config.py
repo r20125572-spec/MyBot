@@ -221,7 +221,7 @@ class RawMarkup(TelegramObject):
 
 def _btn(text: str, *, cb: str = None, url: str = None,
          style: str = None, icon: str = None) -> dict:
-    """Build one premium red button.
+    """Build one coloured premium button.
 
     Button labels intentionally avoid ordinary emoji. Telegram renders the
     custom emoji supplied through icon_custom_emoji_id instead.
@@ -229,9 +229,16 @@ def _btn(text: str, *, cb: str = None, url: str = None,
     text = str(text).lstrip(
         " \t⚡🔥🔙💎🤖📢📄📋✅❌➕🗑✏️📡📊⭐👤⏱🔄🛒⚠️"
     ).strip()
+    normalized_text = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in text)
+    if cb in {"hide_on", "hide_off"}:
+        button_style = "success"
+    elif "BACK" in normalized_text:
+        button_style = "primary"
+    else:
+        button_style = style or "danger"
     d: dict = {
         "text": text,
-        "style": "danger",
+        "style": button_style,
         "icon_custom_emoji_id": icon or BTN_ALL_EMOJI_ID,
     }
     if cb:    d["callback_data"]        = cb
