@@ -41,7 +41,7 @@ from config import (
 )
 
 # Shared sticker-animation sender (one cache for both sh.py and mst.py)
-from sh import _send_as_media, _get_sticker_fid
+from sh import _send_as_media, _get_sticker_fid, html_to_entities
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
@@ -320,9 +320,10 @@ async def _update_progress(bot, sid: str, force: bool = False):
               if running else _kb_done(sid, sess["live"], sess["checked"]))
         await _RL_PROG.wait()
         try:
+            plain_text, entities = html_to_entities(text)
             await bot.edit_message_text(
                 chat_id=sess["chat_id"], message_id=sess["msg_id"],
-                text=text, parse_mode="HTML", reply_markup=kb,
+                text=plain_text, entities=entities, reply_markup=kb,
                 disable_web_page_preview=True,
             )
             sess["last_txt"] = text
@@ -770,8 +771,9 @@ async def cmd_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
     )
 
+    init_plain, init_entities = html_to_entities(init_text)
     prog_msg = await msg.reply_text(
-        init_text, parse_mode="HTML",
+        init_plain, entities=init_entities,
         reply_markup=_kb_running(sid, 0, 0),
         disable_web_page_preview=True,
     )
