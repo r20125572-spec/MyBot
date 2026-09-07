@@ -874,7 +874,10 @@ def kb_payment() -> RawMarkup:
     ])
 
 
-def kb_crypto_methods(plan_key: str) -> RawMarkup:
+def kb_crypto_methods(
+    plan_key: str,
+    method_keys: list[str] | None = None,
+) -> RawMarkup:
     def coin(method_key: str) -> dict:
         method = payments.PAYMENT_METHODS[method_key]
         return _btn(
@@ -883,13 +886,13 @@ def kb_crypto_methods(plan_key: str) -> RawMarkup:
             style="primary",
         )
 
-    return RawMarkup([
-        [coin("bep20"), coin("trx")],
-        [coin("pol"), coin("ton")],
-        [coin("ltc"), coin("btc")],
-        [coin("sol"), coin("eth")],
-        [_btn(B("BACK"), cb="mprice")],
-    ])
+    available = method_keys if method_keys is not None else list(payments.PAYMENT_METHODS)
+    rows = [
+        [coin(key) for key in available[index:index + 2]]
+        for index in range(0, len(available), 2)
+    ]
+    rows.append([_btn(B("BACK"), cb="mprice")])
+    return RawMarkup(rows)
 
 def kb_gate_main() -> RawMarkup:
     return RawMarkup([
@@ -4265,9 +4268,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data in payments.PLANS:
-        await query.answer("Select a payment method.", show_alert=False)
+        await query.answer("Loading available payment methods…", show_alert=False)
         plan = payments.PLANS[data]
         plan_emoji = tg_emoji(get_plan_emoji_id(plan["plan"]), "⭐")
+        try:
+            accepted_methods = await payments.get_accepted_method_keys(force=True)
+        except Exception as exc:
+            logger.error("[OXAPAY] Could not load accepted currencies: %s", exc)
+            await query.message.edit_text(
+                f"<b>{E_ERRORS} Payment Methods Unavailable</b>\n"
+                "──────────\n"
+                f"{escape(str(exc))}",
+                parse_mode="HTML",
+                reply_markup=kb_payment(),
+            )
+            return
+        if not accepted_methods:
+            await query.message.edit_text(
+                f"<b>{E_ERRORS} No Payment Methods Enabled</b>\n"
+                "──────────\n"
+                "Enable at least one supported cryptocurrency in your "
+                "OxaPay Merchant Service settings.",
+                parse_mode="HTML",
+                reply_markup=kb_payment(),
+            )
+            return
         await query.message.edit_text(
             f"<b>{plan_emoji} {B(plan['name'])} Plan</b>\n"
             f"<b>Price</b> ➳ ${plan['price']:.2f}\n"
@@ -4275,7 +4300,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>Credits</b> ➳ ∞\n"
             "<b>Select Payment Method</b> ➳",
             parse_mode="HTML",
-            reply_markup=kb_crypto_methods(data),
+            reply_markup=kb_crypto_methods(data, accepted_methods),
         )
         return
 
