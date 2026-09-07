@@ -33,7 +33,7 @@ from mst import get_bin_handler as get_bin_lookup_handler
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
-    CHANNEL_USERNAME, CHANNEL_LINK, GROUP_USERNAME, GROUP_LINK, SUPPORT_LINK,
+    CHANNEL_USERNAME, CHANNEL_ID, CHANNEL_LINK, GROUP_USERNAME, GROUP_LINK, SUPPORT_LINK,
     BOT_LINK, BOT_USERNAME,
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
@@ -3814,12 +3814,12 @@ async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
             media = [InputMediaPhoto(media=fid) for fid in file_ids]
             media[0] = InputMediaPhoto(media=file_ids[0],
                                        caption=channel_caption, parse_mode="HTML")
-            await context.bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
+            await context.bot.send_media_group(chat_id=CHANNEL_ID, media=media)
         elif file_type == "photo":
-            await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=file_ids[0],
+            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_ids[0],
                                          caption=channel_caption, parse_mode="HTML")
         else:
-            await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=file_ids[0],
+            await context.bot.send_video(chat_id=CHANNEL_ID, video=file_ids[0],
                                          caption=channel_caption, parse_mode="HTML")
         posted = True
     except Exception as e:
@@ -5168,7 +5168,7 @@ async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     id_entry = random.choice(ids)
     text     = _fl_log_msg(id_entry)
     btn_kb = RawMarkup([[
-        _btn("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
+        _btn("𝘽𝘼𝙏𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
              icon=CARD_CHK_BTN_EMOJI_ID),
     ]])
     try:
