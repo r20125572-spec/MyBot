@@ -14,10 +14,11 @@ After every plan grant/remove:
 After every CHARGED card (in sh.py, both places where total_charged increments):
     await db.save_user_stats_now(user_id, ud)
 
-Two tables:
+Three tables:
   • premium_users  — plan / expires / receipt (unchanged)
   • user_stats     — total_charged, name, username, joined, last_active
                      for EVERY user (not just premium)
+  • bot_bans       — durable bot-wide access bans with audit metadata
 """
 from __future__ import annotations
 
@@ -76,8 +77,32 @@ CREATE TABLE IF NOT EXISTS user_stats (
     approved_checks BIGINT         NOT NULL DEFAULT 0,
     declined_checks BIGINT         NOT NULL DEFAULT 0,
     total_refs    BIGINT           NOT NULL DEFAULT 0,
+    hide_identity BOOLEAN          NOT NULL DEFAULT FALSE,
+    daily_check_date TEXT           NOT NULL DEFAULT '',
+    daily_checks    BIGINT          NOT NULL DEFAULT 0,
     updated_at    DOUBLE PRECISION NOT NULL DEFAULT 0
 );
+"""
+
+_STATS_MIGRATIONS = (
+    "ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS hide_identity "
+    "BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS daily_check_date "
+    "TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS daily_checks "
+    "BIGINT NOT NULL DEFAULT 0",
+)
+
+_CREATE_BANS_TABLE = """
+CREATE TABLE IF NOT EXISTS bot_bans (
+    user_id      BIGINT           PRIMARY KEY,
+    active       BOOLEAN          NOT NULL DEFAULT TRUE,
+    reason       TEXT             NOT NULL DEFAULT '',
+    moderator_id BIGINT,
+    banned_at    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    updated_at   DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS bot_bans_active_idx ON bot_bans (active);
 """
 
 
@@ -122,12 +147,15 @@ async def _connect() -> bool:
             async with pool.acquire() as conn:
                 await conn.execute(_CREATE_PREMIUM_TABLE)
                 await conn.execute(_CREATE_STATS_TABLE)
+                for migration in _STATS_MIGRATIONS:
+                    await conn.execute(migration)
+                await conn.execute(_CREATE_BANS_TABLE)
             _pool = pool
             label = "none" if ssl_opt is False else (
                 "unverified" if ssl_opt is _unverified else "verified"
             )
             logger.info(f"[DB] ✅ PostgreSQL connected (ssl={label}) — "
-                        "premium_users + user_stats tables ready.")
+                        "premium_users + user_stats + bot_bans tables ready.")
             return True
         except Exception as exc:
             label = "none" if ssl_opt is False else (
@@ -285,8 +313,9 @@ _STATS_UPSERT = """
     INSERT INTO user_stats
         (user_id, total_charged, name, first_name, username,
          joined, last_active, total_checks, approved_checks,
-         declined_checks, total_refs, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         declined_checks, total_refs, hide_identity, daily_check_date,
+         daily_checks, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     ON CONFLICT (user_id) DO UPDATE SET
         total_charged   = GREATEST(user_stats.total_charged, EXCLUDED.total_charged),
         name            = EXCLUDED.name,
@@ -297,6 +326,13 @@ _STATS_UPSERT = """
         approved_checks = GREATEST(user_stats.approved_checks,EXCLUDED.approved_checks),
         declined_checks = GREATEST(user_stats.declined_checks,EXCLUDED.declined_checks),
         total_refs      = GREATEST(user_stats.total_refs,     EXCLUDED.total_refs),
+        hide_identity   = EXCLUDED.hide_identity,
+        daily_check_date = EXCLUDED.daily_check_date,
+        daily_checks    = CASE
+            WHEN user_stats.daily_check_date = EXCLUDED.daily_check_date
+            THEN GREATEST(user_stats.daily_checks, EXCLUDED.daily_checks)
+            ELSE EXCLUDED.daily_checks
+        END,
         updated_at      = EXCLUDED.updated_at
 """
 # Note: GREATEST() ensures we never overwrite a higher value with a lower one —
@@ -340,6 +376,9 @@ def _make_stats_record(uid_int: int, ud: dict) -> tuple:
         ud.get("approved_checks", 0),
         ud.get("declined_checks", 0),
         ud.get("total_refs", 0),
+        bool(ud.get("hide", False)),
+        ud.get("daily_check_date", ""),
+        ud.get("daily_checks", 0),
         now,
     )
 
@@ -364,15 +403,13 @@ async def save_user_stats_now(user_id: int, ud: dict) -> bool:
 
 async def save_all_stats_now(user_data: dict) -> int:
     """
-    Immediately upsert stats for ALL users that have at least one charged card.
+    Immediately upsert stats for all users with activity.
     Called by the periodic flush job and on shutdown.
     """
     if not _pool:
         return 0
     records = []
     for uid_str, ud in user_data.items():
-        if ud.get("total_charged", 0) <= 0:
-            continue
         try:
             uid = int(uid_str)
         except ValueError:
@@ -420,6 +457,7 @@ async def _load_stats_from_db(bot_data: dict) -> int:
             ud["joined"]      = row["joined"]
         if not ud.get("last_active") and row["last_active"]:
             ud["last_active"] = row["last_active"]
+        ud["hide"] = bool(row["hide_identity"])
 
         db_checks = row["total_checks"] or 0
         ud["total_checks"] = max(ud.get("total_checks", 0), db_checks)
@@ -433,9 +471,79 @@ async def _load_stats_from_db(bot_data: dict) -> int:
         db_refs = row["total_refs"] or 0
         ud["total_refs"] = max(ud.get("total_refs", 0), db_refs)
 
+        db_daily_date = row["daily_check_date"] or ""
+        if db_daily_date >= ud.get("daily_check_date", ""):
+            ud["daily_check_date"] = db_daily_date
+            ud["daily_checks"] = row["daily_checks"] or 0
+
     logger.info(f"[DB] ✅ Restored stats for {len(rows)} user(s) from PostgreSQL "
                 f"(total_charged, checks, etc. safe across redeploys).")
     return len(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DURABLE BOT-WIDE BANS
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _load_bans_from_db(bot_data: dict) -> int:
+    if not _pool:
+        return 0
+    try:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, reason, moderator_id, banned_at "
+                "FROM bot_bans WHERE active = TRUE"
+            )
+    except Exception as exc:
+        logger.warning(f"[DB] load bans error: {exc}")
+        return 0
+
+    user_data = bot_data.setdefault("user_data", {})
+    for row in rows:
+        ud = user_data.setdefault(str(row["user_id"]), {})
+        ud["banned"] = True
+        ud["ban_reason"] = row["reason"] or ""
+        ud["banned_by"] = row["moderator_id"]
+        ud["banned_at"] = row["banned_at"] or 0
+    logger.info(f"[DB] Restored {len(rows)} active bot ban(s).")
+    return len(rows)
+
+
+async def save_ban_now(
+    user_id: int,
+    *,
+    active: bool,
+    reason: str = "",
+    moderator_id: int | None = None,
+) -> bool:
+    """Persist or revoke a bot-wide ban immediately."""
+    if not _pool:
+        return False
+    now = time.time()
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO bot_bans
+                    (user_id, active, reason, moderator_id, banned_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    active = EXCLUDED.active,
+                    reason = EXCLUDED.reason,
+                    moderator_id = EXCLUDED.moderator_id,
+                    banned_at = CASE
+                        WHEN EXCLUDED.active THEN EXCLUDED.banned_at
+                        ELSE bot_bans.banned_at
+                    END,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                int(user_id), bool(active), reason[:500],
+                int(moderator_id) if moderator_id is not None else None, now,
+            )
+        return True
+    except Exception as exc:
+        logger.warning(f"[DB] save ban error for {user_id}: {exc}")
+        return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -506,8 +614,9 @@ async def attach(app) -> None:
             if seeded:
                 logger.info(f"[DB] Seeded {seeded} premium user(s) from JSON → Postgres.")
 
-    # ★ NEW: Restore user stats (total_charged etc.) — critical for /me and /status
+    # Restore user stats and access-control state before serving updates.
     await _load_stats_from_db(app.bot_data)
+    await _load_bans_from_db(app.bot_data)
 
     # Schedule 60-second periodic flush for both tables
     if app.job_queue:
