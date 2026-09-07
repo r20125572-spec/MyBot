@@ -29,7 +29,10 @@ import aiohttp as _aiohttp
 
 import database as db   # PostgreSQL premium persistence (Railway)
 
-from mst import get_bin_handler as get_bin_lookup_handler
+try:
+    from mst import get_bin_handler as get_bin_lookup_handler
+except ImportError:
+    get_bin_lookup_handler = None
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
@@ -57,7 +60,7 @@ from sh import (
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
-    _send_sticker, _send_as_media, get_random_live_emoji,
+    _send_sticker, _send_as_media, html_to_entities, get_random_live_emoji,
     get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
     CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
 )
@@ -68,6 +71,18 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger  = logging.getLogger(__name__)
+
+
+async def _send_custom_html(bot, chat_id, html: str, **kwargs):
+    """Send HTML-like UI text as direct Telegram entities, including custom emoji."""
+    text, entities = html_to_entities(html)
+    return await bot.send_message(chat_id=chat_id, text=text, entities=entities, **kwargs)
+
+
+async def _edit_custom_html(message, html: str, **kwargs):
+    """Edit UI text using direct Telegram custom-emoji entities."""
+    text, entities = html_to_entities(html)
+    return await message.edit_text(text=text, entities=entities, **kwargs)
 MAX_MSG = 4000
 
 # Normal administration is shared with the second owner. Fake-log controls
@@ -260,7 +275,8 @@ def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
             "total_refs": 0, "total_checks": 0, "approved_checks": 0, "declined_checks": 0,
             "last_gate": "N/A", "last_card": "N/A", "codes_redeemed": 0, "keys_redeemed": 0,
             "banned": False, "total_charged": 0,
-            "daily_activity": {}, "memberships": {}, "hide": False,
+            "daily_activity": {}, "daily_check_date": "", "daily_checks": 0,
+            "memberships": {}, "hide": False,
         }
     context.bot_data["user_data"][uid].setdefault("hide", False)
     return context.bot_data["user_data"][uid]
@@ -426,8 +442,8 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     joined        = ud.get("joined", "N/A")
     last_active   = ud.get("last_active", "N/A")
     total_refs    = ud.get("total_refs", 0)
-    activity      = ud.get("daily_activity", {})
-    today_count   = activity.get(datetime.now().strftime("%Y-%m-%d"), 0)
+    today_str     = datetime.now().strftime("%Y-%m-%d")
+    today_count   = ud.get("daily_checks", 0) if ud.get("daily_check_date") == today_str else 0
     memberships   = len(ud.get("memberships", {}))
     total_checks  = ud.get("total_checks", 0)
     approved      = ud.get("approved_checks", 0)
@@ -465,7 +481,7 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         expire_line,
         "━━━━━━━━━━━━━━━━━━━━",
         f"✰ <b>𝐋𝐚𝐬𝐭 𝐀𝐜𝐭𝐢𝐯𝐞</b>  ➔ {last_active}",
-        f"✰ <b>𝐃𝐚𝐢𝐥𝐲 𝐀𝐜𝐭𝐢𝐯𝐢𝐭𝐲</b> ➔ {today_count} update(s) today",
+        f"✰ <b>𝐃𝐚𝐢𝐥𝐲 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {today_count} card(s) today",
         f"✰ <b>𝐆𝐫𝐨𝐮𝐩 𝐌𝐞𝐦𝐛𝐞𝐫𝐬𝐡𝐢𝐩𝐬</b> ➔ {memberships}",
         f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
         f"✰ <b>𝐀𝐩𝐩𝐫𝐨𝐯𝐞𝐝</b>   ➔ {approved}",
@@ -827,10 +843,8 @@ def kb_main(user_id: int) -> RawMarkup:
     return RawMarkup([
         [_btn(B("Checker"),  cb="mgates",    style="primary"),
          _btn(B("Buy Now"),  cb="mprice",    style="primary")],
-        [_btn(B("Updates"),  url=CHANNEL_LINK, style="primary"),
-         _btn(B("Referral"), cb="mreferral", style="primary")],
-        [_btn(B("Profile"),  cb="mprofile",  style="primary"),
-         _btn(B("Support"),  url=SUPPORT_LINK, style="primary")],
+        [_btn(B("Referral"), cb="mreferral", style="primary"),
+         _btn(B("Profile"),  cb="mprofile",  style="primary")],
     ])
 
 def kb_back(cb: str) -> RawMarkup:
@@ -840,7 +854,7 @@ def kb_profile() -> RawMarkup:
     return RawMarkup([
         [_btn(B("Buy"), cb="mprice", style="primary"),
          _btn(B("Support"), url=SUPPORT_LINK, style="primary")],
-        [_btn(B("Back"), cb="bmain", style="danger")],
+        [_btn(B("Back"), cb="bmain", style="primary")],
     ])
 
 def kb_price() -> RawMarkup:
@@ -1169,6 +1183,13 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         ud["last_active"]  = datetime.now().strftime("%Y-%m-%d %H:%M")
         if is_approved: ud["approved_checks"] = ud.get("approved_checks", 0) + 1
         else:           ud["declined_checks"]  = ud.get("declined_checks", 0) + 1
+        today = datetime.now().strftime("%Y-%m-%d")
+        if ud.get("daily_check_date") != today:
+            ud["daily_check_date"] = today
+            ud["daily_checks"] = 0
+        ud["daily_checks"] = ud.get("daily_checks", 0) + 1
+        await _save_state(context.bot_data)
+        await db.save_user_stats_now(user.id, ud)
 
         time_taken = f"{time.time() - start_time:.2f}"
         text = build_check_result(
@@ -3298,6 +3319,12 @@ async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud["total_checks"] = ud.get("total_checks", 0) + total
     ud["last_gate"]    = "Shopify | 0-20$"
     ud["last_active"]  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if ud.get("daily_check_date") != today_str:
+        ud["daily_check_date"] = today_str
+        ud["daily_checks"] = 0
+    ud["daily_checks"] = ud.get("daily_checks", 0) + total
+    await _save_state(context.bot_data)
+    await db.save_user_stats_now(user.id, ud)
 
 
 async def cmd_1day(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3459,9 +3486,9 @@ async def cmd_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=RawMarkup([
             [_btn("ON — Hide My Identity", cb="hide_on",
-                  icon=PROG_LIVE_EMOJI_ID)],
+                  style="success", icon=PROG_LIVE_EMOJI_ID)],
             [_btn("OFF — Show My Identity", cb="hide_off",
-                  icon=PROG_DEAD_EMOJI_ID)],
+                  style="success", icon=PROG_DEAD_EMOJI_ID)],
             [_btn(B("BACK"), cb="bmain")],
         ]),
     )
@@ -3943,18 +3970,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         ud = get_user_data(user.id, context)
         _update_user_meta(ud, user)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=ui_start_screen(user, context),
-            parse_mode="HTML",
+        await _send_custom_html(
+            context.bot, user.id, ui_start_screen(user, context),
             reply_markup=kb_main(user.id),
             disable_web_page_preview=True,
         )
         return
 
     if data == "bmain":
-        await query.message.edit_text(
-            ui_start_screen(user, context), parse_mode="HTML",
+        await _edit_custom_html(
+            query.message, ui_start_screen(user, context),
             reply_markup=kb_main(user.id), disable_web_page_preview=True
         )
         return
@@ -3962,28 +3987,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ud_r       = get_user_data(user.id, context)
         link       = get_referral_link(user.id)
         total_refs = ud_r.get("total_refs", 0)
-        await query.message.edit_text(
+        await _edit_custom_html(
+            query.message,
             f"<b>{E_USER} {B('Referral Program')}</b>\n──────────\n"
             f"<b>Link</b>      ➳ <code>{link}</code>\n──────────\n"
             f"<b>Referrals</b> ➳ {total_refs}\n"
             f"<b>Earned</b>    ➳ {total_refs * REFERRAL_CREDITS} credits\n"
             f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
             "Share your link to earn free credits!",
-            parse_mode="HTML",
             reply_markup=kb_referral(user.id),
             disable_web_page_preview=True,
         )
         return
     if data == "mprofile":
-        await query.message.edit_text(
-            ui_full_profile(user, context), parse_mode="HTML",
+        await _edit_custom_html(
+            query.message, ui_full_profile(user, context),
             reply_markup=kb_profile(), disable_web_page_preview=True
         )
         return
     if data == "mgates":
-        await query.message.edit_text(
+        await _edit_custom_html(
+            query.message,
             f"<b>{E_GATE} {B('Gates')}</b>\n──────────\nChoose a gate category:",
-            parse_mode="HTML", reply_markup=kb_gate_main()
+            reply_markup=kb_gate_main()
         )
         return
     if data == "allcm_show":
@@ -4038,6 +4064,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Turn OFF — Show Identity" if hidden
                     else "Turn ON — Hide Identity",
                     cb="hide_off" if hidden else "hide_on",
+                    style="success",
                     icon=PROG_DEAD_EMOJI_ID if hidden
                     else PROG_LIVE_EMOJI_ID,
                 )],
@@ -5819,7 +5846,10 @@ def main():
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
         app.add_handler(CommandHandler("rm",      cmd_rm))
-        app.add_handler(get_bin_lookup_handler())
+        if get_bin_lookup_handler is not None:
+            app.add_handler(get_bin_lookup_handler())
+        else:
+            logger.warning("mst.py does not export get_bin_handler; /bin registration skipped.")
         app.add_handler(CommandHandler("fb",      cmd_fb))
         app.add_handler(CommandHandler("sh",      _cmd_sh_gated))   # force-join gated
         app.add_handler(CommandHandler("msh",     cmd_msh))
