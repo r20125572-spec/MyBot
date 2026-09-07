@@ -5969,7 +5969,7 @@ def main():
             banned_update_guard,
         ), group=-3)
         app.add_handler(CallbackQueryHandler(banned_callback_guard), group=-3)
-        # Generic metadata tracking runs first and never consumes updates.
+              # Generic metadata tracking runs first and never consumes updates.
         app.add_handler(MessageHandler(filters.ALL, track_activity_and_spam), group=-1)
         # Must precede public command handlers so maintenance is explicit, not silent.
         app.add_handler(MessageHandler(filters.COMMAND, maintenance_command_guard), group=-2)
@@ -5977,6 +5977,13 @@ def main():
         app.add_handler(CommandHandler("ping",    cmd_ping))
         app.add_handler(CommandHandler("status",  cmd_status))   # /status — live leaderboard
         app.add_handler(CommandHandler("hide",    cmd_hide))
+        
+        for handler in get_splitter_handlers():
+            if isinstance(handler, MessageHandler):
+                app.add_handler(handler, group=1)
+            else:
+                app.add_handler(handler)
+                
         app.add_handler(CommandHandler("buy",     cmd_plan))
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
