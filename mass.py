@@ -4,7 +4,7 @@ import time
 import re
 import os
 from io import BytesIO
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import Update, InputFile
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 from config import (
     API_TIMEOUT, get_bin_info, OWNER_ID, PREMIUM_GATES,
@@ -17,6 +17,7 @@ from config import (
     BTN_CHARGED_EMOJI_ID, BTN_LIVE_EMOJI_ID, BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID,
     RawMarkup, _btn,
 )
+from sh import html_to_entities
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BOT IDENTITY — Batamanchk
@@ -301,12 +302,12 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             except Exception:
                 pass
         if not_joined:
-            rows = [[InlineKeyboardButton(f"➺ Join @{n}", url=l)] for n, l in not_joined]
-            rows.append([InlineKeyboardButton("I Joined — Verify Now", callback_data="check_sub")])
+            rows = [[_btn(f"Join @{n}", url=l)] for n, l in not_joined]
+            rows.append([_btn("I Joined — Verify Now", cb="check_sub")])
             await update.message.reply_text(
                 "<b>[ 𖥷iТ ] ➺ Jᴏɪɴ Rᴇǫᴜɪʀᴇᴅ</b>\n━━━━━━━━━━━━━━━━━\n"
                 "Join channels to use mass check.\n━━━━━━━━━━━━━━━━━",
-                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
+                reply_markup=RawMarkup(rows), parse_mode="HTML"
             )
             return
 
@@ -321,8 +322,8 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             f"<b>{E_ERRORS} Premium Gate</b>\n\n"
             "This gate is only for premium users.\nUpgrade: /plan",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("BUY PREMIUM", callback_data="mprice")],
+            reply_markup=RawMarkup([
+                [_btn("BUY PREMIUM", cb="mprice")],
             ])
         )
         return
@@ -358,10 +359,9 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     sites_to_use    = dynamic_sites if dynamic_sites else [site]
 
     # ── Starting message — premium UI ──
-    msg = await update.message.reply_text(
-        _build_progress_msg(gate_name, 0, len(cards), 0, 0, 0, 0, 0.0, user),
-        parse_mode="HTML"
-    )
+    start_html = _build_progress_msg(gate_name, 0, len(cards), 0, 0, 0, 0, 0.0, user)
+    start_text, start_entities = html_to_entities(start_html)
+    msg = await update.message.reply_text(start_text, entities=start_entities)
 
     semaphore  = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
@@ -411,14 +411,13 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
             if done % UPDATE_EVERY == 0:
                 elapsed = time.time() - start_time
                 try:
-                    await msg.edit_text(
-                        _build_progress_msg(
-                            gate_name, done, len(cards),
-                            charged_count, live_count, dead_count, error_count,
-                            elapsed, user
-                        ),
-                        parse_mode="HTML"
+                    progress_html = _build_progress_msg(
+                        gate_name, done, len(cards),
+                        charged_count, live_count, dead_count, error_count,
+                        elapsed, user
                     )
+                    progress_text, progress_entities = html_to_entities(progress_html)
+                    await msg.edit_text(progress_text, entities=progress_entities)
                 except Exception:
                     pass
 
@@ -443,14 +442,14 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
     context.bot_data[f"last_mass_{user_id}"] = f"mass_results_{user_id}_{gate_key}"
 
     # ── Final message — same premium UI, fully filled ──
+    final_html = _build_progress_msg(
+        gate_name, len(parsed), len(parsed),
+        total_charged, total_live, total_dead, total_errors,
+        elapsed, user
+    )
+    final_text, final_entities = html_to_entities(final_html)
     await msg.edit_text(
-        _build_progress_msg(
-            gate_name, len(parsed), len(parsed),
-            total_charged, total_live, total_dead, total_errors,
-            elapsed, user
-        ),
-        parse_mode="HTML",
-        reply_markup=_create_result_buttons()
+        final_text, entities=final_entities, reply_markup=_create_result_buttons()
     )
 
 def _create_result_buttons() -> RawMarkup:
