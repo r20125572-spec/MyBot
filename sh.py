@@ -59,6 +59,7 @@ from typing import Optional
 
 import aiohttp
 from telegram import Update, InputFile, MessageEntity
+from telegram.error import RetryAfter
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
 from config import (
@@ -66,6 +67,23 @@ from config import (
     get_bin_info, tg_emoji,
     RawMarkup, _btn,
     BOT_NAME, CHANNEL_LINK, LOGS_CHANNEL_LINK,
+    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID, DEV_EMOJI_ID, PRO_EMOJI_ID,
+    DECLINED_EMOJI_ID, HIT_GATE_EMOJI_ID, HIT_RESP_EMOJI_ID,
+    PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
+    PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID,
+    SH_GATE_EMOJI_ID, SH_PROG_EMOJI_ID, SH_LIVE_EMOJI_ID,
+    BTN_CHARGED_EMOJI_ID, BTN_LIVE_EMOJI_ID, BTN_ALL_EMOJI_ID,
+    BTN_STOP_EMOJI_ID, CARD_CHK_BTN_EMOJI_ID,
+    CHARGED_EMOJI_IDS, LIVE_EMOJI_IDS, PLAN_EMOJIS, SPECIAL_FONT_MAP,
+    is_valid_custom_emoji_id,
+    SC_REPORT_EMOJI_ID as _SC_REPORT_EID,
+    SC_STATS_EMOJI_ID as _SC_STATS_EID,
+    SC_DUPE_EMOJI_ID as _SC_DUPE_EID,
+    SC_DONE_EMOJI_ID as _SC_DONE_EID,
+    SC_DENY_EMOJI_ID as _SC_DENY_EID,
+    ME_CROWN_EMOJI_ID as _ME_CROWN_EID,
+    ME_SMILE_EMOJI_ID as _ME_SMILE_EID,
+    ME_KING_EMOJI_ID as _ME_KING_EID,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -153,74 +171,6 @@ PROBE_CONCURRENCY:  int   = 60
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # EMOJI IDS  — full set from mst.py (custom premium stickers)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# Core card/user/time emojis
-CARD_EMOJI_ID     = "5800709991627232190"
-USER_EMOJI_ID     = "6267115986541877538"
-TIME_EMOJI_ID     = "6285240160120477644"
-DEV_EMOJI_ID      = "6267091732861555879"
-PRO_EMOJI_ID      = "6280484433027931563"
-
-# Status emojis
-DECLINED_EMOJI_ID = "4956612582816351459"
-
-# Hit-log emojis
-HIT_GATE_EMOJI_ID = "5341715473882955310"
-HIT_RESP_EMOJI_ID = "5839116473951328489"
-
-# Progress-message emojis  (/msh mass checker — unchanged)
-PROG_GATE_EMOJI_ID     = "5370935802844946281"
-PROG_PROGRESS_EMOJI_ID = "5116268964023894989"
-PROG_CHARGED_EMOJI_ID  = "5427168083074628963"
-PROG_LIVE_EMOJI_ID     = "6296367896398399651"   # custom live emoji
-PROG_DEAD_EMOJI_ID     = "4958526153955476488"
-PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
-
-# /sh single-checker spinner — custom premium emoji IDs (user-defined)
-SH_GATE_EMOJI_ID = "6220029508456548253"   # ❤️  gate line
-SH_PROG_EMOJI_ID = "6298691319086712919"   # 😄  progress line
-SH_LIVE_EMOJI_ID = "6296367896398399651"   # 🎸  live count
-
-# Button emojis
-BTN_CHARGED_EMOJI_ID  = "5465465194056525619"   # 💎 charged button
-BTN_LIVE_EMOJI_ID     = "5039793437776282663"   # ✅ live button
-BTN_ALL_EMOJI_ID      = "4956324463525233747"   # 📁 all button
-BTN_STOP_EMOJI_ID     = "6179444193518162239"   # ⛔ stop button
-CARD_CHK_BTN_EMOJI_ID = "5935795874251674052"   # 💳 hit-log group inline button
-
-# Pool of 18 premium animated emojis — used for CHARGED and LIVE hits (random per card)
-CHARGED_EMOJI_IDS = [
-    "5801154993188770160", "4956739572114392015", "5285221724634239278",
-    "5287777298894835685", "5285024405246725814", "5287547831677112267",
-    "5287658362660474522", "5285186510197381130", "5803233241963959320",
-    "5462902520215002477", "5787435351521889877", "5323674506705785412",
-    "5801005158959683238", "5436143465211640305", "5800688138833629633",
-    "5891044423856296980", "5436068999068662274", "5427168083074628963",
-]
-
-# LIVE_EMOJI_IDS — separate pool for LIVE hits using the user's custom premium emoji
-LIVE_EMOJI_IDS = [
-    "6296367896398399651",
-]
-
-# Plan emojis (CORE / ELITE / ROOT / CUSTOM)
-PLAN_EMOJIS = {
-    "CORE":   "5379869575338812919",
-    "ELITE":  "5836898273666798437",
-    "ROOT":   "4956420911310832630",
-    "CUSTOM": "5445027583588593750",
-}
-
-# Small-caps → uppercase map for plan name normalisation
-SPECIAL_FONT_MAP = {
-    'ᴀ': 'A', 'ʙ': 'B', 'ᴄ': 'C', 'ᴅ': 'D', 'ᴇ': 'E',
-    'ꜰ': 'F', 'ɢ': 'G', 'ʜ': 'H', 'ɪ': 'I', 'ᴊ': 'J',
-    'ᴋ': 'K', 'ʟ': 'L', 'ᴍ': 'M', 'ɴ': 'N', 'ᴏ': 'O',
-    'ᴘ': 'P', 'ǫ': 'Q', 'ʀ': 'R', 'ꜱ': 'S', 'ᴛ': 'T',
-    'ᴜ': 'U', 'ᴠ': 'V', 'ᴡ': 'W', 'x': 'X', 'ʏ': 'Y',
-    'ᴢ': 'Z', 'Ɪ': 'I',
-}
-
 
 def get_random_charged_emoji() -> str:
     """Random premium emoji for CHARGED hits."""
@@ -1221,7 +1171,7 @@ def html_to_entities(html: str):
                     offset    = _u16len(text)
                     text     += fallback
                     length    = _u16len(fallback)
-                    if length > 0:
+                    if length > 0 and is_valid_custom_emoji_id(emoji_id):
                         entities.append(MessageEntity(
                             type="custom_emoji", offset=offset,
                             length=length, custom_emoji_id=emoji_id))
@@ -1253,7 +1203,35 @@ def html_to_entities(html: str):
             text += ch
             i    += 1
 
-    return text, entities if entities else None
+    custom_ranges = [
+        (entity.offset, entity.offset + entity.length)
+        for entity in entities
+        if entity.type == "custom_emoji"
+    ]
+    clean_entities = []
+    for entity in entities:
+        if entity.type != "bold":
+            clean_entities.append(entity)
+            continue
+        segments = [(entity.offset, entity.offset + entity.length)]
+        for custom_start, custom_end in custom_ranges:
+            next_segments = []
+            for start, end in segments:
+                if custom_end <= start or custom_start >= end:
+                    next_segments.append((start, end))
+                else:
+                    if start < custom_start:
+                        next_segments.append((start, custom_start))
+                    if custom_end < end:
+                        next_segments.append((custom_end, end))
+            segments = next_segments
+        for start, end in segments:
+            if end > start:
+                clean_entities.append(MessageEntity(
+                    type="bold", offset=start, length=end - start
+                ))
+    clean_entities.sort(key=lambda entity: (entity.offset, -entity.length))
+    return text, clean_entities if clean_entities else None
 
 
 def _send_ents(html: str):
@@ -1428,17 +1406,36 @@ async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
         # entities= so premium custom_emoji stickers always render animated.
         plain_text, ents = html_to_entities(full_html)
 
-        await bot.send_message(
-            chat_id=chat_id,
-            text=plain_text,
-            entities=ents if ents else None,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-            disable_notification=disable_notification,
-            reply_to_message_id=reply_to_message_id,
-        )
+        for attempt in range(4):
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=plain_text,
+                    entities=ents if ents else None,
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=True,
+                    disable_notification=disable_notification,
+                    reply_to_message_id=reply_to_message_id,
+                )
+                return
+            except RetryAfter as exc:
+                if attempt == 3:
+                    raise
+                wait_time = float(getattr(exc, "retry_after", 3)) + 1
+                logging.warning(
+                    "[MEDIA] Rate limited for chat_id=%s. Sleeping %ss...",
+                    chat_id, wait_time,
+                )
+                await asyncio.sleep(wait_time)
+            except Exception as exc:
+                logging.warning("[MEDIA] send_message to %s failed: %s", chat_id, exc)
+                if reply_to_message_id:
+                    reply_to_message_id = None
+                    continue
+                return
     except Exception as exc:
         logging.warning(f"[MEDIA] send_message to {chat_id} failed: {exc}")
+        raise
 
 
 def _plan_eid(plan: str) -> str:
@@ -1831,9 +1828,10 @@ async def _update_progress(bot, sid: str, force: bool = False):
     if text == sess.get("last_text") and not force:
         return
     try:
+        plain_text, entities = html_to_entities(text)
         await bot.edit_message_text(
             chat_id=sess["chat_id"], message_id=sess["msg_id"],
-            text=text, parse_mode="HTML",
+            text=plain_text, entities=entities,
             reply_markup=_msh_buttons(sid, running),
             disable_web_page_preview=True,
         )
@@ -2367,12 +2365,13 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan = ud.get("plan", "TRIAL")
 
     # ── Spinner (initial "Checking..." message) ───────────────────────────────
-    spin = await update.message.reply_text(
+    spinner_html = (
         f'<b><tg-emoji emoji-id="{SH_GATE_EMOJI_ID}">❤️</tg-emoji>gate ➳Shopify</b>\n'
         f'<b><tg-emoji emoji-id="{SH_PROG_EMOJI_ID}">😄</tg-emoji>Progress ➳ 0/1</b>\n'
-        f'<b>Live ➳ 0 <tg-emoji emoji-id="{SH_LIVE_EMOJI_ID}">🎸</tg-emoji>✅</b>',
-        parse_mode="HTML"
+        f'<b>Live ➳ 0 <tg-emoji emoji-id="{SH_LIVE_EMOJI_ID}">🎸</tg-emoji>✅</b>'
     )
+    spinner_text, spinner_entities = html_to_entities(spinner_html)
+    spin = await update.message.reply_text(spinner_text, entities=spinner_entities)
 
     proxies = _load_proxies()
 
@@ -2490,11 +2489,6 @@ _SC_DEV_EID       = DEV_EMOJI_ID              # ⚡
 _SC_PRO_EID       = PRO_EMOJI_ID              # ⭐
 _SC_HIT_RESP_EID  = HIT_RESP_EMOJI_ID         # 🔗
 _SC_CHARGED_EID   = PROG_CHARGED_EMOJI_ID     # 💎
-_SC_REPORT_EID    = "5323674506705785412"     # 📜
-_SC_STATS_EID     = "5341715473882955310"     # 📊
-_SC_DUPE_EID      = "5801154993188770160"     # 🚫
-_SC_DONE_EID      = "5287777298894835685"     # ✨
-_SC_DENY_EID      = "4956739572114392015"     # ⛔
 _SC_DECLINED_EID  = DECLINED_EMOJI_ID         # 🚫
 
 # Bad-proxy set for sitechk (in-memory, reset on /resetproxy)
@@ -3126,9 +3120,6 @@ def get_sitechk_handlers() -> list:
 # /me — user's lifetime charged card stats
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_ME_CROWN_EID = "6181649972757271368"   # ⚜
-_ME_SMILE_EID = "6264538349034281099"   # 😃
-_ME_KING_EID  = "6271506980716680365"   # 👑
 
 
 async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
