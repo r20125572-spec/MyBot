@@ -1,6 +1,7 @@
 """Secure OxaPay invoices and webhook processing for the Telegram bot."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 OXAPAY_API_BASE = "https://api.oxapay.com/v1"
 SUCCESS_STATUSES = frozenset({"paid", "completed", "complete", "confirmed"})
+_ACTIVATION_LOCKS: dict[int, asyncio.Lock] = {}
 
 PLANS = {
     "pay1d": {"name": "Core", "plan": "CORE", "days": 1, "price": Decimal("1.50")},
@@ -278,30 +280,83 @@ def _oxapay_error(result: dict, fallback: str) -> str:
     return str(result.get("message") or fallback)
 
 
+def _payment_field(data: dict, snake_case: str, camel_case: str = ""):
+    value = data.get(snake_case)
+    if value in (None, "") and camel_case:
+        value = data.get(camel_case)
+    return value
+
+
+async def _deliver_activation(
+    app,
+    order_id: str,
+    activate: Callable[[object, dict], Awaitable[None]],
+) -> None:
+    claim_token = secrets.token_hex(16)
+    entitlement = await db.claim_payment_activation(order_id, claim_token)
+    if not entitlement:
+        return
+    user_id = int(entitlement["user_id"])
+    lock = _ACTIVATION_LOCKS.setdefault(user_id, asyncio.Lock())
+    try:
+        async with lock:
+            # Another order for this user may have finalized while this older
+            # delivery was waiting. Always activate the canonical latest row.
+            current = await db.get_current_payment_entitlement(user_id)
+            if not current:
+                raise RuntimeError("Canonical paid entitlement is unavailable.")
+            await activate(app, current)
+            if not await db.mark_payment_activated(order_id, claim_token):
+                raise RuntimeError("Could not mark payment activation delivered.")
+    except Exception:
+        await db.release_payment_activation(order_id, claim_token)
+        raise
+
+
 async def _process_callback(
     app,
     callback_data: dict,
     activate: Callable[[object, dict], Awaitable[None]],
+    trusted_callback: bool = False,
 ) -> None:
     data = callback_data.get("data") if isinstance(callback_data.get("data"), dict) else callback_data
-    track_id = str(data.get("track_id") or "").strip()
-    order_id = str(data.get("order_id") or "").strip()
+    track_id = str(_payment_field(data, "track_id", "trackId") or "").strip()
+    order_id = str(_payment_field(data, "order_id", "orderId") or "").strip()
     if not track_id or not order_id:
         return
 
-    # Never grant from callback fields alone. Re-query OxaPay over its API.
-    verified = await _fetch_payment(track_id)
-    if str(verified.get("status") or "").strip().lower() not in SUCCESS_STATUSES:
+    callback_status = str(data.get("status") or "").strip().lower()
+    if trusted_callback and callback_status not in SUCCESS_STATUSES:
         return
-    if str(verified.get("track_id") or "").strip() != track_id:
+
+    # A callback reaching this trusted path has already passed OxaPay's
+    # raw-body HMAC verification. Use it immediately when it contains all
+    # fields required to bind the payment to the stored order. Reconciliation
+    # uses OxaPay's read API when a callback was missed.
+    verified = data if trusted_callback else {}
+    required_callback_fields = (
+        _payment_field(data, "track_id", "trackId"),
+        _payment_field(data, "order_id", "orderId"),
+        data.get("status"),
+        data.get("currency"),
+        data.get("amount"),
+    )
+    if not trusted_callback or any(value in (None, "") for value in required_callback_fields):
+        verified = await _fetch_payment(track_id)
+
+    verified_status = str(verified.get("status") or "").strip().lower()
+    if verified_status not in SUCCESS_STATUSES:
+        return
+    if str(_payment_field(verified, "track_id", "trackId") or "").strip() != track_id:
         raise RuntimeError("OxaPay track ID verification failed.")
-    if str(verified.get("order_id") or "").strip() != order_id:
+    if str(_payment_field(verified, "order_id", "orderId") or "").strip() != order_id:
         raise RuntimeError("OxaPay order ID verification failed.")
 
     order = await db.get_payment_order(order_id)
     if not order:
         raise RuntimeError("Unknown OxaPay order.")
     if order["status"] == "paid":
+        await _deliver_activation(app, order_id, activate)
         return
     if str(order.get("track_id") or "") != track_id:
         raise RuntimeError("Stored OxaPay track ID does not match.")
@@ -320,7 +375,43 @@ async def _process_callback(
     entitlement = await db.finalize_paid_order(order_id, track_id)
     if not entitlement:
         return
-    await activate(app, entitlement)
+    await _deliver_activation(app, order_id, activate)
+
+
+async def _reconcile_pending(
+    telegram_app,
+    activate: Callable[[object, dict], Awaitable[None]],
+) -> None:
+    """Recover paid orders when a webhook is delayed, lost, or raced."""
+    delay = 3
+    while True:
+        try:
+            await asyncio.sleep(delay)
+            delay = 5
+            pending = await db.list_pending_payment_orders(limit=100)
+            for order in pending:
+                try:
+                    await _process_callback(
+                        telegram_app,
+                        {
+                            "track_id": order["track_id"],
+                            "order_id": order["order_id"],
+                        },
+                        activate,
+                        trusted_callback=False,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[OXAPAY] Pending order %s reconciliation deferred: %s",
+                        order["order_id"],
+                        exc,
+                    )
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("[OXAPAY] Pending-payment reconciliation failed.")
+            await asyncio.sleep(5)
 
 
 async def _webhook(request: web.Request) -> web.Response:
@@ -339,6 +430,7 @@ async def _webhook(request: web.Request) -> web.Response:
             request.app["telegram_app"],
             payload,
             request.app["activate_payment"],
+            trusted_callback=True,
         )
     except (UnicodeDecodeError, json.JSONDecodeError):
         return web.Response(text="Invalid JSON", status=400)
@@ -372,10 +464,21 @@ async def start_webhook(
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     telegram_app.bot_data["_oxapay_runner"] = runner
+    telegram_app.bot_data["_oxapay_reconcile_task"] = asyncio.create_task(
+        _reconcile_pending(telegram_app, activate),
+        name="oxapay-payment-reconciliation",
+    )
     logger.info("[OXAPAY] Webhook listening on port %s.", port)
 
 
 async def stop_webhook(telegram_app) -> None:
+    task = telegram_app.bot_data.pop("_oxapay_reconcile_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     runner = telegram_app.bot_data.pop("_oxapay_runner", None)
     if runner:
         await runner.cleanup()
