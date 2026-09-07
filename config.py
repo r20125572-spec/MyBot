@@ -174,54 +174,8 @@ def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
     """Returns a <tg-emoji> HTML tag for Telegram Premium custom emoji.
     Animates for Premium users; shows the fallback glyph for non-Premium users.
     Always use parse_mode='HTML' when sending messages that contain these tags."""
-    if _VALID_CUSTOM_EMOJI_IDS is not None and str(emoji_id) not in _VALID_CUSTOM_EMOJI_IDS:
-        return fallback
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
-
-_VALID_CUSTOM_EMOJI_IDS: set[str] | None = None
-
-
-def all_custom_emoji_ids() -> list[str]:
-    ids = {
-        DECLINED_EMOJI_ID, CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
-        DEV_EMOJI_ID, PRO_EMOJI_ID, HIT_RESP_EMOJI_ID, HIT_GATE_EMOJI_ID,
-        PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_LIVE_EMOJI_ID,
-        PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
-        BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID, BTN_CHARGED_EMOJI_ID,
-        BTN_LIVE_EMOJI_ID, CARD_CHK_BTN_EMOJI_ID, SH_GATE_EMOJI_ID,
-        SH_PROG_EMOJI_ID, SH_LIVE_EMOJI_ID, SC_REPORT_EMOJI_ID,
-        SC_STATS_EMOJI_ID, SC_DUPE_EMOJI_ID, SC_DONE_EMOJI_ID,
-        SC_DENY_EMOJI_ID, ME_CROWN_EMOJI_ID, ME_SMILE_EMOJI_ID,
-        ME_KING_EMOJI_ID,
-        *LIVE_EMOJI_IDS, *CHARGED_EMOJI_IDS, *PLAN_EMOJIS.values(),
-    }
-    return sorted(ids)
-
-
-async def validate_custom_emoji_ids(bot) -> tuple[int, int]:
-    """Validate configured IDs without allowing a bad emoji to crash messages."""
-    global _VALID_CUSTOM_EMOJI_IDS
-    configured = all_custom_emoji_ids()
-    try:
-        stickers = await bot.get_custom_emoji_stickers(configured)
-        _VALID_CUSTOM_EMOJI_IDS = {
-            str(sticker.custom_emoji_id)
-            for sticker in stickers
-            if getattr(sticker, "custom_emoji_id", None)
-        }
-    except Exception:
-        _VALID_CUSTOM_EMOJI_IDS = None
-        return 0, len(configured)
-    return len(_VALID_CUSTOM_EMOJI_IDS), len(configured) - len(_VALID_CUSTOM_EMOJI_IDS)
-
-
-def is_valid_custom_emoji_id(emoji_id: str) -> bool:
-    """Return False only when Telegram validation proved an ID invalid."""
-    return (
-        _VALID_CUSTOM_EMOJI_IDS is None
-        or str(emoji_id) in _VALID_CUSTOM_EMOJI_IDS
-    )
 
 def get_random_live_emoji() -> str:
     """Return a random live-hit emoji ID (string, not rendered tag)."""
@@ -307,7 +261,7 @@ def _btn(text: str, *, cb: str = None, url: str = None,
         "text": text,
         "style": button_style,
     }
-    if _VALID_CUSTOM_EMOJI_IDS is None or selected_icon in _VALID_CUSTOM_EMOJI_IDS:
+    if selected_icon:
         d["icon_custom_emoji_id"] = selected_icon
     if cb:    d["callback_data"]        = cb
     if url:   d["url"]                  = url
