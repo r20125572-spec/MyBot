@@ -75,7 +75,6 @@ from config import (
     BTN_CHARGED_EMOJI_ID, BTN_LIVE_EMOJI_ID, BTN_ALL_EMOJI_ID,
     BTN_STOP_EMOJI_ID, CARD_CHK_BTN_EMOJI_ID,
     CHARGED_EMOJI_IDS, LIVE_EMOJI_IDS, PLAN_EMOJIS, SPECIAL_FONT_MAP,
-    is_valid_custom_emoji_id,
     SC_REPORT_EMOJI_ID as _SC_REPORT_EID,
     SC_STATS_EMOJI_ID as _SC_STATS_EID,
     SC_DUPE_EMOJI_ID as _SC_DUPE_EID,
@@ -173,17 +172,14 @@ PROBE_CONCURRENCY:  int   = 60
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def get_random_charged_emoji() -> str:
-    """Random premium emoji for CHARGED hits."""
     return random.choice(CHARGED_EMOJI_IDS)
 
 
 def get_random_live_emoji() -> str:
-    """Random premium emoji for LIVE / TDS hits — same pool as mst.py."""
     return random.choice(LIVE_EMOJI_IDS)
 
 
 def get_plan_emoji_id(plan_name: str) -> str:
-    """Return the premium plan emoji ID for a given plan name."""
     if not plan_name:
         return PRO_EMOJI_ID
     norm = "".join(SPECIAL_FONT_MAP.get(c, c.upper()) for c in plan_name)
@@ -1112,18 +1108,6 @@ def _u16len(s: str) -> int:
 
 
 def html_to_entities(html: str):
-    """
-    Convert sh.py-style HTML into (plain_text, entities).
-
-    This is the ONLY reliable way to send custom emoji stickers in PTB.
-    Sending <tg-emoji> via parse_mode="HTML" often falls back to the
-    plain-text fallback character; injecting MessageEntity objects directly
-    guarantees animated premium stickers display for ALL users.
-
-    Handles: <b>  <code>  <a href="...">  <tg-emoji emoji-id="...">
-    Decodes: &lt;  &gt;  &amp;  &quot;
-    Entities may overlap (e.g. bold + custom_emoji on the same glyph).
-    """
     text     = ""
     entities = []
     stack    = []        # [{name, offset, url?}]
@@ -1171,7 +1155,7 @@ def html_to_entities(html: str):
                     offset    = _u16len(text)
                     text     += fallback
                     length    = _u16len(fallback)
-                    if length > 0 and is_valid_custom_emoji_id(emoji_id):
+                    if length > 0:
                         entities.append(MessageEntity(
                             type="custom_emoji", offset=offset,
                             length=length, custom_emoji_id=emoji_id))
@@ -1203,35 +1187,7 @@ def html_to_entities(html: str):
             text += ch
             i    += 1
 
-    custom_ranges = [
-        (entity.offset, entity.offset + entity.length)
-        for entity in entities
-        if entity.type == "custom_emoji"
-    ]
-    clean_entities = []
-    for entity in entities:
-        if entity.type != "bold":
-            clean_entities.append(entity)
-            continue
-        segments = [(entity.offset, entity.offset + entity.length)]
-        for custom_start, custom_end in custom_ranges:
-            next_segments = []
-            for start, end in segments:
-                if custom_end <= start or custom_start >= end:
-                    next_segments.append((start, end))
-                else:
-                    if start < custom_start:
-                        next_segments.append((start, custom_start))
-                    if custom_end < end:
-                        next_segments.append((custom_end, end))
-            segments = next_segments
-        for start, end in segments:
-            if end > start:
-                clean_entities.append(MessageEntity(
-                    type="bold", offset=start, length=end - start
-                ))
-    clean_entities.sort(key=lambda entity: (entity.offset, -entity.length))
-    return text, clean_entities if clean_entities else None
+    return text, entities if entities else None
 
 
 def _send_ents(html: str):
@@ -1385,14 +1341,6 @@ async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
                           parse_mode: str = "HTML", reply_markup=None,
                           disable_notification: bool = False,
                           reply_to_message_id: int = None):
-    """Send a hit notification with a premium custom emoji sticker header.
-
-    Builds the full HTML, then converts it with html_to_entities() so that
-    custom_emoji MessageEntity objects are injected DIRECTLY — this guarantees
-    animated premium stickers show for ALL users regardless of whether the bot
-    account has Telegram Premium.  parse_mode="HTML" alone often falls back to
-    the plain-text fallback glyph instead of the animated emoji.
-    """
     try:
         if emoji_id:
             full_html = (
@@ -1422,19 +1370,16 @@ async def _send_as_media(bot, chat_id, emoji_id: str, caption: str,
                 if attempt == 3:
                     raise
                 wait_time = float(getattr(exc, "retry_after", 3)) + 1
-                logging.warning(
-                    "[MEDIA] Rate limited for chat_id=%s. Sleeping %ss...",
-                    chat_id, wait_time,
-                )
+                logging.warning(f"[MEDIA] Rate limited for chat_id={chat_id}. Sleeping {wait_time}s...")
                 await asyncio.sleep(wait_time)
             except Exception as exc:
-                logging.warning("[MEDIA] send_message to %s failed: %s", chat_id, exc)
+                logging.warning(f"[MEDIA] send_message to {chat_id} failed: {exc}")
                 if reply_to_message_id:
                     reply_to_message_id = None
                     continue
                 return
     except Exception as exc:
-        logging.warning(f"[MEDIA] send_message to {chat_id} failed: {exc}")
+        logging.warning(f"[MEDIA] _send_as_media failed for {chat_id}: {exc}")
         raise
 
 
