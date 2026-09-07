@@ -124,7 +124,7 @@ async def create_white_label_payment(
         raise RuntimeError("Could not store the payment order.")
 
     payload = {
-        "amount": str(plan["price"]),
+        "amount": float(plan["price"]),
         "currency": "USD",
         "pay_currency": method["pay_currency"],
         "network": method["network"],
@@ -155,8 +155,12 @@ async def create_white_label_payment(
             ) as response:
                 result = await response.json(content_type=None)
                 if response.status != 200 or int(result.get("status", 0)) != 200:
-                    message = result.get("message") or "OxaPay rejected the invoice."
-                    raise RuntimeError(str(message))
+                    raise RuntimeError(
+                        _oxapay_error(
+                            result,
+                            "OxaPay rejected the payment request.",
+                        )
+                    )
 
         data = result.get("data") or {}
         track_id = str(data.get("track_id") or "").strip()
@@ -204,7 +208,7 @@ async def _fetch_payment(track_id: str) -> dict:
         ) as response:
             result = await response.json(content_type=None)
     if response.status != 200 or int(result.get("status", 0)) != 200:
-        raise RuntimeError(result.get("message") or "Payment verification failed.")
+        raise RuntimeError(_oxapay_error(result, "Payment verification failed."))
     return result.get("data") or {}
 
 
@@ -213,6 +217,16 @@ def _decimal(value) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return Decimal("-1")
+
+
+def _oxapay_error(result: dict, fallback: str) -> str:
+    error = result.get("error")
+    if isinstance(error, dict):
+        detail = str(error.get("message") or "").strip()
+        key = str(error.get("key") or "").strip()
+        if detail:
+            return f"{key}: {detail}" if key else detail
+    return str(result.get("message") or fallback)
 
 
 async def _process_callback(
