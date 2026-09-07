@@ -65,7 +65,7 @@ from config import (
     OWNER_ID,
     get_bin_info, tg_emoji,
     RawMarkup, _btn,
-    BOT_NAME, CHANNEL_LINK,
+    BOT_NAME, CHANNEL_LINK, LOGS_CHANNEL_LINK,
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -84,8 +84,7 @@ SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
 # ── Result card buttons ─────────────────────────────────────────────────────
 BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
 BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
-MY_CHANNEL_LINK     = "https://t.me/Batcardchk"                    # main channel
-LOGS_CHANNEL_LINK   = "https://t.me/Batcardchk"                    # hits log channel
+MY_CHANNEL_LINK     = CHANNEL_LINK                                 # main channel
 
 SH_COOLDOWN    = 25
 
@@ -2020,7 +2019,7 @@ async def _send_hit(bot, user, text: str, verdict: str,
     )
 
     log_kb = RawMarkup([[
-        _btn("𝘽𝘼𝙏 ✘ 𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
+        _btn("𝘽𝘼𝙏𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
              icon=CARD_CHK_BTN_EMOJI_ID),
     ]])
 
