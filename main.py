@@ -3986,6 +3986,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data.startswith("find_sub_")  or
         data.startswith("fb_ok_")     or   # _fb_approve handles its own answer
         data.startswith("fb_no_")     or   # _fb_decline handles its own answer
+        data in payments.PLANS         or   # answers before OxaPay network request
         data in ("hide_on", "hide_off")
     )
     if not _self_answering:
