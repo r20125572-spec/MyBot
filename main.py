@@ -860,17 +860,34 @@ def kb_profile() -> RawMarkup:
 
 def kb_price() -> RawMarkup:
     return RawMarkup([
-        [_btn(B("1.5$ — 1 Day"),  cb="pay1d", style="primary"),
-         _btn(B("8$ — 7 Days"),   cb="pay10", style="primary")],
-        [_btn(B("12$ — 15 Days"), cb="pay15", style="primary"),
-         _btn(B("25$ — 30 Days"), cb="pay30", style="primary")],
-        [_btn(B("SUPPORT"),       url=SUPPORT_LINK, style="primary")],
+        [_btn(B("Core $1.50 — 1 Day"), cb="pay1d", style="primary")],
+        [_btn(B("Core $8 — 7 Days"), cb="pay10", style="primary")],
+        [_btn(B("Elite $12 — 15 Days"), cb="pay15", style="primary")],
+        [_btn(B("Root $25 — 30 Days"), cb="pay30", style="primary")],
         [_btn(B("BACK"),          cb="bmain")],
     ])
 
 def kb_payment() -> RawMarkup:
     return RawMarkup([
         [_btn(B("CONTACT SUPPORT"), url=SUPPORT_LINK, style="primary")],
+        [_btn(B("BACK"), cb="mprice")],
+    ])
+
+
+def kb_crypto_methods(plan_key: str) -> RawMarkup:
+    def coin(method_key: str) -> dict:
+        method = payments.PAYMENT_METHODS[method_key]
+        return _btn(
+            B(method["label"]),
+            cb=f"wlpay:{plan_key}:{method_key}",
+            style="primary",
+        )
+
+    return RawMarkup([
+        [coin("bep20"), coin("trx")],
+        [coin("pol"), coin("ton")],
+        [coin("ltc"), coin("btc")],
+        [coin("sol"), coin("eth")],
         [_btn(B("BACK"), cb="mprice")],
     ])
 
@@ -3987,6 +4004,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data.startswith("fb_ok_")     or   # _fb_approve handles its own answer
         data.startswith("fb_no_")     or   # _fb_decline handles its own answer
         data in payments.PLANS         or   # answers before OxaPay network request
+        data.startswith("wlpay:")      or   # answers before OxaPay network request
         data in ("hide_on", "hide_off")
     )
     if not _self_answering:
@@ -4124,16 +4142,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     if data == "mprice":
-        core_e  = tg_emoji(PLAN_EMOJIS["CORE"],  "⭐")
-        elite_e = tg_emoji(PLAN_EMOJIS["ELITE"], "⭐")
-        root_e  = tg_emoji(PLAN_EMOJIS["ROOT"],  "⭐")
-        txt = (
-            f"<b>{core_e} {B('Core')}</b>  ➳ 1 day  | 1.5$\n"
-            f"<b>{core_e} {B('Core')}</b>  ➳ 7 days | 8$\n"
-            f"<b>{elite_e} {B('Elite')}</b> ➳ 15 days | 12$\n"
-            f"<b>{root_e} {B('Root')}</b>   ➳ 30 days | 25$\n"
-            "──────────\nAll plans: Unlimited credits"
-        )
+        txt = "<b>Choose a plan to proceed with secure crypto payment</b>"
         await query.message.edit_text(txt, parse_mode="HTML", reply_markup=kb_price())
         return
 
@@ -4256,41 +4265,63 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data in payments.PLANS:
-        await query.answer("Creating secure OxaPay invoice…", show_alert=False)
+        await query.answer("Select a payment method.", show_alert=False)
         plan = payments.PLANS[data]
         plan_emoji = tg_emoji(get_plan_emoji_id(plan["plan"]), "⭐")
+        await query.message.edit_text(
+            f"<b>{plan_emoji} {B(plan['name'])} Plan</b>\n"
+            f"<b>Price</b> ➳ ${plan['price']:.2f}\n"
+            f"<b>Duration</b> ➳ {plan['days']} Day{'s' if plan['days'] != 1 else ''}\n"
+            "<b>Credits</b> ➳ ∞\n"
+            "<b>Select Payment Method</b> ➳",
+            parse_mode="HTML",
+            reply_markup=kb_crypto_methods(data),
+        )
+        return
+
+    if data.startswith("wlpay:"):
+        await query.answer("Creating secure payment address…", show_alert=False)
         try:
-            invoice = await payments.create_invoice(user.id, data)
+            _, plan_key, method_key = data.split(":", 2)
+            plan = payments.PLANS[plan_key]
+            payment = await payments.create_white_label_payment(
+                user.id, plan_key, method_key,
+            )
         except Exception as exc:
-            logger.error("[OXAPAY] Invoice creation failed: %s", exc)
+            logger.error("[OXAPAY] White-label payment creation failed: %s", exc)
             await query.message.edit_text(
-                f"<b>{E_ERRORS} Payment Link Unavailable</b>\n"
+                f"<b>{E_ERRORS} Payment Address Unavailable</b>\n"
                 "──────────\n"
                 f"{escape(str(exc))}\n"
                 "Please try again later or contact support.",
                 parse_mode="HTML",
-                reply_markup=kb_payment(),
+                reply_markup=RawMarkup([
+                    [_btn(B("SUPPORT"), url=SUPPORT_LINK, style="primary")],
+                    [_btn(B("BACK"), cb="mprice")],
+                ]),
             )
             return
+
+        plan_emoji = tg_emoji(get_plan_emoji_id(plan["plan"]), "⭐")
+        memo_line = ""
+        if payment["memo"]:
+            memo_line = f"\n<b>Memo/Tag</b> ➳ <code>{escape(payment['memo'])}</code>"
         await query.message.edit_text(
-            f"<b>{plan_emoji} {B(plan['name'])} Plan</b>\n"
-            "──────────\n"
-            f"<b>Price</b>   ➳ ${plan['price']:.2f}\n"
-            f"<b>Days</b>    ➳ {plan['days']}\n"
-            f"<b>Credits</b> ➳ Unlimited\n"
-            f"<b>Order</b>   ➳ <code>{escape(invoice['order_id'])}</code>\n"
-            "──────────\n"
-            "Pay using the secure link below. Your plan activates automatically "
-            "after OxaPay confirms the payment.",
+            f"<b>Plan</b> ➳ {B(plan['name'])} {plan_emoji}\n"
+            f"<b>Price</b> ➳ ${plan['price']:.2f} USD\n"
+            f"<b>Pay</b> ➳ {escape(payment['pay_amount'])} "
+            f"{escape(payment['pay_currency'])}\n"
+            f"<b>Network</b> ➳ {escape(payment['network_name'])}\n\n"
+            "<b>Address</b> ➳\n"
+            f"<code>{escape(payment['address'])}</code>"
+            f"{memo_line}\n\n"
+            f"<b>Expires in</b> ➳ {payment['lifetime']} min\n"
+            "<b>Status</b> ➳ ⏳ Waiting…\n\n"
+            "Send the exact amount using the selected network. "
+            "Your plan activates automatically after confirmation.",
             parse_mode="HTML",
             reply_markup=RawMarkup([
-                [_btn(
-                    B("PAY WITH OXAPAY"),
-                    url=invoice["payment_url"],
-                    style="success",
-                    icon=BTN_LIVE_EMOJI_ID,
-                )],
-                [_btn(B("BACK"), cb="mprice")],
+                [_btn(B("SUPPORT"), url=SUPPORT_LINK, style="primary")],
             ]),
             disable_web_page_preview=True,
         )
