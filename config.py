@@ -32,15 +32,20 @@ BOT_LINK      = f"https://t.me/{BOT_USERNAME}"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 📢  CHANNEL & GROUP LINKS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHANNEL_USERNAME = "@Batcardchk"
+CHANNEL_USERNAME = "Batcardchk"
 GROUP_USERNAME   = "@batcardchkGroup"
 
-CHANNEL_LINK  = "https://t.me/Batcardchk"
-GROUP_LINK    = "https://t.me/batcardchkGroup"
-SUPPORT_LINK  = "https://t.me/+Gjwke5Yc1ddhYmZk"
+CHANNEL_LINK     = "https://t.me/Batcardchk"
+LOGS_CHANNEL_LINK = "https://t.me/Batcardchk"
+GROUP_LINK       = "https://t.me/batcardchkGroup"
+SUPPORT_LINK     = "https://t.me/+Gjwke5Yc1ddhYmZk"
 
 _ch_raw    = os.environ.get("CHANNEL_ID", CHANNEL_USERNAME).strip()
-CHANNEL_ID = int(_ch_raw) if _ch_raw.lstrip("-").isdigit() else _ch_raw
+CHANNEL_ID = (
+    int(_ch_raw)
+    if _ch_raw.lstrip("-").isdigit()
+    else _ch_raw if _ch_raw.startswith("@") else f"@{_ch_raw}"
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔒  FORCE-JOIN CHANNELS & GROUPS
@@ -216,12 +221,21 @@ class RawMarkup(TelegramObject):
 
 def _btn(text: str, *, cb: str = None, url: str = None,
          style: str = None, icon: str = None) -> dict:
-    """Build one raw Telegram API button dict."""
-    d: dict = {"text": text}
+    """Build one premium red button.
+
+    Button labels intentionally avoid ordinary emoji. Telegram renders the
+    custom emoji supplied through icon_custom_emoji_id instead.
+    """
+    text = str(text).lstrip(
+        " \t⚡🔥🔙💎🤖📢📄📋✅❌➕🗑✏️📡📊⭐👤⏱🔄🛒⚠️"
+    ).strip()
+    d: dict = {
+        "text": text,
+        "style": "danger",
+        "icon_custom_emoji_id": icon or BTN_ALL_EMOJI_ID,
+    }
     if cb:    d["callback_data"]        = cb
     if url:   d["url"]                  = url
-    if style: d["style"]                = style
-    if icon:  d["icon_custom_emoji_id"] = icon
     return d
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
