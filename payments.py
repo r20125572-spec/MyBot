@@ -27,6 +27,41 @@ PLANS = {
     "pay30": {"name": "Root", "plan": "ROOT", "days": 30, "price": Decimal("25.00")},
 }
 
+PAYMENT_METHODS = {
+    "bep20": {
+        "label": "BEP20", "pay_currency": "USDT", "network": "BSC",
+        "network_name": "Binance Smart Chain",
+    },
+    "trx": {
+        "label": "TRX", "pay_currency": "TRX", "network": "Tron",
+        "network_name": "Tron Network",
+    },
+    "pol": {
+        "label": "POL", "pay_currency": "POL", "network": "Polygon",
+        "network_name": "Polygon Network",
+    },
+    "ton": {
+        "label": "TON", "pay_currency": "GRAM", "network": "The Open Network",
+        "network_name": "TON Network",
+    },
+    "ltc": {
+        "label": "LTC", "pay_currency": "LTC", "network": "Litecoin",
+        "network_name": "Litecoin Network",
+    },
+    "btc": {
+        "label": "BTC", "pay_currency": "BTC", "network": "Bitcoin",
+        "network_name": "Bitcoin Network",
+    },
+    "sol": {
+        "label": "SOL", "pay_currency": "SOL", "network": "Solana",
+        "network_name": "Solana Network",
+    },
+    "eth": {
+        "label": "ETH", "pay_currency": "ETH", "network": "Ethereum",
+        "network_name": "Ethereum Network",
+    },
+}
+
 
 def _api_key() -> str:
     return os.environ.get("OXAPAY_MERCHANT_API_KEY", "").strip()
@@ -48,20 +83,33 @@ def configuration_error() -> str | None:
         return "OXAPAY_CALLBACK_URL is not configured."
     if not callback.startswith("https://"):
         return "OXAPAY_CALLBACK_URL must use https://."
-    if os.environ.get("OXAPAY_SANDBOX", "").strip().lower() not in {"true", "false"}:
+    sandbox = os.environ.get("OXAPAY_SANDBOX", "").strip().lower()
+    if sandbox not in {"true", "false"}:
         return "OXAPAY_SANDBOX must be set explicitly to true or false."
+    if sandbox == "true":
+        return (
+            "Direct OxaPay crypto addresses require live mode. "
+            "Set OXAPAY_SANDBOX=false."
+        )
     if not db.is_connected():
         return "PostgreSQL is unavailable; secure payment orders cannot be created."
     return None
 
 
-async def create_invoice(user_id: int, selection: str) -> dict:
+async def create_white_label_payment(
+    user_id: int,
+    plan_selection: str,
+    method_selection: str,
+) -> dict:
     error = configuration_error()
     if error:
         raise RuntimeError(error)
-    plan = PLANS.get(selection)
+    plan = PLANS.get(plan_selection)
     if not plan:
         raise ValueError("Unknown payment plan.")
+    method = PAYMENT_METHODS.get(method_selection)
+    if not method:
+        raise ValueError("Unknown payment method.")
 
     order_id = f"tg-{user_id}-{secrets.token_hex(12)}"
     created = await db.create_payment_order(
@@ -78,15 +126,14 @@ async def create_invoice(user_id: int, selection: str) -> dict:
     payload = {
         "amount": str(plan["price"]),
         "currency": "USD",
-        "lifetime": 60,
+        "pay_currency": method["pay_currency"],
+        "network": method["network"],
+        "lifetime": 120,
         "fee_paid_by_payer": 1,
         "under_paid_coverage": 0,
-        "mixed_payment": False,
         "callback_url": _callback_url(),
         "order_id": order_id,
         "description": f"{plan['name']} plan for Telegram user {user_id}",
-        "thanks_message": "Payment received. Your plan will activate automatically.",
-        "sandbox": _sandbox_enabled(),
     }
     headers = {
         "merchant_api_key": _api_key(),
@@ -102,7 +149,7 @@ async def create_invoice(user_id: int, selection: str) -> dict:
         )
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                f"{OXAPAY_API_BASE}/payment/invoice",
+                f"{OXAPAY_API_BASE}/payment/white-label",
                 headers=headers,
                 json=payload,
             ) as response:
@@ -113,19 +160,31 @@ async def create_invoice(user_id: int, selection: str) -> dict:
 
         data = result.get("data") or {}
         track_id = str(data.get("track_id") or "").strip()
-        payment_url = str(data.get("payment_url") or "").strip()
-        if not track_id or not payment_url.startswith("https://"):
-            raise RuntimeError("OxaPay returned incomplete invoice information.")
+        address = str(data.get("address") or "").strip()
+        pay_amount = str(data.get("pay_amount") or "").strip()
+        pay_currency = str(data.get("pay_currency") or method["pay_currency"]).upper()
+        network_name = method["network_name"]
+        memo = str(data.get("memo") or "").strip()
+        expired_at = int(data.get("expired_at") or 0)
+        if not track_id or not address or not pay_amount or expired_at <= 0:
+            raise RuntimeError("OxaPay returned incomplete payment information.")
 
-        saved = await db.attach_payment_invoice(order_id, track_id, payment_url)
+        saved = await db.attach_payment_invoice(order_id, track_id, "")
         if not saved:
-            raise RuntimeError("Could not save the OxaPay invoice.")
+            raise RuntimeError("Could not save the OxaPay payment.")
 
         return {
             "order_id": order_id,
             "track_id": track_id,
-            "payment_url": payment_url,
+            "address": address,
+            "pay_amount": pay_amount,
+            "pay_currency": pay_currency,
+            "network_name": network_name,
+            "memo": memo,
+            "expired_at": expired_at,
+            "lifetime": int(data.get("lifetime") or 120),
             **plan,
+            "method": method,
         }
     except Exception as exc:
         await db.fail_payment_order(order_id, str(exc))
