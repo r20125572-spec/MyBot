@@ -119,13 +119,22 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     error           TEXT             NOT NULL DEFAULT '',
     created_at      DOUBLE PRECISION NOT NULL,
     updated_at      DOUBLE PRECISION NOT NULL,
-    paid_at         DOUBLE PRECISION
+    paid_at         DOUBLE PRECISION,
+    activated_at    DOUBLE PRECISION,
+    activation_claimed_at DOUBLE PRECISION,
+    activation_claim_token TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payment_orders_track_id_idx
     ON payment_orders (track_id) WHERE track_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS payment_orders_user_idx
     ON payment_orders (user_id, created_at DESC);
 """
+
+_PAYMENT_MIGRATIONS = (
+    "ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS activated_at DOUBLE PRECISION",
+    "ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS activation_claimed_at DOUBLE PRECISION",
+    "ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS activation_claim_token TEXT",
+)
 
 
 def _strip_sslmode(url: str) -> str:
@@ -173,6 +182,8 @@ async def _connect() -> bool:
                     await conn.execute(migration)
                 await conn.execute(_CREATE_BANS_TABLE)
                 await conn.execute(_CREATE_PAYMENT_ORDERS_TABLE)
+                for migration in _PAYMENT_MIGRATIONS:
+                    await conn.execute(migration)
             _pool = pool
             label = "none" if ssl_opt is False else (
                 "unverified" if ssl_opt is _unverified else "verified"
@@ -418,6 +429,140 @@ async def get_payment_order(order_id: str):
         return None
 
 
+async def list_pending_payment_orders(limit: int = 100) -> list[dict]:
+    """Return recent orders needing payment or activation reconciliation."""
+    if not _pool:
+        return []
+    safe_limit = max(1, min(int(limit), 500))
+    try:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM payment_orders
+                WHERE track_id IS NOT NULL
+                  AND (
+                      (status='pending' AND created_at >= $1)
+                      OR (status='paid' AND activated_at IS NULL)
+                  )
+                ORDER BY created_at ASC
+                LIMIT $2
+                """,
+                time.time() - (3 * 86400),
+                safe_limit,
+            )
+        return [dict(row) for row in rows]
+    except Exception as exc:
+        logger.warning("[DB] list pending payment orders failed: %s", exc)
+        return []
+
+
+async def claim_payment_activation(order_id: str, claim_token: str,
+                                   lease_seconds: int = 120):
+    """Lease one paid activation to exactly one delivery worker."""
+    if not _pool:
+        return None
+    now = time.time()
+    stale_before = now - max(30, int(lease_seconds))
+    try:
+        async with _pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                WITH claimed AS (
+                    UPDATE payment_orders
+                    SET activation_claimed_at=$3,
+                        activation_claim_token=$2,
+                        updated_at=$3
+                    WHERE order_id=$1
+                      AND status='paid'
+                      AND activated_at IS NULL
+                      AND (
+                          activation_claimed_at IS NULL
+                          OR activation_claimed_at < $4
+                      )
+                    RETURNING *
+                )
+                SELECT claimed.*, pu.expires
+                FROM claimed
+                JOIN premium_users pu ON pu.user_id = claimed.user_id
+                """,
+                order_id, claim_token, now, stale_before,
+            )
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.warning("[DB] claim payment activation failed: %s", exc)
+        return None
+
+
+async def get_current_payment_entitlement(user_id: int):
+    """Load the canonical latest paid entitlement for live activation."""
+    if not _pool:
+        return None
+    try:
+        async with _pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT pu.user_id, pu.plan, pu.expires, pu.granted_at,
+                       pu.last_receipt AS order_id,
+                       COALESCE(po.days, 0) AS days
+                FROM premium_users pu
+                LEFT JOIN payment_orders po
+                  ON po.order_id = pu.last_receipt
+                 AND po.status = 'paid'
+                WHERE pu.user_id=$1
+                """,
+                int(user_id),
+            )
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.warning("[DB] get current payment entitlement failed: %s", exc)
+        return None
+
+
+async def mark_payment_activated(order_id: str, claim_token: str) -> bool:
+    if not _pool:
+        return False
+    try:
+        async with _pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE payment_orders
+                SET activated_at=$3, updated_at=$3,
+                    activation_claimed_at=NULL,
+                    activation_claim_token=NULL
+                WHERE order_id=$1
+                  AND status='paid'
+                  AND activated_at IS NULL
+                  AND activation_claim_token=$2
+                """,
+                order_id, claim_token, time.time(),
+            )
+        return result == "UPDATE 1"
+    except Exception as exc:
+        logger.warning("[DB] mark payment activated failed: %s", exc)
+        return False
+
+
+async def release_payment_activation(order_id: str, claim_token: str) -> None:
+    if not _pool:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE payment_orders
+                SET activation_claimed_at=NULL,
+                    activation_claim_token=NULL,
+                    updated_at=$3
+                WHERE order_id=$1
+                  AND activated_at IS NULL
+                  AND activation_claim_token=$2
+                """,
+                order_id, claim_token, time.time(),
+            )
+    except Exception as exc:
+        logger.warning("[DB] release payment activation failed: %s", exc)
+
+
 async def finalize_paid_order(order_id: str, track_id: str):
     """Atomically mark an order paid and persist its premium entitlement."""
     if not _pool:
@@ -457,11 +602,29 @@ async def finalize_paid_order(order_id: str, track_id: str):
                 expires = max(now, current_expiry) + int(order["days"]) * 86400
                 name = str(current["name"]) if current else ""
                 username = str(current["username"]) if current else ""
+                canonical_plan = order["plan"]
+                canonical_receipt = order_id
+                if current and current["last_receipt"]:
+                    current_purchase = await conn.fetchrow(
+                        """
+                        SELECT created_at
+                        FROM payment_orders
+                        WHERE order_id=$1 AND status='paid'
+                        """,
+                        current["last_receipt"],
+                    )
+                    if (
+                        current_purchase
+                        and float(current_purchase["created_at"])
+                        > float(order["created_at"])
+                    ):
+                        canonical_plan = current["plan"]
+                        canonical_receipt = current["last_receipt"]
 
                 await conn.execute(
                     _PREMIUM_UPSERT,
-                    order["user_id"], order["plan"], expires, name, username,
-                    order_id, now,
+                    order["user_id"], canonical_plan, expires, name, username,
+                    canonical_receipt, now,
                 )
                 updated = await conn.fetchrow(
                     """
