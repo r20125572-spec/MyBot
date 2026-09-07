@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Awaitable, Callable
 
@@ -62,6 +63,8 @@ PAYMENT_METHODS = {
     },
 }
 
+_accepted_cache: tuple[float, frozenset[str]] | None = None
+
 
 def _api_key() -> str:
     return os.environ.get("OXAPAY_MERCHANT_API_KEY", "").strip()
@@ -96,6 +99,47 @@ def configuration_error() -> str | None:
     return None
 
 
+async def get_accepted_method_keys(force: bool = False) -> list[str]:
+    """Return only payment methods enabled for this OxaPay merchant."""
+    global _accepted_cache
+    error = configuration_error()
+    if error:
+        raise RuntimeError(error)
+    now = time.monotonic()
+    if not force and _accepted_cache and now - _accepted_cache[0] < 30:
+        accepted = _accepted_cache[1]
+    else:
+        headers = {
+            "merchant_api_key": _api_key(),
+            "Content-Type": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(
+            total=10,
+            connect=5,
+            sock_connect=5,
+            sock_read=7,
+        )
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"{OXAPAY_API_BASE}/payment/accepted-currencies",
+                headers=headers,
+            ) as response:
+                result = await response.json(content_type=None)
+        if response.status != 200 or int(result.get("status", 0)) != 200:
+            raise RuntimeError(
+                _oxapay_error(result, "Could not load accepted OxaPay currencies.")
+            )
+        values = (result.get("data") or {}).get("list") or []
+        accepted = frozenset(str(value).upper() for value in values)
+        _accepted_cache = (now, accepted)
+
+    return [
+        key
+        for key, method in PAYMENT_METHODS.items()
+        if method["pay_currency"].upper() in accepted
+    ]
+
+
 async def create_white_label_payment(
     user_id: int,
     plan_selection: str,
@@ -110,6 +154,11 @@ async def create_white_label_payment(
     method = PAYMENT_METHODS.get(method_selection)
     if not method:
         raise ValueError("Unknown payment method.")
+    accepted_methods = await get_accepted_method_keys(force=True)
+    if method_selection not in accepted_methods:
+        raise RuntimeError(
+            f"{method['label']} is not enabled in your OxaPay Merchant Service."
+        )
 
     order_id = f"tg-{user_id}-{secrets.token_hex(12)}"
     created = await db.create_payment_order(
