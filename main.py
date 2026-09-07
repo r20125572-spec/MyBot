@@ -62,9 +62,12 @@ from sh import (
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
     _send_sticker, _send_as_media, html_to_entities, get_random_live_emoji,
-    get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
+        get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
     CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
 )
+
+from splitter import get_splitter_handlers
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
