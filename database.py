@@ -105,6 +105,28 @@ CREATE TABLE IF NOT EXISTS bot_bans (
 CREATE INDEX IF NOT EXISTS bot_bans_active_idx ON bot_bans (active);
 """
 
+_CREATE_PAYMENT_ORDERS_TABLE = """
+CREATE TABLE IF NOT EXISTS payment_orders (
+    order_id        TEXT             PRIMARY KEY,
+    user_id         BIGINT           NOT NULL,
+    plan            TEXT             NOT NULL,
+    days            INTEGER          NOT NULL CHECK (days > 0),
+    expected_amount NUMERIC(12, 2)   NOT NULL CHECK (expected_amount > 0),
+    currency        TEXT             NOT NULL DEFAULT 'USD',
+    status          TEXT             NOT NULL DEFAULT 'pending',
+    track_id        TEXT,
+    payment_url     TEXT             NOT NULL DEFAULT '',
+    error           TEXT             NOT NULL DEFAULT '',
+    created_at      DOUBLE PRECISION NOT NULL,
+    updated_at      DOUBLE PRECISION NOT NULL,
+    paid_at         DOUBLE PRECISION
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payment_orders_track_id_idx
+    ON payment_orders (track_id) WHERE track_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS payment_orders_user_idx
+    ON payment_orders (user_id, created_at DESC);
+"""
+
 
 def _strip_sslmode(url: str) -> str:
     url = re.sub(r'[?&]sslmode=[^&]*', '', url)
@@ -150,12 +172,13 @@ async def _connect() -> bool:
                 for migration in _STATS_MIGRATIONS:
                     await conn.execute(migration)
                 await conn.execute(_CREATE_BANS_TABLE)
+                await conn.execute(_CREATE_PAYMENT_ORDERS_TABLE)
             _pool = pool
             label = "none" if ssl_opt is False else (
                 "unverified" if ssl_opt is _unverified else "verified"
             )
             logger.info(f"[DB] ✅ PostgreSQL connected (ssl={label}) — "
-                        "premium_users + user_stats + bot_bans tables ready.")
+                        "premium_users + user_stats + bot_bans + payment_orders tables ready.")
             return True
         except Exception as exc:
             label = "none" if ssl_opt is False else (
@@ -209,12 +232,22 @@ _PREMIUM_UPSERT = """
         (user_id, plan, expires, name, username, last_receipt, granted_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7)
     ON CONFLICT (user_id) DO UPDATE SET
-        plan         = EXCLUDED.plan,
-        expires      = EXCLUDED.expires,
-        name         = EXCLUDED.name,
-        username     = EXCLUDED.username,
-        last_receipt = EXCLUDED.last_receipt,
-        granted_at   = EXCLUDED.granted_at
+        plan = CASE
+            WHEN EXCLUDED.granted_at >= premium_users.granted_at
+            THEN EXCLUDED.plan ELSE premium_users.plan
+        END,
+        expires = GREATEST(premium_users.expires, EXCLUDED.expires),
+        name = CASE
+            WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE premium_users.name
+        END,
+        username = CASE
+            WHEN EXCLUDED.username <> '' THEN EXCLUDED.username ELSE premium_users.username
+        END,
+        last_receipt = CASE
+            WHEN EXCLUDED.granted_at >= premium_users.granted_at
+            THEN EXCLUDED.last_receipt ELSE premium_users.last_receipt
+        END,
+        granted_at = GREATEST(premium_users.granted_at, EXCLUDED.granted_at)
 """
 
 async def _upsert_premium_records(records: list) -> int:
@@ -264,7 +297,7 @@ async def save_premium_now(user_data: dict) -> int:
             ud.get("name", ""),
             ud.get("username", ""),
             ud.get("last_receipt", ""),
-            ud.get("granted_at", now),
+            ud.get("granted_at", 0),
         ))
     saved = await _upsert_premium_records(records)
     if saved:
@@ -300,9 +333,154 @@ async def save_user_now(user_id: int, ud: dict) -> bool:
         ud.get("name", ""),
         ud.get("username", ""),
         ud.get("last_receipt", ""),
-        ud.get("granted_at", now),
+        ud.get("granted_at", 0),
     )])
     return saved > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OXAPAY PAYMENT ORDERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def create_payment_order(order_id: str, user_id: int, plan: str, days: int,
+                               expected_amount, currency: str = "USD") -> bool:
+    if not _pool:
+        return False
+    now = time.time()
+    try:
+        async with _pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                INSERT INTO payment_orders
+                    (order_id, user_id, plan, days, expected_amount, currency,
+                     status, created_at, updated_at)
+                VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$7)
+                ON CONFLICT (order_id) DO NOTHING
+                """,
+                order_id, int(user_id), plan.upper(), int(days),
+                expected_amount, currency.upper(), now,
+            )
+        return result == "INSERT 0 1"
+    except Exception as exc:
+        logger.error("[DB] create payment order failed: %s", exc)
+        return False
+
+
+async def attach_payment_invoice(order_id: str, track_id: str,
+                                 payment_url: str) -> bool:
+    if not _pool:
+        return False
+    try:
+        async with _pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE payment_orders
+                SET track_id=$2, payment_url=$3, updated_at=$4
+                WHERE order_id=$1 AND status='pending'
+                """,
+                order_id, track_id, payment_url, time.time(),
+            )
+        return result == "UPDATE 1"
+    except Exception as exc:
+        logger.error("[DB] attach payment invoice failed: %s", exc)
+        return False
+
+
+async def fail_payment_order(order_id: str, error: str) -> None:
+    if not _pool:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE payment_orders
+                SET status='failed', error=$2, updated_at=$3
+                WHERE order_id=$1 AND status='pending'
+                """,
+                order_id, str(error)[:500], time.time(),
+            )
+    except Exception as exc:
+        logger.warning("[DB] mark payment failed error: %s", exc)
+
+
+async def get_payment_order(order_id: str):
+    if not _pool:
+        return None
+    try:
+        async with _pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM payment_orders WHERE order_id=$1",
+                order_id,
+            )
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.error("[DB] get payment order failed: %s", exc)
+        return None
+
+
+async def finalize_paid_order(order_id: str, track_id: str):
+    """Atomically mark an order paid and persist its premium entitlement."""
+    if not _pool:
+        raise RuntimeError("PostgreSQL is unavailable.")
+    try:
+        async with _pool.acquire() as conn:
+            async with conn.transaction():
+                order = await conn.fetchrow(
+                    """
+                    SELECT * FROM payment_orders
+                    WHERE order_id=$1 AND track_id=$2
+                    FOR UPDATE
+                    """,
+                    order_id, track_id,
+                )
+                if not order:
+                    raise RuntimeError("Payment order was not found.")
+                if order["status"] == "paid":
+                    return None
+                if order["status"] != "pending":
+                    raise RuntimeError("Payment order is not available for finalization.")
+
+                # Serializes all grants for this user, including the first grant
+                # where no premium_users row exists yet.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    order["user_id"],
+                )
+                # Capture the version timestamp after serialization so the
+                # last finalized purchase also owns the final plan/receipt.
+                now = time.time()
+                current = await conn.fetchrow(
+                    "SELECT * FROM premium_users WHERE user_id=$1 FOR UPDATE",
+                    order["user_id"],
+                )
+                current_expiry = float(current["expires"]) if current else 0.0
+                expires = max(now, current_expiry) + int(order["days"]) * 86400
+                name = str(current["name"]) if current else ""
+                username = str(current["username"]) if current else ""
+
+                await conn.execute(
+                    _PREMIUM_UPSERT,
+                    order["user_id"], order["plan"], expires, name, username,
+                    order_id, now,
+                )
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE payment_orders
+                    SET status='paid', paid_at=$3, updated_at=$3, error=''
+                    WHERE order_id=$1 AND track_id=$2 AND status='pending'
+                    RETURNING *
+                    """,
+                    order_id, track_id, now,
+                )
+                if not updated:
+                    raise RuntimeError("Payment order finalization failed.")
+
+        entitlement = dict(updated)
+        entitlement["expires"] = expires
+        return entitlement
+    except Exception:
+        logger.exception("[DB] atomic payment finalization failed.")
+        raise
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -608,7 +786,7 @@ async def attach(app) -> None:
                     "name":         pdata.get("name", ""),
                     "username":     pdata.get("username", ""),
                     "last_receipt": pdata.get("last_receipt", ""),
-                    "granted_at":   pdata.get("granted_at", now),
+                    "granted_at":   pdata.get("granted_at", 0),
                 })
             seeded = await save_premium_now(app.bot_data.get("user_data", {}))
             if seeded:
