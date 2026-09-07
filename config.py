@@ -101,11 +101,11 @@ PREMIUM_GATES: set[str] = {"au", "mss", "mpp2"}
 #     All users see them — even non-Premium accounts.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-DECLINED_EMOJI_ID      = "5273914604752216432"
-CARD_EMOJI_ID          = "6104768649409596160"
-USER_EMOJI_ID          = "4958689671950369798"
+DECLINED_EMOJI_ID      = "4956612582816351459"
+CARD_EMOJI_ID          = "5800709991627232190"
+USER_EMOJI_ID          = "6267115986541877538"
 TIME_EMOJI_ID          = "6285240160120477644"
-DEV_EMOJI_ID           = "6271506980716680365"
+DEV_EMOJI_ID           = "6267091732861555879"
 PRO_EMOJI_ID           = "6280484433027931563"
 
 HIT_RESP_EMOJI_ID      = "5839116473951328489"
@@ -113,7 +113,7 @@ HIT_RESP_EMOJI_ID      = "5839116473951328489"
 PROG_GATE_EMOJI_ID     = "5370935802844946281"
 PROG_PROGRESS_EMOJI_ID = "5116268964023894989"
 PROG_LIVE_EMOJI_ID     = "6296367896398399651"   # ← fixed (was same as CHARGED)
-PROG_DEAD_EMOJI_ID     = "6298671811345254603"
+PROG_DEAD_EMOJI_ID     = "4958526153955476488"
 PROG_ERRORS_EMOJI_ID   = "4956611513369494230"
 PROG_CHARGED_EMOJI_ID  = "5427168083074628963"   # 💎 charged
 
@@ -121,8 +121,23 @@ BTN_ALL_EMOJI_ID       = "4956324463525233747"
 BTN_STOP_EMOJI_ID      = "6179444193518162239"
 BTN_CHARGED_EMOJI_ID   = "5465465194056525619"   # 💎 charged button (reference)
 BTN_LIVE_EMOJI_ID      = "5039793437776282663"   # ✅ live button (fixed)
+CARD_CHK_BTN_EMOJI_ID  = "5935795874251674052"
+HIT_GATE_EMOJI_ID      = "5341715473882955310"
 
-LIVE_EMOJI_IDS = [
+SH_GATE_EMOJI_ID       = "6220029508456548253"
+SH_PROG_EMOJI_ID       = "6298691319086712919"
+SH_LIVE_EMOJI_ID       = PROG_LIVE_EMOJI_ID
+
+SC_REPORT_EMOJI_ID     = "5323674506705785412"
+SC_STATS_EMOJI_ID      = "5341715473882955310"
+SC_DUPE_EMOJI_ID       = "5801154993188770160"
+SC_DONE_EMOJI_ID       = "5287777298894835685"
+SC_DENY_EMOJI_ID       = "4956739572114392015"
+ME_CROWN_EMOJI_ID      = "6181649972757271368"
+ME_SMILE_EMOJI_ID      = "6264538349034281099"
+ME_KING_EMOJI_ID       = "6271506980716680365"
+
+CHARGED_EMOJI_IDS = [
     "5801154993188770160", "4956739572114392015", "5285221724634239278",
     "5287777298894835685", "5285024405246725814", "5287547831677112267",
     "5287658362660474522", "5285186510197381130", "5803233241963959320",
@@ -131,10 +146,14 @@ LIVE_EMOJI_IDS = [
     "5891044423856296980", "5436068999068662274", "5427168083074628963",
 ]
 
+LIVE_EMOJI_IDS = [
+    "6296367896398399651",
+]
+
 PLAN_EMOJIS = {
     "CORE":   "5379869575338812919",
     "ELITE":  "5836898273666798437",
-    "ROOT":   "5235611059909323996",
+    "ROOT":   "4956420911310832630",
     "CUSTOM": "5445027583588593750",
 }
 
@@ -155,7 +174,54 @@ def tg_emoji(emoji_id: str, fallback: str = "⭐") -> str:
     """Returns a <tg-emoji> HTML tag for Telegram Premium custom emoji.
     Animates for Premium users; shows the fallback glyph for non-Premium users.
     Always use parse_mode='HTML' when sending messages that contain these tags."""
+    if _VALID_CUSTOM_EMOJI_IDS is not None and str(emoji_id) not in _VALID_CUSTOM_EMOJI_IDS:
+        return fallback
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+_VALID_CUSTOM_EMOJI_IDS: set[str] | None = None
+
+
+def all_custom_emoji_ids() -> list[str]:
+    ids = {
+        DECLINED_EMOJI_ID, CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
+        DEV_EMOJI_ID, PRO_EMOJI_ID, HIT_RESP_EMOJI_ID, HIT_GATE_EMOJI_ID,
+        PROG_GATE_EMOJI_ID, PROG_PROGRESS_EMOJI_ID, PROG_LIVE_EMOJI_ID,
+        PROG_DEAD_EMOJI_ID, PROG_ERRORS_EMOJI_ID, PROG_CHARGED_EMOJI_ID,
+        BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID, BTN_CHARGED_EMOJI_ID,
+        BTN_LIVE_EMOJI_ID, CARD_CHK_BTN_EMOJI_ID, SH_GATE_EMOJI_ID,
+        SH_PROG_EMOJI_ID, SH_LIVE_EMOJI_ID, SC_REPORT_EMOJI_ID,
+        SC_STATS_EMOJI_ID, SC_DUPE_EMOJI_ID, SC_DONE_EMOJI_ID,
+        SC_DENY_EMOJI_ID, ME_CROWN_EMOJI_ID, ME_SMILE_EMOJI_ID,
+        ME_KING_EMOJI_ID,
+        *LIVE_EMOJI_IDS, *CHARGED_EMOJI_IDS, *PLAN_EMOJIS.values(),
+    }
+    return sorted(ids)
+
+
+async def validate_custom_emoji_ids(bot) -> tuple[int, int]:
+    """Validate configured IDs without allowing a bad emoji to crash messages."""
+    global _VALID_CUSTOM_EMOJI_IDS
+    configured = all_custom_emoji_ids()
+    try:
+        stickers = await bot.get_custom_emoji_stickers(configured)
+        _VALID_CUSTOM_EMOJI_IDS = {
+            str(sticker.custom_emoji_id)
+            for sticker in stickers
+            if getattr(sticker, "custom_emoji_id", None)
+        }
+    except Exception:
+        _VALID_CUSTOM_EMOJI_IDS = None
+        return 0, len(configured)
+    return len(_VALID_CUSTOM_EMOJI_IDS), len(configured) - len(_VALID_CUSTOM_EMOJI_IDS)
+
+
+def is_valid_custom_emoji_id(emoji_id: str) -> bool:
+    """Return False only when Telegram validation proved an ID invalid."""
+    return (
+        _VALID_CUSTOM_EMOJI_IDS is None
+        or str(emoji_id) in _VALID_CUSTOM_EMOJI_IDS
+    )
 
 def get_random_live_emoji() -> str:
     """Return a random live-hit emoji ID (string, not rendered tag)."""
@@ -236,11 +302,13 @@ def _btn(text: str, *, cb: str = None, url: str = None,
         button_style = "primary"
     else:
         button_style = style or "danger"
+    selected_icon = icon or BTN_ALL_EMOJI_ID
     d: dict = {
         "text": text,
         "style": button_style,
-        "icon_custom_emoji_id": icon or BTN_ALL_EMOJI_ID,
     }
+    if _VALID_CUSTOM_EMOJI_IDS is None or selected_icon in _VALID_CUSTOM_EMOJI_IDS:
+        d["icon_custom_emoji_id"] = selected_icon
     if cb:    d["callback_data"]        = cb
     if url:   d["url"]                  = url
     return d
