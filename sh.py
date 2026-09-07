@@ -2228,6 +2228,13 @@ async def run_mass_batch(bot, sid, valid_cards, user, plan, all_sites, proxies, 
         MSH_SESSIONS[sid]["status"] = "FINISHED"
     await _update_progress(bot, sid, force=True)
 
+    if bot_data is not None:
+        ud = bot_data.setdefault("user_data", {}).setdefault(str(user.id), {})
+        ud["approved_checks"] = ud.get("approved_checks", 0) + sess["charged"] + sess["approved"]
+        ud["declined_checks"] = ud.get("declined_checks", 0) + sess["dead"] + sess["errors"]
+        ud["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        await db.save_user_stats_now(user.id, ud)
+
     logging.info(f"[MSH] {sid} done  C:{sess['charged']} L:{sess['approved']} "
                  f"D:{sess['dead']} E:{sess['errors']}")
 
