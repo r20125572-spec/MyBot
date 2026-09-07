@@ -20,7 +20,13 @@ import database as db
 logger = logging.getLogger(__name__)
 
 OXAPAY_API_BASE = "https://api.oxapay.com/v1"
-SUCCESS_STATUSES = frozenset({"paid", "completed", "complete", "confirmed"})
+SUCCESS_STATUSES = frozenset({
+    "paid",
+    "manual_accept",
+    "completed",
+    "complete",
+    "confirmed",
+})
 _ACTIVATION_LOCKS: dict[int, asyncio.Lock] = {}
 
 PLANS = {
@@ -387,7 +393,7 @@ async def _reconcile_pending(
     while True:
         try:
             await asyncio.sleep(delay)
-            delay = 5
+            delay = 2
             pending = await db.list_pending_payment_orders(limit=100)
             for order in pending:
                 try:
@@ -411,7 +417,7 @@ async def _reconcile_pending(
             return
         except Exception:
             logger.exception("[OXAPAY] Pending-payment reconciliation failed.")
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
 
 async def _webhook(request: web.Request) -> web.Response:
