@@ -41,7 +41,7 @@ from config import (
     API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
     GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
     get_bin_info, kb_result,
-    tg_emoji, get_plan_emoji_id, get_random_live_emoji,
+    tg_emoji, get_plan_emoji_id, get_random_live_emoji, validate_custom_emoji_ids,
     E_CARD, E_USER, E_TIME, E_DEV, E_PRO,
     E_LIVE, E_DECLINED, E_ERRORS, E_PROGRESS, E_GATE,
     PLAN_EMOJIS, PRO_EMOJI_ID,
@@ -60,8 +60,8 @@ from sh import (
     run_mass_batch, create_msh_session, MSH_SESSIONS,
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
-    _send_sticker, _send_as_media, html_to_entities, get_random_live_emoji,
-    get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
+    _send_sticker, _send_as_media, html_to_entities,
+    get_random_charged_emoji, HIT_RESP_EMOJI_ID,
     CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
 )
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1151,7 +1151,8 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     _sp_html = f'<b>🔄 Gate ➳ {gate_name}</b>'
-    msg = await update.message.reply_text(_sp_html, parse_mode="HTML")
+    spinner_text, spinner_entities = html_to_entities(_sp_html)
+    msg = await update.message.reply_text(spinner_text, entities=spinner_entities)
     start_time = time.time()
     uname      = f"@{user.username}" if user.username else user.first_name or "User"
     plan       = ud.get("plan", "TRIAL")
@@ -1197,9 +1198,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             bin_data=bin_data, username=uname, plan=plan,
             time_taken=time_taken, is_approved=is_approved,
         )
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result_raw(premium),
-                            disable_web_page_preview=True)
+        await _edit_custom_html(
+            msg, text, reply_markup=kb_result_raw(premium),
+            disable_web_page_preview=True
+        )
 
     except asyncio.TimeoutError:
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
@@ -1210,9 +1212,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_timeout=True,
         )
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result_raw(premium),
-                            disable_web_page_preview=True)
+        await _edit_custom_html(
+            msg, text, reply_markup=kb_result_raw(premium),
+            disable_web_page_preview=True
+        )
     except Exception as e:
         if not premium: ud["credits"] = ud.get("credits", 0) + 1
         logger.error(f"Gate [{gate_key}] error: {e}")
@@ -1223,9 +1226,10 @@ async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
             username=uname, plan=plan, time_taken=time_taken,
             is_approved=False, is_error=True,
         )
-        await msg.edit_text(text, parse_mode="HTML",
-                            reply_markup=kb_result_raw(premium),
-                            disable_web_page_preview=True)
+        await _edit_custom_html(
+            msg, text, reply_markup=kb_result_raw(premium),
+            disable_web_page_preview=True
+        )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4972,6 +4976,11 @@ async def _post_init(app: Application) -> None:
             _cfg.BOT_USERNAME = me.username
             _cfg.BOT_LINK     = f"https://t.me/{me.username}"
             logger.info(f"Bot identity confirmed: @{me.username} — referral link updated.")
+        valid_emoji_count, invalid_emoji_count = await validate_custom_emoji_ids(app.bot)
+        logger.info(
+            "Custom emoji validation: %s valid, %s invalid.",
+            valid_emoji_count, invalid_emoji_count,
+        )
     except Exception as exc:
         logger.warning(f"Could not fetch bot info: {exc}")
 
