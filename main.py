@@ -17,7 +17,9 @@ from io import BytesIO
 from html import escape
 from typing import Optional
 from datetime import datetime, timedelta
-from telegram import Update, MessageEntity, InputMediaPhoto, ChatPermissions
+from telegram import (
+    Update, MessageEntity, InputMediaPhoto, ChatPermissions, InputFile,
+)
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
@@ -31,9 +33,13 @@ import database as db   # PostgreSQL premium persistence (Railway)
 import payments
 
 try:
-    from mst import get_bin_handler as get_bin_lookup_handler
+    from mst import (
+        get_bin_handler as get_bin_lookup_handler,
+        get_random_live_emoji as get_mst_live_emoji,
+    )
 except ImportError:
     get_bin_lookup_handler = None
+    get_mst_live_emoji = None
 
 from config import (
     BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
@@ -62,11 +68,13 @@ from sh import (
     cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
     probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
     _send_sticker, _send_as_media, html_to_entities, get_random_live_emoji,
-        get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
+    get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
     CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
 )
-
 from splitter import get_splitter_handlers
+
+if get_mst_live_emoji is None:
+    get_mst_live_emoji = get_random_live_emoji
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -238,20 +246,20 @@ def release_instance_lock():
         _lock_file_handle = None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# BOLD UNICODE FONT
+# SERIF BOLD ITALIC UNICODE FONT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def B(text: str) -> str:
-    bold_map = {
-        'A':'𝗔','B':'𝗕','C':'𝗖','D':'𝗗','E':'𝗘','F':'𝗙','G':'𝗚','H':'𝗛',
-        'I':'𝗜','J':'𝗝','K':'𝗞','L':'𝗟','M':'𝗠','N':'𝗡','O':'𝗢','P':'𝗣',
-        'Q':'𝗤','R':'𝗥','S':'𝗦','T':'𝗧','U':'𝗨','V':'𝗩','W':'𝗪','X':'𝗫',
-        'Y':'𝗬','Z':'𝗭','a':'𝗮','b':'𝗯','c':'𝗰','d':'𝗱','e':'𝗲','f':'𝗳',
-        'g':'𝗴','h':'𝗵','i':'𝗶','j':'𝗷','k':'𝗸','l':'𝗹','m':'𝗺','n':'𝗻',
-        'o':'𝗼','p':'𝗽','q':'𝗾','r':'𝗿','s':'𝘀','t':'𝘁','u':'𝘂','v':'𝘃',
-        'w':'𝘄','x':'𝘅','y':'𝘆','z':'𝘇','0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯',
-        '4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',
-    }
-    return "".join(bold_map.get(ch, ch) for ch in text)
+    styled = []
+    for char in str(text):
+        if "A" <= char <= "Z":
+            styled.append(chr(0x1D468 + ord(char) - ord("A")))
+        elif "a" <= char <= "z":
+            styled.append(chr(0x1D482 + ord(char) - ord("a")))
+        elif "0" <= char <= "9":
+            styled.append(chr(0x1D7CE + ord(char) - ord("0")))
+        else:
+            styled.append(char)
+    return "".join(styled)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HELPERS
@@ -406,26 +414,26 @@ def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         exp_date    = datetime.fromtimestamp(expires).strftime("%Y-%m-%d")
         rem_d       = int((expires - now) / 86400)
         rem_h       = int(((expires - now) % 86400) / 3600)
-        expire_line = f"✰ <b>𝐄𝐱𝐩𝐢𝐫𝐞𝐬</b>   ➔ {exp_date} ({rem_d}d {rem_h}h)"
+        expire_line = f"✰ <b>{B('Expires')}</b>   ➔ {exp_date} ({rem_d}d {rem_h}h)"
     else:
-        expire_line = "✰ <b>𝐄𝐱𝐩𝐢𝐫𝐞𝐬</b>   ➔ Never (Trial)"
+        expire_line = f"✰ <b>{B('Expires')}</b>   ➔ {B('Never')} ({B('Trial')})"
 
     lines = [
-        "⭅ <b>𝗨𝗦𝗘𝗥 𝗖𝗢𝗡𝗧𝗥𝗢𝗟 𝗛𝗨𝗕</b> ⭆",
+        f"⭅ <b>{B('User Control Hub')}</b> ⭆",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"✰ <b>𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞</b>  ➔ {uname} {plan_emoji}",
-        f"✰ <b>𝐔𝐬𝐞𝐫 𝐈𝐃</b>   ➔ <code>{user.id}</code>",
-        f"✰ <b>𝐀𝐜𝐜𝐞𝐬𝐬</b>    ➔ {get_styled_plan(raw_plan)}",
-        f"✰ <b>𝐒𝐭𝐚𝐭𝐮𝐬</b>    ➔ {ban_status}",
-        f"✰ <b>𝐂𝐫𝐞𝐝𝐢𝐭𝐬</b>   ➔ {credits}",
-        f"✰ <b>𝐉𝐨𝐢𝐧𝐞𝐝</b>    ➔ {joined}",
+        f"✰ <b>{B('Username')}</b>  ➔ {uname} {plan_emoji}",
+        f"✰ <b>{B('User ID')}</b>   ➔ <code>{user.id}</code>",
+        f"✰ <b>{B('Access')}</b>    ➔ {get_styled_plan(raw_plan)}",
+        f"✰ <b>{B('Status')}</b>    ➔ {ban_status}",
+        f"✰ <b>{B('Credits')}</b>   ➔ {credits}",
+        f"✰ <b>{B('Joined')}</b>    ➔ {joined}",
         expire_line,
         "━━━━━━━━━━━━━━━━━━━━",
-        f"✰ <b>𝐋𝐚𝐬𝐭 𝐀𝐜𝐭𝐢𝐯𝐞</b> ➔ {last_active}",
-        f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
-        f"✰ <b>𝐑𝐞𝐟𝐞𝐫𝐫𝐚𝐥𝐬</b>  ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)",
+        f"✰ <b>{B('Last Active')}</b> ➔ {last_active}",
+        f"✰ <b>{B('Total Checks')}</b> ➔ {total_checks}",
+        f"✰ <b>{B('Referrals')}</b>  ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} {B('credits')})",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}",
+        f"{E_DEV} {B('Version')} ➔ {VERSION}  |  <a href='{DEV_LINK}'>{B('Batamanchk')}</a> {E_PRO}",
     ]
     return "\n".join(lines)
 
@@ -464,39 +472,39 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         rem_d        = int((expires - now) / 86400)
         rem_h        = int(((expires - now) % 86400) / 3600)
         expire_line  = (
-            f"✰ <b>𝐄𝐱𝐩𝐢𝐫𝐞𝐬</b>   ➔ {exp_date}\n"
-            f"✰ <b>𝐓𝐢𝐦𝐞 𝐋𝐞𝐟𝐭</b>  ➔ {rem_d}d {rem_h}h"
+            f"✰ <b>{B('Expires')}</b>   ➔ {exp_date}\n"
+            f"✰ <b>{B('Time Left')}</b>  ➔ {rem_d}d {rem_h}h"
         )
         last_receipt = ud.get("last_receipt")
         if last_receipt:
-            expire_line += f"\n✰ <b>𝐑𝐞𝐜𝐞𝐢𝐩𝐭</b>   ➔ <code>{last_receipt}</code>"
+            expire_line += f"\n✰ <b>{B('Receipt')}</b>   ➔ <code>{last_receipt}</code>"
     else:
-        expire_line = "✰ <b>𝐄𝐱𝐩𝐢𝐫𝐞𝐬</b>   ➔ Never (Trial)"
+        expire_line = f"✰ <b>{B('Expires')}</b>   ➔ {B('Never')} ({B('Trial')})"
 
     lines = [
-        "⭅ <b>𝗨𝗦𝗘𝗥 𝗣𝗥𝗢𝗙𝗜𝗟𝗘</b> ⭆",
+        f"⭅ <b>{B('User Profile')}</b> ⭆",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"✰ <b>𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞</b>  ➔ {uname} {plan_emoji}",
-        f"✰ <b>𝐔𝐬𝐞𝐫 𝐈𝐃</b>   ➔ <code>{user.id}</code>",
-        f"✰ <b>𝐀𝐜𝐜𝐞𝐬𝐬</b>    ➔ {get_styled_plan(raw_plan)}",
-        f"✰ <b>𝐒𝐭𝐚𝐭𝐮𝐬</b>    ➔ {ban_status}",
-        f"✰ <b>𝐂𝐫𝐞𝐝𝐢𝐭𝐬</b>   ➔ {credits}",
-        f"✰ <b>𝐉𝐨𝐢𝐧𝐞𝐝</b>    ➔ {joined}",
+        f"✰ <b>{B('Username')}</b>  ➔ {uname} {plan_emoji}",
+        f"✰ <b>{B('User ID')}</b>   ➔ <code>{user.id}</code>",
+        f"✰ <b>{B('Access')}</b>    ➔ {get_styled_plan(raw_plan)}",
+        f"✰ <b>{B('Status')}</b>    ➔ {ban_status}",
+        f"✰ <b>{B('Credits')}</b>   ➔ {credits}",
+        f"✰ <b>{B('Joined')}</b>    ➔ {joined}",
         expire_line,
         "━━━━━━━━━━━━━━━━━━━━",
-        f"✰ <b>𝐋𝐚𝐬𝐭 𝐀𝐜𝐭𝐢𝐯𝐞</b>  ➔ {last_active}",
-        f"✰ <b>𝐃𝐚𝐢𝐥𝐲 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {today_count} card(s) today",
-        f"✰ <b>𝐆𝐫𝐨𝐮𝐩 𝐌𝐞𝐦𝐛𝐞𝐫𝐬𝐡𝐢𝐩𝐬</b> ➔ {memberships}",
-        f"✰ <b>𝐓𝐨𝐭𝐚𝐥 𝐂𝐡𝐞𝐜𝐤𝐬</b> ➔ {total_checks}",
-        f"✰ <b>𝐀𝐩𝐩𝐫𝐨𝐯𝐞𝐝</b>   ➔ {approved}",
-        f"✰ <b>𝐃𝐞𝐜𝐥𝐢𝐧𝐞𝐝</b>    ➔ {declined}",
-        f"✰ <b>𝐀𝐩𝐩𝐫𝐨𝐯𝐚𝐥 𝐑𝐚𝐭𝐞</b> ➔ {approval_rate}",
-        f"✰ <b>𝐋𝐚𝐬𝐭 𝐆𝐚𝐭𝐞</b>   ➔ {last_gate}",
-        f"✰ <b>𝐋𝐚𝐬𝐭 𝐁𝐈𝐍</b>    ➔ <code>{last_card}</code>",
+        f"✰ <b>{B('Last Active')}</b>  ➔ {last_active}",
+        f"✰ <b>{B('Daily Checks')}</b> ➔ {today_count} {B('cards today')}",
+        f"✰ <b>{B('Group Memberships')}</b> ➔ {memberships}",
+        f"✰ <b>{B('Total Checks')}</b> ➔ {total_checks}",
+        f"✰ <b>{B('Approved')}</b>   ➔ {approved}",
+        f"✰ <b>{B('Declined')}</b>    ➔ {declined}",
+        f"✰ <b>{B('Approval Rate')}</b> ➔ {approval_rate}",
+        f"✰ <b>{B('Last Gate')}</b>   ➔ {last_gate}",
+        f"✰ <b>{B('Last BIN')}</b>    ➔ <code>{last_card}</code>",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"✰ <b>𝐑𝐞𝐟𝐞𝐫𝐫𝐚𝐥𝐬</b>   ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} credits)",
-        f"✰ <b>𝐂𝐨𝐝𝐞𝐬</b>      ➔ {codes_red} redeemed",
-        f"✰ <b>𝐊𝐞𝐲𝐬</b>       ➔ {keys_red} redeemed",
+        f"✰ <b>{B('Referrals')}</b>   ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} {B('credits')})",
+        f"✰ <b>{B('Codes')}</b>      ➔ {codes_red} {B('redeemed')}",
+        f"✰ <b>{B('Keys')}</b>       ➔ {keys_red} {B('redeemed')}",
     ]
 
     # ── Daily mass limit section (trial users only) ───────────────
@@ -516,19 +524,19 @@ def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
         lines += [
             "━━━━━━━━━━━━━━━━━━━━",
-            "📊 <b>𝗠𝗔𝗦𝗦 𝗖𝗛𝗘𝗖𝗞𝗘𝗥 𝗟𝗜𝗠𝗜𝗧𝗦 (Trial)</b>",
+            f"📊 <b>{B('Mass Checker Limits')} ({B('Trial')})</b>",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"✰ <b>𝐃𝐚𝐢𝐥𝐲 𝐋𝐢𝐦𝐢𝐭</b>  ➔ 500 cards / day",
-            f"✰ <b>𝐔𝐬𝐞𝐝 𝐓𝐨𝐝𝐚𝐲</b>  ➔ {_msh_used} cards",
-            f"✰ <b>𝐑𝐞𝐦𝐚𝐢𝐧𝐢𝐧𝐠</b>   ➔ {_msh_remain} cards",
-            f"✰ <b>𝐒𝐭𝐚𝐭𝐮𝐬</b>     ➔ {_msh_status}",
-            f"✰ <b>𝐂𝐫𝐞𝐝𝐢𝐭𝐬</b>    ➔ {ud.get('credits', 0)} (1 credit = 1 card)",
+            f"✰ <b>{B('Daily Limit')}</b>  ➔ 500 {B('cards per day')}",
+            f"✰ <b>{B('Used Today')}</b>  ➔ {_msh_used} {B('cards')}",
+            f"✰ <b>{B('Remaining')}</b>   ➔ {_msh_remain} {B('cards')}",
+            f"✰ <b>{B('Status')}</b>     ➔ {_msh_status}",
+            f"✰ <b>{B('Credits')}</b>    ➔ {ud.get('credits', 0)} ({B('1 credit = 1 card')})",
             "━━━━━━━━━━━━━━━━━━━━",
         ]
     else:
         lines.append("━━━━━━━━━━━━━━━━━━━━")
 
-    lines.append(f"{E_DEV} 𝗩𝗲𝗿𝘀𝗶𝗼𝗻 ➔ {VERSION}  |  <a href='{DEV_LINK}'>Batamanchk</a> {E_PRO}")
+    lines.append(f"{E_DEV} {B('Version')} ➔ {VERSION}  |  <a href='{DEV_LINK}'>{B('Batamanchk')}</a> {E_PRO}")
     return "\n".join(lines)
 
 def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -542,23 +550,23 @@ def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
     premium  = raw_plan != "TRIAL"
     credits  = "∞" if premium else str(ud.get("credits", 150))
     uname    = escape(user.first_name or "User")
-    joined   = ud.get("joined", datetime.now().strftime("%Y-%m-%d")).split(" ")[0]
     access   = get_styled_plan(raw_plan)
+    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    dev_emoji = tg_emoji(DEV_EMOJI_ID, "👑")
 
     return (
-        f"<b>💎 𝗕𝗔𝗧𝗠𝗔𝗡𝗖𝗔𝗥𝗗𝗖𝗛𝗞 𝗗𝗔𝗦𝗛𝗕𝗢𝗔𝗥𝗗</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>👤 𝗔𝗰𝗰𝗼𝘂𝗻𝘁</b>\n"
-        f"├ <b>Name:</b> {uname}\n"
-        f"├ <b>ID:</b> <code>{user.id}</code>\n"
-        f"└ <b>Joined:</b> {joined}\n\n"
-        f"<b>💠 𝗠𝗲𝗺𝗯𝗲𝗿𝘀𝗵𝗶𝗽</b>\n"
-        f"├ <b>Plan:</b> {access}\n"
-        f"└ <b>Credits:</b> {credits}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Choose an option to continue.</b>\n\n"
-        f"⚡ <b>Dev:</b> <a href='{DEV_LINK}'>Batmancardchk</a>\n"
-        f"🔰 <b>Build:</b> {VERSION}"
+        f"<b>[❄️] {B('Welcome to Batmancardchk')} {E_PRO}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"{E_USER} <b>{B('User')}</b>       ➳ {uname}\n"
+        f"{E_USER} <b>{B('User ID')}</b>    ➳ <code>{user.id}</code>\n"
+        f"{plan_emoji} <b>{B('Access')}</b>     ➳ {access}\n"
+        f"{E_CARD} <b>{B('Credits')}</b>    ➳ {credits}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<b>{B('Choose an option below.')}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"{dev_emoji} <b>{B('Dev')}</b> ➳ "
+        f"<a href='{DEV_LINK}'>{B('Batmancardchk')}</a> 🦇\n"
+        f"⚙️ <b>{B(VERSION)}</b>"
     )
 
 
@@ -682,7 +690,7 @@ def _force_join_text(not_joined: list) -> str:
     total  = len(FORCE_JOIN_FULL)
     joined = total - len(not_joined)
     lines  = [
-        "⭅ <b>𝗝𝗢𝗜𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗</b> ⭆",
+        f"⭅ <b>{B('Join Required')}</b> ⭆",
         "━━━━━━━━━━━━━━━━━━━━",
         "To use this bot you must join <b>all</b> our",
         "channels and groups listed below.",
@@ -954,20 +962,20 @@ def kb_fb_owner(key: str) -> RawMarkup:
 CMD_TOTAL_PAGES = 5
 CMD_PAGES = {
     1: (
-        "⭅ <b>𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦</b> ⭆\n"
+        f"⭅ <b>{B('Commands')}</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<b>Available Modules</b>\n"
+        f"<b>{B('Available Modules')}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>[+] 🔥 Single Checker</b>  (2)\n"
-        f"<b>[+] ⚡ Mass Checker</b>   (3)\n"
-        f"<b>[+] 👑 Mass Module</b>    (4)  <i>Premium</i>\n"
-        f"<b>[+] 🛠 Tools</b>          (4)\n"
-        f"<b>[+] 👤 Account</b>        (3)\n"
+        f"<b>[+] 🔥 {B('Single Checker')}</b>  (2)\n"
+        f"<b>[+] ⚡ {B('Mass Checker')}</b>   (3)\n"
+        f"<b>[+] 👑 {B('Mass Module')}</b>    (4)  <i>{B('Premium')}</i>\n"
+        f"<b>[+] 🛠 {B('Tools')}</b>          (4)\n"
+        f"<b>[+] 👤 {B('Account')}</b>        (3)\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Use ▶ Next to explore each module</i>"
+        f"<i>{B('Use Next to explore each module')}</i>"
     ),
     2: (
-        "⭅ <b>🔥 𝗦𝗜𝗡𝗚𝗟𝗘 𝗖𝗛𝗘𝗖𝗞𝗘𝗥</b> ⭆\n"
+        f"⭅ <b>🔥 {B('Single Checker')}</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>────────────</b>\n"
         "<b>Gate</b>    ➳ Shopify 0-20$\n"
@@ -981,7 +989,7 @@ CMD_PAGES = {
         "Usage: <code>/sh cc|mm|yy|cvv</code>"
     ),
     3: (
-        "⭅ <b>⚡ 𝗠𝗔𝗦𝗦 𝗖𝗛𝗘𝗖𝗞𝗘𝗥</b> ⭆\n"
+        f"⭅ <b>⚡ {B('Mass Checker')}</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>────────────</b>\n"
         "<b>Gate</b>    ➳ Shopify 0-20$\n"
@@ -996,7 +1004,7 @@ CMD_PAGES = {
         "Reply to a .txt file → <code>/msh</code>"
     ),
     4: (
-        "⭅ <b>👑 𝗠𝗔𝗦𝗦 𝗠𝗢𝗗𝗨𝗟𝗘</b> ⭆\n"
+        f"⭅ <b>👑 {B('Mass Module')}</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔒 <b>Premium Plan Required</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1007,7 +1015,7 @@ CMD_PAGES = {
         "<i>Upgrade via /buy to unlock these gates</i>"
     ),
     5: (
-        "⭅ <b>🛠 𝗧𝗢𝗢𝗟𝗦</b> ⭆\n"
+        f"⭅ <b>🛠 {B('Tools')}</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>/bin</b>   ➳ BIN Lookup\n"
         "        Usage: <code>/bin 411111</code>\n\n"
@@ -1022,7 +1030,7 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━"
     ),
     6: (
-        "⭅ <b>👤 𝗔𝗖𝗖𝗢𝗨𝗡𝗧</b> ⭆\n"
+        f"⭅ <b>👤 {B('Account')}</b> ⭆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>/start</b> ➳ Open Dashboard\n\n"
         "<b>/buy</b>  ➳ View Premium Plans\n\n"
@@ -3212,7 +3220,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_as_media(
         context.bot,
         update.effective_chat.id,
-        get_random_live_emoji(),
+        get_mst_live_emoji(),
         caption=ui_start_screen(user, context),
         parse_mode="HTML",
         reply_markup=kb_main(user.id),
@@ -4089,7 +4097,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "allcm_show":
         await query.message.edit_text(
-            "⭅ <b>𝗔𝗟𝗟 𝗨𝗦𝗘𝗥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦</b> ⭆\n"
+            f"⭅ <b>{B('All User Commands')}</b> ⭆\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "<b>Checker Commands</b>\n"
             "<b>/sh</b> ➳ Shopify Single Checker\n"
@@ -5969,7 +5977,7 @@ def main():
             banned_update_guard,
         ), group=-3)
         app.add_handler(CallbackQueryHandler(banned_callback_guard), group=-3)
-              # Generic metadata tracking runs first and never consumes updates.
+        # Generic metadata tracking runs first and never consumes updates.
         app.add_handler(MessageHandler(filters.ALL, track_activity_and_spam), group=-1)
         # Must precede public command handlers so maintenance is explicit, not silent.
         app.add_handler(MessageHandler(filters.COMMAND, maintenance_command_guard), group=-2)
@@ -5977,13 +5985,15 @@ def main():
         app.add_handler(CommandHandler("ping",    cmd_ping))
         app.add_handler(CommandHandler("status",  cmd_status))   # /status — live leaderboard
         app.add_handler(CommandHandler("hide",    cmd_hide))
-        
+
+        # Splitter callbacks/command stay in the default handler group.
+        # Text capture uses group 2 because broadcast editing already uses 1.
         for handler in get_splitter_handlers():
             if isinstance(handler, MessageHandler):
-                app.add_handler(handler, group=1)
+                app.add_handler(handler, group=2)
             else:
                 app.add_handler(handler)
-                
+
         app.add_handler(CommandHandler("buy",     cmd_plan))
         app.add_handler(CommandHandler("sub",     cmd_sub))
         app.add_handler(CommandHandler("refer",   cmd_refer))
