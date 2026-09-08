@@ -19,6 +19,11 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
+
+class OxaPayTemporaryResponseError(RuntimeError):
+    """OxaPay/proxy returned no usable API document; retry may succeed."""
+
+
 OXAPAY_API_BASE = "https://api.oxapay.com/v1"
 SUCCESS_STATUSES = frozenset({
     "paid",
@@ -116,7 +121,7 @@ async def _read_oxapay_json(
     """Decode an OxaPay response without exposing raw proxy/HTML errors."""
     body = await response.text()
     if not body.strip():
-        raise RuntimeError(
+        raise OxaPayTemporaryResponseError(
             f"OxaPay returned an empty response while {operation}. "
             "Please try again in a moment."
         )
@@ -130,12 +135,12 @@ async def _read_oxapay_json(
             response.headers.get("Content-Type", ""),
             len(body.encode("utf-8", errors="replace")),
         )
-        raise RuntimeError(
+        raise OxaPayTemporaryResponseError(
             f"OxaPay returned an invalid response while {operation}. "
             "Please try again in a moment."
         ) from exc
     if not isinstance(result, dict):
-        raise RuntimeError(
+        raise OxaPayTemporaryResponseError(
             f"OxaPay returned an unexpected response while {operation}. "
             "Please try again in a moment."
         )
@@ -189,7 +194,11 @@ async def get_accepted_method_keys(force: bool = False) -> list[str]:
             if not accepted:
                 raise RuntimeError("OxaPay returned no accepted currencies.")
             _accepted_cache = (now, accepted)
-        except Exception:
+        except (
+            OxaPayTemporaryResponseError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+        ):
             if (
                 _accepted_cache
                 and now - _accepted_cache[0] < ACCEPTED_STALE_TTL
@@ -200,7 +209,17 @@ async def get_accepted_method_keys(force: bool = False) -> list[str]:
                     "temporary API response failure."
                 )
             else:
-                raise
+                # Currency discovery is optional. Address creation remains
+                # authoritative and rejects any disabled merchant currency.
+                accepted = frozenset(
+                    method["pay_currency"].upper()
+                    for method in PAYMENT_METHODS.values()
+                )
+                logger.warning(
+                    "[OXAPAY] Accepted-currencies API unavailable; showing "
+                    "configured methods and deferring validation to payment "
+                    "address creation."
+                )
 
     return [
         key
