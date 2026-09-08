@@ -360,8 +360,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
 
     # ── Starting message — premium UI ──
     start_html = _build_progress_msg(gate_name, 0, len(cards), 0, 0, 0, 0, 0.0, user)
-    start_text, start_entities = html_to_entities(start_html)
-    msg = await update.message.reply_text(start_text, entities=start_entities)
+    msg = await update.message.reply_text(start_html, parse_mode="HTML")
 
     semaphore  = asyncio.Semaphore(SEMAPHORE_LIMIT)
     start_time = time.time()
@@ -416,8 +415,7 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
                         charged_count, live_count, dead_count, error_count,
                         elapsed, user
                     )
-                    progress_text, progress_entities = html_to_entities(progress_html)
-                    await msg.edit_text(progress_text, entities=progress_entities)
+                    await msg.edit_text(progress_html, parse_mode="HTML")
                 except Exception:
                     pass
 
@@ -447,13 +445,12 @@ async def process_mass(update: Update, context: ContextTypes.DEFAULT_TYPE, gate_
         total_charged, total_live, total_dead, total_errors,
         elapsed, user
     )
-    final_text, final_entities = html_to_entities(final_html)
     await msg.edit_text(
-        final_text, entities=final_entities, reply_markup=_create_result_buttons()
+        final_html, parse_mode="HTML", reply_markup=_create_result_buttons()
     )
 
 def _create_result_buttons() -> RawMarkup:
-    """Premium-emoji result buttons — uses RawMarkup so icon_custom_emoji_id renders."""
+    """Coloured result buttons without custom/live emoji attachments."""
     return RawMarkup([
         [
             _btn("CHARGED", cb="result_charge", style="danger",   icon=BTN_CHARGED_EMOJI_ID),
