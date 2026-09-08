@@ -634,10 +634,9 @@ async def send_hit_log_to_group(
     reply_markup = {
         "inline_keyboard": [[
             {
-                "text":                 "𝘾𝘼𝙍𝘿 ✘ 𝘾𝙃𝙆",
+                "text":                 "𝘽𝘼𝙏𝘾𝙃𝙆",
                 "url":                  CHANNEL_LINK,
-                "style":                "primary",
-                "icon_custom_emoji_id": CARD_CHK_BTN_EMOJI_ID,
+                "style":                "danger",
             }
         ]]
     }
@@ -767,7 +766,7 @@ async def send_charged_dm(
 
 def get_result_buttons(session_id: str, is_running: bool = True) -> dict:
     """
-    Raw inline-keyboard dict — style + icon_custom_emoji_id pass through to Bot API.
+    Raw inline-keyboard dict — button colors pass through to Bot API.
 
     Row 1: [Charged (N) 💎]  [Live (N) ✅]  [All (N) 📁]
     Row 2: [         Stop ⛔         ]   ← only while running
@@ -782,20 +781,17 @@ def get_result_buttons(session_id: str, is_running: bool = True) -> dict:
             {
                 "text":                 f"Charged ({charged_n})",
                 "callback_data":        MshResultCallback(session_id=session_id, result_type="charged").pack(),
-                "style":                "success",
-                "icon_custom_emoji_id": BTN_CHARGED_EMOJI_ID,
+                "style":                "danger",
             },
             {
                 "text":                 f"Live ({live_n})",
                 "callback_data":        MshResultCallback(session_id=session_id, result_type="live").pack(),
                 "style":                "success",
-                "icon_custom_emoji_id": BTN_LIVE_EMOJI_ID,
             },
             {
                 "text":                 f"All ({checked})",
                 "callback_data":        MshResultCallback(session_id=session_id, result_type="all").pack(),
                 "style":                "primary",
-                "icon_custom_emoji_id": BTN_ALL_EMOJI_ID,
             },
         ],
     ]
@@ -805,7 +801,6 @@ def get_result_buttons(session_id: str, is_running: bool = True) -> dict:
                 "text":                 "Stop",
                 "callback_data":        MshStopCallback(session_id=session_id).pack(),
                 "style":                "danger",
-                "icon_custom_emoji_id": BTN_STOP_EMOJI_ID,
             }
         ])
     return {"inline_keyboard": buttons}
