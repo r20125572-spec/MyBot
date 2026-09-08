@@ -33,6 +33,8 @@ SUCCESS_STATUSES = frozenset({
     "confirmed",
 })
 _ACTIVATION_LOCKS: dict[int, asyncio.Lock] = {}
+WHITE_LABEL_MAX_ATTEMPTS = 4
+RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 PLANS = {
     "pay1d": {"name": "Core", "plan": "CORE", "days": 1, "price": Decimal("1.50")},
@@ -147,6 +149,52 @@ async def _read_oxapay_json(
     return result
 
 
+def _api_status(result: dict) -> int:
+    """Return OxaPay's API status without allowing malformed values to crash."""
+    try:
+        return int(result.get("status", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _retry_temporary(
+    operation: Callable[[], Awaitable[dict]],
+    *,
+    name: str,
+    attempts: int = WHITE_LABEL_MAX_ATTEMPTS,
+) -> dict:
+    """Retry temporary provider/transport failures with bounded backoff."""
+    last_error: BaseException | None = None
+    total_attempts = max(1, int(attempts))
+    for attempt in range(1, total_attempts + 1):
+        try:
+            return await operation()
+        except (
+            OxaPayTemporaryResponseError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+        ) as exc:
+            last_error = exc
+            if attempt >= total_attempts:
+                break
+            delay = min(4.0, 0.65 * (2 ** (attempt - 1)))
+            delay += secrets.randbelow(250) / 1000
+            logger.warning(
+                "[OXAPAY] Temporary failure while %s; retrying attempt %s/%s "
+                "in %.2fs (%s)",
+                name,
+                attempt + 1,
+                total_attempts,
+                delay,
+                type(exc).__name__,
+            )
+            await asyncio.sleep(delay)
+    raise OxaPayTemporaryResponseError(
+        "OxaPay is temporarily unavailable after several automatic retries. "
+        "Please press Retry Payment."
+    ) from last_error
+
+
 async def get_accepted_method_keys(force: bool = False) -> list[str]:
     """Return only payment methods enabled for this OxaPay merchant."""
     global _accepted_cache
@@ -182,7 +230,7 @@ async def get_accepted_method_keys(force: bool = False) -> list[str]:
                         "loading payment methods",
                     )
                     response_status = response.status
-            if response_status != 200 or int(result.get("status", 0)) != 200:
+            if response_status != 200 or _api_status(result) != 200:
                 raise RuntimeError(
                     _oxapay_error(
                         result,
@@ -279,28 +327,69 @@ async def create_white_label_payment(
 
     try:
         timeout = aiohttp.ClientTimeout(
-            total=15,
-            connect=5,
-            sock_connect=5,
-            sock_read=10,
+            total=20,
+            connect=7,
+            sock_connect=7,
+            sock_read=12,
         )
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{OXAPAY_API_BASE}/payment/white-label",
-                headers=headers,
-                json=payload,
-            ) as response:
-                result = await _read_oxapay_json(
-                    response,
-                    "creating the payment address",
-                )
-                if response.status != 200 or int(result.get("status", 0)) != 200:
-                    raise RuntimeError(
-                        _oxapay_error(
-                            result,
-                            "OxaPay rejected the payment request.",
-                        )
+        connector = aiohttp.TCPConnector(
+            ttl_dns_cache=300,
+            enable_cleanup_closed=True,
+        )
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={"Accept": "application/json"},
+        ) as session:
+            async def request_payment() -> dict:
+                async with session.post(
+                    f"{OXAPAY_API_BASE}/payment/white-label",
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    result = await _read_oxapay_json(
+                        response,
+                        "creating the payment address",
                     )
+                    if response.status in RETRYABLE_HTTP_STATUSES:
+                        raise OxaPayTemporaryResponseError(
+                            "OxaPay temporarily could not create the payment address."
+                        )
+                    api_status = _api_status(result)
+                    if api_status in RETRYABLE_HTTP_STATUSES:
+                        raise OxaPayTemporaryResponseError(
+                            "OxaPay temporarily could not create the payment address."
+                        )
+                    if response.status != 200 or api_status != 200:
+                        # Parsed merchant/authentication/currency errors are
+                        # authoritative and must not be hidden by retries.
+                        raise RuntimeError(
+                            _oxapay_error(
+                                result,
+                                "OxaPay rejected the payment request.",
+                            )
+                        )
+                    response_data = result.get("data")
+                    if not isinstance(response_data, dict):
+                        raise OxaPayTemporaryResponseError(
+                            "OxaPay returned incomplete payment information."
+                        )
+                    required = (
+                        response_data.get("track_id"),
+                        response_data.get("address"),
+                        response_data.get("pay_amount"),
+                        response_data.get("expired_at"),
+                    )
+                    if any(value in (None, "", 0, "0") for value in required):
+                        raise OxaPayTemporaryResponseError(
+                            "OxaPay returned incomplete payment information."
+                        )
+                    return result
+
+            result = await _retry_temporary(
+                request_payment,
+                name="creating the payment address",
+            )
 
         data = result.get("data") or {}
         track_id = str(data.get("track_id") or "").strip()
@@ -350,7 +439,7 @@ async def _fetch_payment(track_id: str) -> dict:
                 response,
                 "verifying the payment",
             )
-    if response.status != 200 or int(result.get("status", 0)) != 200:
+    if response.status != 200 or _api_status(result) != 200:
         raise RuntimeError(_oxapay_error(result, "Payment verification failed."))
     return result.get("data") or {}
 
