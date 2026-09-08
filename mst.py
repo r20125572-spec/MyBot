@@ -48,7 +48,7 @@ from sh import _send_as_media, _get_sticker_fid, html_to_entities
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 HIT_LOG_GROUP_ID          = -1004329967819
-EXTRA_CHARGED_GROUP_ID = -1004329967819
+EXTRA_CHARGED_GROUP_ID = -0
 STRIPE_GATE_API_URL       = "https://cardx.up.railway.app/stripe/cc={card}"
 
 MAX_CONCURRENT_CARDS      = 10
