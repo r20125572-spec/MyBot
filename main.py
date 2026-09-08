@@ -73,8 +73,15 @@ from sh import (
 )
 from splitter import get_splitter_handlers
 
-if get_mst_live_emoji is None:
-    get_mst_live_emoji = get_random_live_emoji
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LINK REPLACEMENT (Safe override without editing config.py)
+# Replaces old link https://t.me/+BXmeotREVhllODFk with new link
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import config as _cfg
+_cfg.CHANNEL_LINK = "https://t.me/Batcardchk"
+_cfg.CHANNEL_USERNAME = "Batcardchk"
+CHANNEL_LINK = _cfg.CHANNEL_LINK
+CHANNEL_USERNAME = _cfg.CHANNEL_USERNAME
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
