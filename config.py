@@ -218,14 +218,13 @@ E_HIT_RESP = tg_emoji(HIT_RESP_EMOJI_ID,      "✅")
 #   Telegram Bot API supports:
 #     "style": "primary"   → blue button
 #     "style": "danger"    → red button
-#     "icon_custom_emoji_id" → animated sticker on button
 #
 #   python-telegram-bot calls .to_dict() on reply_markup,
 #   so this thin wrapper passes raw API JSON straight through.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class RawMarkup(TelegramObject):
-    """Coloured inline keyboard — passes style/icon_custom_emoji_id through PTB's encoder."""
+    """Coloured inline keyboard passed through PTB's encoder."""
     __slots__ = ("_data",)
 
     def __init__(self, inline_keyboard: list):
@@ -241,11 +240,7 @@ class RawMarkup(TelegramObject):
 
 def _btn(text: str, *, cb: str = None, url: str = None,
          style: str = None, icon: str = None) -> dict:
-    """Build one coloured premium button.
-
-    Button labels intentionally avoid ordinary emoji. Telegram renders the
-    custom emoji supplied through icon_custom_emoji_id instead.
-    """
+    """Build one coloured button without custom/live emoji attachments."""
     text = str(text).lstrip(
         " \t⚡🔥🔙💎🤖📢📄📋✅❌➕🗑✏️📡📊⭐👤⏱🔄🛒⚠️"
     ).strip()
@@ -256,13 +251,10 @@ def _btn(text: str, *, cb: str = None, url: str = None,
         button_style = "primary"
     else:
         button_style = style or "danger"
-    selected_icon = icon or BTN_ALL_EMOJI_ID
     d: dict = {
         "text": text,
         "style": button_style,
     }
-    if selected_icon:
-        d["icon_custom_emoji_id"] = selected_icon
     if cb:    d["callback_data"]        = cb
     if url:   d["url"]                  = url
     return d
