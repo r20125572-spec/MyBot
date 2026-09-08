@@ -4326,12 +4326,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as exc:
             logger.error("[OXAPAY] White-label payment creation failed: %s", exc)
             await query.message.edit_text(
-                f"<b>{E_ERRORS} Payment Address Unavailable</b>\n"
+                f"<b>{E_ERRORS} {B('Payment Address Unavailable')}</b>\n"
                 "──────────\n"
-                f"{escape(str(exc))}\n"
-                "Please try again later or contact support.",
+                f"{escape(str(exc))}",
                 parse_mode="HTML",
                 reply_markup=RawMarkup([
+                    [_btn(B("RETRY PAYMENT"), cb=data, style="primary")],
                     [_btn(B("SUPPORT"), url=SUPPORT_LINK, style="primary")],
                     [_btn(B("BACK"), cb="mprice")],
                 ]),
