@@ -5839,11 +5839,12 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
-    ids.append({
+      ids.append({
         "uid":     key_val,
         "display": display,
         "link":    link,
         "enabled": True,
+        "hide":    False,
         "count":   0,
     })
     bd["fl_state"] = None
