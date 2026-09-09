@@ -5566,47 +5566,8 @@ def _fl_channel_kb() -> RawMarkup:
 
 # ── /fakeon command ───────────────────────────────────────────────────────────
 
-async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Owner only — /fakeon opens the fake logs control panel.
-    Completely silent (no reply) to any non-owner user."""
-    if not update.effective_user or update.effective_user.id != OWNER_ID:
-        return  # silent — not even a "permission denied" message
-
-    bd     = context.bot_data
-    bd["fl_state"] = None
-    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
-    if not target:
-        await update.message.reply_text(
-            "<b>⚠️ Log channel not configured!</b>\n"
-            "──────────\n"
-            "1. Add your bot as <b>admin</b> to the target logs channel\n"
-            "2. Run <code>/getid</code> <i>inside that channel</i>\n"
-            "3. Set <code>FAKE_LOG_CHANNEL_ID=&lt;id&gt;</code> on Railway → redeploy",
-            parse_mode="HTML",
-        )
-        return
-
-    await update.message.reply_text(
-        _fl_main_text(bd),
-        parse_mode="HTML",
-        reply_markup=_fl_main_kb(bd),
-    )
-
-
-async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Owner only — /fakeoff stops the stream."""
-    if not update.effective_user or update.effective_user.id != OWNER_ID:
-        return
-    context.bot_data[_FL_ACTIVE] = False
-    _fl_stop(context)
-    await update.message.reply_text("<b>⛔ Fake logs stopped.</b>", parse_mode="HTML")
-
-
-# ── Master callback handler ───────────────────────────────────────────────────
-
 async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles all fl_* / fltog_* / flrem_* / flspd_* callbacks.
-    Owner-only and completely silent to everyone else."""
+    """Handles all fl_* / fltog_* / flrem_* / flspd_* / flhide_* callbacks."""
     q = update.callback_query
     if not q.from_user or q.from_user.id != OWNER_ID:
         await q.answer("⛔ Owner only.", show_alert=True)
@@ -5645,8 +5606,6 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         bd[_FL_ACTIVE] = True
         _fl_stop(context)
-        # Send once immediately, then keep the server-side background task
-        # running even when the owner leaves this Telegram chat.
         await _fl_job(context)
         if bd.get(_FL_ACTIVE):
             bd[_FL_TASK] = asyncio.create_task(
@@ -5671,7 +5630,7 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     elif dat == "fl_noop":
-        pass  # label-only button — intentional no-op
+        pass
 
     # ── IDs panel ─────────────────────────────────────────────────────────────
     elif dat == "fl_ids":
@@ -5692,13 +5651,17 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="HTML",
         )
 
-       elif dat.startswith("flspd_"):
-        spd = dat.split("_", 1)[1]
-        if spd in _FL_SPEEDS:
-            bd["fl_speed"] = spd
+    elif dat.startswith("fltog_"):
+        try:
+            idx = int(dat.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return
+        ids = _fl_get_ids(bd)
+        if 0 <= idx < len(ids):
+            ids[idx]["enabled"] = not ids[idx].get("enabled", True)
         await q.edit_message_text(
-            _fl_speed_text(), parse_mode="HTML",
-            reply_markup=_fl_speed_kb(bd),
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
         )
 
     elif dat.startswith("flrem_"):
