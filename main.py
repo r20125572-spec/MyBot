@@ -5811,7 +5811,7 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
-      ids.append({
+    ids.append({
         "uid":     key_val,
         "display": display,
         "link":    link,
@@ -5825,7 +5825,6 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Use /fakeon → 📋 IDs to manage.",
         parse_mode="HTML",
     )
-
 
 async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner only — show live PostgreSQL connection status."""
