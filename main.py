@@ -5160,7 +5160,7 @@ async def _post_init(app: Application) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 from sh import LOGS_CHANNEL_LINK as _FL_CH_LINK   # [❆] in fake logs links back to the hits channel
 
-_FL_DEFAULT_CHANNEL_ID = -1004329967819
+_FL_DEFAULT_CHANNEL_ID = -1004361062205
 _FL_DEFAULT_FAKE_UID = "8283904645"
 
 
@@ -5216,11 +5216,7 @@ _FL_PRICES = [
 def _fl_log_msg(id_entry: dict) -> str:
     """Build a local test event without payment data or external checks."""
     price = random.choice(_FL_PRICES)
-    # If hide is True, send as plain text name. Otherwise, send as a link.
-    if id_entry.get("hide", False):
-        ulink = id_entry["display"]
-    else:
-        ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
+    ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
         f'<b>HIT ➛ CHARGED '
@@ -5462,32 +5458,26 @@ def _fl_ids_text(bd: dict) -> str:
     lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
     for e in ids:
         on  = "🟢" if e.get("enabled", True) else "🔴"
-        hide = " (Hidden Name)" if e.get("hide", False) else ""
         ct  = e.get("count", 0)
-        lines.append(f"{on} {e['display']}{hide} — {ct} fake hit{'s' if ct != 1 else ''}")
-    lines.append("──────────\nUse buttons below to toggle / hide / remove / add IDs.")
+        lines.append(f"{on} {e['display']} — {ct} fake hit{'s' if ct != 1 else ''}")
+    lines.append("──────────\nUse buttons below to toggle / remove / add IDs.")
     return "\n".join(lines)
+
 
 def _fl_ids_kb(bd: dict) -> RawMarkup:
     ids  = _fl_get_ids(bd)
     rows = []
     for i, e in enumerate(ids):
         on     = e.get("enabled", True)
-        hidden = e.get("hide", False)
         toggle = "ON" if on else "OFF"
-        hide_lbl = "Unhide" if hidden else "Hide"
-        
         rows.append([
             _btn(e["display"], cb="fl_noop"),
             _btn(toggle, cb=f"fltog_{i}"),
-        ])
-        rows.append([
-            _btn(f"{'🔴' if hidden else '🟢'} {hide_lbl} Name", cb=f"flhide_{i}"),
-            _btn("❌ Remove", cb=f"flrem_{i}"),
+            _btn("Remove", cb=f"flrem_{i}"),
         ])
     rows.append([
-        _btn("➕ Add ID", cb="fl_addid"),
-        _btn("🔙 Back", cb="fl_panel"),
+        _btn("Add ID", cb="fl_addid"),
+        _btn("Back", cb="fl_panel"),
     ])
     return RawMarkup(rows)
 
@@ -5566,8 +5556,47 @@ def _fl_channel_kb() -> RawMarkup:
 
 # ── /fakeon command ───────────────────────────────────────────────────────────
 
+async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — /fakeon opens the fake logs control panel.
+    Completely silent (no reply) to any non-owner user."""
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return  # silent — not even a "permission denied" message
+
+    bd     = context.bot_data
+    bd["fl_state"] = None
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    if not target:
+        await update.message.reply_text(
+            "<b>⚠️ Log channel not configured!</b>\n"
+            "──────────\n"
+            "1. Add your bot as <b>admin</b> to the target logs channel\n"
+            "2. Run <code>/getid</code> <i>inside that channel</i>\n"
+            "3. Set <code>FAKE_LOG_CHANNEL_ID=&lt;id&gt;</code> on Railway → redeploy",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        _fl_main_text(bd),
+        parse_mode="HTML",
+        reply_markup=_fl_main_kb(bd),
+    )
+
+
+async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — /fakeoff stops the stream."""
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data[_FL_ACTIVE] = False
+    _fl_stop(context)
+    await update.message.reply_text("<b>⛔ Fake logs stopped.</b>", parse_mode="HTML")
+
+
+# ── Master callback handler ───────────────────────────────────────────────────
+
 async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles all fl_* / fltog_* / flrem_* / flspd_* / flhide_* callbacks."""
+    """Handles all fl_* / fltog_* / flrem_* / flspd_* callbacks.
+    Owner-only and completely silent to everyone else."""
     q = update.callback_query
     if not q.from_user or q.from_user.id != OWNER_ID:
         await q.answer("⛔ Owner only.", show_alert=True)
@@ -5606,6 +5635,8 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         bd[_FL_ACTIVE] = True
         _fl_stop(context)
+        # Send once immediately, then keep the server-side background task
+        # running even when the owner leaves this Telegram chat.
         await _fl_job(context)
         if bd.get(_FL_ACTIVE):
             bd[_FL_TASK] = asyncio.create_task(
@@ -5630,7 +5661,7 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     elif dat == "fl_noop":
-        pass
+        pass  # label-only button — intentional no-op
 
     # ── IDs panel ─────────────────────────────────────────────────────────────
     elif dat == "fl_ids":
@@ -5672,19 +5703,6 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ids = _fl_get_ids(bd)
         if 0 <= idx < len(ids):
             ids.pop(idx)
-        await q.edit_message_text(
-            _fl_ids_text(bd), parse_mode="HTML",
-            reply_markup=_fl_ids_kb(bd),
-        )
-
-    elif dat.startswith("flhide_"):
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        ids = _fl_get_ids(bd)
-        if 0 <= idx < len(ids):
-            ids[idx]["hide"] = not ids[idx].get("hide", False)
         await q.edit_message_text(
             _fl_ids_text(bd), parse_mode="HTML",
             reply_markup=_fl_ids_kb(bd),
@@ -5816,7 +5834,6 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "display": display,
         "link":    link,
         "enabled": True,
-        "hide":    False,
         "count":   0,
     })
     bd["fl_state"] = None
@@ -5825,6 +5842,7 @@ async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Use /fakeon → 📋 IDs to manage.",
         parse_mode="HTML",
     )
+
 
 async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner only — show live PostgreSQL connection status."""
@@ -6064,12 +6082,6155 @@ def main():
         app.add_handler(CommandHandler("getid",   _getid_cmd))
 
         # Fake-logs control panel callbacks
-               # Fake-logs control panel callbacks
         app.add_handler(CallbackQueryHandler(
             _fl_cb,
             pattern=r"^(fl_panel|fl_start|fl_stop|fl_noop|fl_ids|fl_addid"
                     r"|fl_speed|fl_show|fl_clrstats|fl_channel|fl_setchannel"
-                    r"|fltog_\d+|flrem_\d+|flspd_\w+|flhide_\d+)$",
+                    r"|fltog_\d+|flrem_\d+|flspd_\w+)$",
+        ))
+
+        # Add-ID message capture — owner only, when awaiting_id state is set
+        app.add_handler(MessageHandler(
+            filters.TEXT & filters.User(OWNER_ID) & ~filters.COMMAND,
+            _fl_addid_msg,
+        ))
+
+        # Completed-broadcast owner controls.
+        app.add_handler(CallbackQueryHandler(
+            broadcast_control_callback,
+            pattern=r"^br_(edit|delete):",
+        ))
+        app.add_handler(CallbackQueryHandler(
+            restore_callback,
+            pattern=r"^restore_(confirm|cancel)$",
+        ))
+
+        app.add_handler(CallbackQueryHandler(bot_off_callback_guard), group=-2)
+        app.add_handler(CallbackQueryHandler(callback_handler))
+
+        # The next non-command message after pressing Editor becomes the
+        # replacement broadcast. Group 1 avoids blocking existing handlers.
+        app.add_handler(
+            MessageHandler(
+                filters.ALL & ~filters.COMMAND,
+                broadcast_edit_message,
+            ),
+            group=1,
+        )
+
+        app.add_error_handler(error_handler)
+
+        logger.info(
+            "[FAKELOGS] target=%s owner=%s default_display_id=%s",
+            _FL_CHANNEL_ID, OWNER_ID, _FL_DEFAULT_FAKE_UID,
+        )
+        logger.info(f"Batamanchk Bot {VERSION} starting...")
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+        return   # clean exit — no restart needed
+
+    except KeyboardInterrupt:
+        logger.info("Stopped by user (KeyboardInterrupt).")
+        return
+    except Exception as _crash_err:
+        logger.error(f"Bot crashed: {_crash_err}", exc_info=True)
+        raise   # re-raise so Railway sees the crash and auto-restarts
+    finally:
+        release_instance_lock()
+
+if __name__ == "__main__":
+    main()
+import logging
+import time
+import string
+import random
+import asyncio
+import signal
+import os
+import sys
+import fcntl
+import json
+import hmac
+import hashlib
+import re
+import uuid
+from urllib.parse import quote
+from io import BytesIO
+from html import escape
+from typing import Optional
+from datetime import datetime, timedelta
+from telegram import (
+    Update, MessageEntity, InputMediaPhoto, ChatPermissions, InputFile,
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes, ApplicationHandlerStop,
+)
+from telegram.error import Conflict, BadRequest, NetworkError, Forbidden, TimedOut, RetryAfter
+from telegram.request import HTTPXRequest
+
+import aiohttp as _aiohttp
+
+import database as db   # PostgreSQL premium persistence (Railway)
+import payments
+
+try:
+    from mst import (
+        get_bin_handler as get_bin_lookup_handler,
+        get_random_live_emoji as get_mst_live_emoji,
+    )
+except ImportError:
+    get_bin_lookup_handler = None
+    get_mst_live_emoji = None
+
+from config import (
+    BOT_TOKEN, OWNER_ID, VERSION, DEV_LINK,
+    CHANNEL_USERNAME, CHANNEL_ID, CHANNEL_LINK, GROUP_USERNAME, GROUP_LINK, SUPPORT_LINK,
+    BOT_LINK, BOT_USERNAME,
+    API_TIMEOUT, REFERRAL_CREDITS, LOCK_FILE,
+    GATE_URLS, GATE_SITES, PREMIUM_GATES, FORCE_CHANNELS,
+    get_bin_info, kb_result,
+    tg_emoji, get_plan_emoji_id, get_random_live_emoji,
+    E_CARD, E_USER, E_TIME, E_DEV, E_PRO,
+    E_LIVE, E_DECLINED, E_ERRORS, E_PROGRESS, E_GATE,
+    PLAN_EMOJIS, PRO_EMOJI_ID,
+    RawMarkup, _btn,
+    # Button emoji IDs from mst.py
+    BTN_ALL_EMOJI_ID, BTN_STOP_EMOJI_ID, BTN_LIVE_EMOJI_ID,
+    PROG_GATE_EMOJI_ID, PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID,
+    PROG_ERRORS_EMOJI_ID, PROG_PROGRESS_EMOJI_ID,
+    CARD_EMOJI_ID, USER_EMOJI_ID, TIME_EMOJI_ID,
+    DEV_EMOJI_ID, DECLINED_EMOJI_ID,
+)
+from sh import (
+    cmd_sh,
+    get_sh_handler, get_me_handler,
+    _check_card_with_retry, SITE_RETRIES, SITE_TIMEOUT,
+    run_mass_batch, create_msh_session, MSH_SESSIONS,
+    cb_msh_result, cb_msh_stop, _load_sites, _load_proxies,
+    probe_all_sites, get_working_sites, start_probe_background, stop_probe_background,
+    _send_sticker, _send_as_media, html_to_entities, get_random_live_emoji,
+    get_random_charged_emoji, HIT_RESP_EMOJI_ID, PRO_EMOJI_ID,
+    CARD_CHK_BTN_EMOJI_ID, BOT_USERNAME_LINK,
+)
+from splitter import get_splitter_handlers
+
+if get_mst_live_emoji is None:
+    get_mst_live_emoji = get_random_live_emoji
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LOGGING
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger  = logging.getLogger(__name__)
+
+
+async def _send_custom_html(bot, chat_id, html: str, **kwargs):
+    return await bot.send_message(
+        chat_id=chat_id, text=html, parse_mode="HTML", **kwargs
+    )
+
+
+async def _edit_custom_html(message, html: str, **kwargs):
+    return await message.edit_text(text=html, parse_mode="HTML", **kwargs)
+MAX_MSG = 4000
+
+# Normal administration is shared with the second owner. Fake-log controls
+# intentionally remain protected by the primary OWNER_ID checks below.
+SECOND_OWNER_ID = 8283904645
+ADMIN_IDS = frozenset((OWNER_ID, SECOND_OWNER_ID))
+
+
+def _is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PREMIUM PERSISTENCE
+# Saves/restores premium users across bot restarts.
+# File path can be absolute to a mounted volume on Railway.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PREMIUM_FILE = os.environ.get("PREMIUM_FILE", "premium_users.json")
+
+def _save_premium_file(bot_data: dict) -> None:
+    """Persist all active (non-expired) premium users to PREMIUM_FILE (JSON backup).
+    For the full save (JSON + Postgres), use await _save_premium(bot_data) instead."""
+    now       = time.time()
+    all_users = bot_data.get("user_data", {})
+    premium   = {}
+    for uid_str, ud in all_users.items():
+        plan    = ud.get("plan", "TRIAL").upper()
+        expires = ud.get("expires", 0)
+        if plan != "TRIAL" and expires > now:
+            premium[uid_str] = {
+                "plan":         plan,
+                "expires":      expires,
+                "name":         ud.get("name", ""),
+                "username":     ud.get("username", ""),
+                "last_receipt": ud.get("last_receipt", ""),
+                "granted_at":   ud.get("granted_at", 0),
+            }
+    try:
+        with open(PREMIUM_FILE, "w", encoding="utf-8") as f:
+            json.dump(premium, f, indent=2)
+        logger.info(f"[PREMIUM] JSON backup: {len(premium)} user(s) → {PREMIUM_FILE}")
+    except Exception as exc:
+        logger.warning(f"[PREMIUM] JSON save failed: {exc}")
+
+
+async def _save_premium(bot_data: dict) -> None:
+    """Save to JSON backup AND instantly write to Postgres.
+    Call this (with await) after every plan grant or removal.
+    The JSON write runs in a thread pool so it never blocks the event loop."""
+    await asyncio.to_thread(_save_premium_file, bot_data)          # JSON backup (non-blocking)
+    await db.save_all_now(bot_data.get("user_data", {}))           # Postgres instant save
+
+
+def _load_premium_file(bot_data: dict) -> None:
+    """Restore premium users from PREMIUM_FILE into bot_data on startup."""
+    if not os.path.exists(PREMIUM_FILE):
+        logger.info(f"[PREMIUM] {PREMIUM_FILE} not found — starting fresh.")
+        return
+    try:
+        with open(PREMIUM_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except Exception as exc:
+        logger.warning(f"[PREMIUM] Load failed: {exc}")
+        return
+
+    now       = time.time()
+    user_data = bot_data.setdefault("user_data", {})
+    restored  = 0
+    for uid_str, pdata in saved.items():
+        expires = pdata.get("expires", 0)
+        if expires <= now:
+            continue                       # already expired — skip
+        plan = pdata.get("plan", "TRIAL").upper()
+        if plan == "TRIAL":
+            continue
+        ud = user_data.setdefault(uid_str, {})
+        ud["plan"]    = plan
+        ud["expires"] = expires
+        if pdata.get("name"):         ud.setdefault("name",         pdata["name"])
+        if pdata.get("username"):     ud.setdefault("username",     pdata["username"])
+        if pdata.get("last_receipt"): ud.setdefault("last_receipt", pdata["last_receipt"])
+        if pdata.get("granted_at"):   ud.setdefault("granted_at", pdata["granted_at"])
+        restored += 1
+
+    logger.info(f"[PREMIUM] Restored {restored} premium user(s) from {PREMIUM_FILE}")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FORCE-JOIN LIST
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FORCE_JOIN_LIST = [
+    ("Batcardchk",      "https://t.me/Batcardchk",      "📢 Main Channel"),
+    ("batcardchkGroup", "https://t.me/batcardchkGroup",  "👥 Main Group"),
+]
+
+_config_fc = [(u, l) for u, l in FORCE_CHANNELS]
+for _fc_entry in FORCE_JOIN_LIST:
+    _uname = _fc_entry[0]
+    if not any(_uname == u for u, _ in _config_fc):
+        _config_fc.append((_uname, _fc_entry[1]))
+
+FORCE_JOIN_FULL: list[tuple[str, str, str]] = []
+_label_map = {e[0]: e[2] for e in FORCE_JOIN_LIST}
+for _uname, _link in _config_fc:
+    _label = _label_map.get(_uname, f"📢 @{_uname}")
+    FORCE_JOIN_FULL.append((_uname, _link, _label))
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# INSTANCE LOCK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_lock_file_handle = None
+
+def _stale_lock() -> bool:
+    """Return True if the lock file exists but the recorded PID is dead."""
+    try:
+        with open(LOCK_FILE, "r") as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)          # signal 0 = just check existence
+        return False             # process is alive → not stale
+    except (FileNotFoundError, ValueError):
+        return True              # no file or bad content → treat as stale
+    except ProcessLookupError:
+        return True              # PID doesn't exist → stale
+    except PermissionError:
+        return False             # PID exists, different owner → treat as live
+
+def acquire_instance_lock() -> bool:
+    global _lock_file_handle
+    if _stale_lock():
+        try:
+            os.unlink(LOCK_FILE)
+        except FileNotFoundError:
+            pass
+    try:
+        _lock_file_handle = open(LOCK_FILE, "w")
+        fcntl.flock(_lock_file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file_handle.write(str(os.getpid()))
+        _lock_file_handle.flush()
+        return True
+    except (IOError, OSError):
+        return False
+
+def release_instance_lock():
+    global _lock_file_handle
+    if _lock_file_handle:
+        try:
+            fcntl.flock(_lock_file_handle, fcntl.LOCK_UN)
+            _lock_file_handle.close()
+            os.unlink(LOCK_FILE)
+        except Exception:
+            pass
+        _lock_file_handle = None
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SERIF BOLD ITALIC UNICODE FONT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def B(text: str) -> str:
+    styled = []
+    for char in str(text):
+        if "A" <= char <= "Z":
+            styled.append(chr(0x1D468 + ord(char) - ord("A")))
+        elif "a" <= char <= "z":
+            styled.append(chr(0x1D482 + ord(char) - ord("a")))
+        elif "0" <= char <= "9":
+            styled.append(chr(0x1D7CE + ord(char) - ord("0")))
+        else:
+            styled.append(char)
+    return "".join(styled)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HELPERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_styled_plan(raw_plan: str) -> str:
+    p = raw_plan.upper()
+    if p == "CORE":  return B("Core")
+    if p == "ELITE": return B("Elite")
+    if p == "ROOT":  return B("Root")
+    return B("Trial")
+
+def get_plan_icon(raw_plan: str) -> str:
+    return "👑" if raw_plan.upper() in ("CORE", "ELITE", "ROOT") else ""
+
+def get_user_data(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
+    uid = str(user_id)
+    if "user_data" not in context.bot_data:
+        context.bot_data["user_data"] = {}
+    if uid not in context.bot_data["user_data"]:
+        context.bot_data["user_data"][uid] = {
+            "name": "User", "first_name": "User", "last_name": "", "username": "",
+            "language_code": "en", "joined": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "last_active": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "credits": 150, "plan": "TRIAL", "expires": 0, "pre_premium_credits": 0,
+            "total_refs": 0, "total_checks": 0, "approved_checks": 0, "declined_checks": 0,
+            "last_gate": "N/A", "last_card": "N/A", "codes_redeemed": 0, "keys_redeemed": 0,
+            "banned": False, "total_charged": 0,
+            "daily_activity": {}, "daily_check_date": "", "daily_checks": 0,
+            "memberships": {}, "hide": False,
+        }
+    context.bot_data["user_data"][uid].setdefault("hide", False)
+    return context.bot_data["user_data"][uid]
+
+def _update_user_meta(ud: dict, user) -> None:
+    ud["first_name"]  = user.first_name or "User"
+    ud["last_name"]   = user.last_name or ""
+    ud["name"]        = user.full_name or user.first_name or "User"
+    ud["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if user.username: ud["username"] = user.username
+    if getattr(user, "language_code", None): ud["language_code"] = user.language_code
+
+def is_user_premium(ud: dict) -> bool:
+    """Returns True if the user has an active (non-expired) premium plan.
+
+    Side-effects on expiry:
+      • plan  → "TRIAL"
+      • credits → restored to pre_premium_credits (what they had before buying)
+      • pre_premium_credits → 0
+    Premium users NEVER have credits deducted — they get unlimited checks.
+    """
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    is_prem  = raw_plan != "TRIAL"
+    if is_prem and ud.get("expires", 0) <= time.time():
+        # Premium expired — restore saved credits
+        saved = ud.get("pre_premium_credits", 0)
+        ud["plan"]                = "TRIAL"
+        ud["credits"]             = max(saved, 0)   # never go negative
+        ud["expires"]             = 0
+        ud["pre_premium_credits"] = 0
+        return False
+    return is_prem
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# COOLDOWN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SINGLE_CHECK_COOLDOWN = 25
+
+def get_cooldown_remaining(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> float:
+    store     = context.bot_data.setdefault("cooldown_store", {})
+    last      = store.get(user_id, 0)
+    remaining = SINGLE_CHECK_COOLDOWN - (time.time() - last)
+    return max(0.0, remaining)
+
+def set_cooldown(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    context.bot_data.setdefault("cooldown_store", {})[user_id] = time.time()
+
+def gen_code(length: int = 10) -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+def gen_receipt() -> str:
+    return f"Batamanchk{random.randint(100000, 999999)}-CHK"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SECURE REFERRAL  — HMAC-signed tokens (no forgery)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_REF_SECRET: bytes = BOT_TOKEN.encode("utf-8")
+
+def _ref_token(user_id: int) -> str:
+    """Generate a short HMAC-SHA256 token for user_id.
+    Format: {user_id}_{16-char hex signature}
+    Anyone who guesses/modifies the user_id will get a bad signature."""
+    msg = str(user_id).encode("utf-8")
+    sig = hmac.new(_REF_SECRET, msg, hashlib.sha256).hexdigest()[:16]
+    return f"{user_id}_{sig}"
+
+def _verify_ref_token(token: str):
+    """Return referrer_id (int) if the token is authentic, else None."""
+    try:
+        uid_str, sig = token.rsplit("_", 1)
+        uid = int(uid_str)
+        expected = hmac.new(_REF_SECRET, str(uid).encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+        if hmac.compare_digest(sig, expected):
+            return uid
+    except Exception:
+        pass
+    return None
+
+def get_referral_link(user_id: int) -> str:
+    return f"https://t.me/{BOT_USERNAME}?start=ref_{_ref_token(user_id)}"
+
+
+def kb_referral(user_id: int) -> RawMarkup:
+    referral_code = _ref_token(user_id)
+    referral_link = get_referral_link(user_id)
+    share_text = (
+        "Join BatCardChk for bot tools, updates, and community support.\n\n"
+        f"Bot: {BOT_LINK}\n"
+        f"Channel: {CHANNEL_LINK}\n"
+        f"Referral code: {referral_code}"
+    )
+    share_url = (
+        "https://t.me/share/url"
+        f"?url={quote(referral_link, safe='')}"
+        f"&text={quote(share_text, safe='')}"
+    )
+    return RawMarkup([
+        [_btn(B("Invite Friends"), url=share_url, style="primary")],
+        [_btn(B("Back"), cb="bmain", style="danger")],
+    ])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# UI — USER CONTROL HUB  (/start)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def ui_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
+    ud           = get_user_data(user.id, context)
+    raw_plan     = ud.get("plan", "TRIAL").upper()
+    expires      = ud.get("expires", 0)
+    now          = time.time()
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0; expires = 0
+    premium      = raw_plan != "TRIAL"
+    credits      = "Unlimited" if premium else str(ud.get("credits", 150))
+    plan_emoji   = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    uname        = escape(f"@{user.username}" if user.username else user.first_name or "User")
+    joined       = ud.get("joined", datetime.now().strftime("%Y-%m-%d")).split(" ")[0]
+    last_active  = ud.get("last_active", "N/A")
+    total_refs   = ud.get("total_refs", 0)
+    total_checks = ud.get("total_checks", 0)
+    ban_status   = f"{E_ERRORS} {B('Banned')}" if ud.get("banned", False) else f"{E_LIVE} {B('Active')}"
+
+    if premium and expires > now:
+        exp_date    = datetime.fromtimestamp(expires).strftime("%Y-%m-%d")
+        rem_d       = int((expires - now) / 86400)
+        rem_h       = int(((expires - now) % 86400) / 3600)
+        expire_line = f"✰ <b>{B('Expires')}</b>   ➔ {exp_date} ({rem_d}d {rem_h}h)"
+    else:
+        expire_line = f"✰ <b>{B('Expires')}</b>   ➔ {B('Never')} ({B('Trial')})"
+
+    lines = [
+        f"⭅ <b>{B('User Control Hub')}</b> ⭆",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"✰ <b>{B('Username')}</b>  ➔ {uname} {plan_emoji}",
+        f"✰ <b>{B('User ID')}</b>   ➔ <code>{user.id}</code>",
+        f"✰ <b>{B('Access')}</b>    ➔ {get_styled_plan(raw_plan)}",
+        f"✰ <b>{B('Status')}</b>    ➔ {ban_status}",
+        f"✰ <b>{B('Credits')}</b>   ➔ {credits}",
+        f"✰ <b>{B('Joined')}</b>    ➔ {joined}",
+        expire_line,
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"✰ <b>{B('Last Active')}</b> ➔ {last_active}",
+        f"✰ <b>{B('Total Checks')}</b> ➔ {total_checks}",
+        f"✰ <b>{B('Referrals')}</b>  ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} {B('credits')})",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"{E_DEV} {B('Version')} ➔ {VERSION}  |  <a href='{DEV_LINK}'>{B('Batamanchk')}</a> {E_PRO}",
+    ]
+    return "\n".join(lines)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# UI — FULL PROFILE  (PROFILE button)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def ui_full_profile(user, context: ContextTypes.DEFAULT_TYPE) -> str:
+    ud            = get_user_data(user.id, context)
+    raw_plan      = ud.get("plan", "TRIAL").upper()
+    expires       = ud.get("expires", 0)
+    now           = time.time()
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0; expires = 0
+    premium       = raw_plan != "TRIAL"
+    credits       = "Unlimited" if premium else str(ud.get("credits", 150))
+    plan_emoji    = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    uname         = escape(f"@{user.username}" if user.username else user.first_name or "User")
+    joined        = ud.get("joined", "N/A")
+    last_active   = ud.get("last_active", "N/A")
+    total_refs    = ud.get("total_refs", 0)
+    today_str     = datetime.now().strftime("%Y-%m-%d")
+    today_count   = ud.get("daily_checks", 0) if ud.get("daily_check_date") == today_str else 0
+    memberships   = len(ud.get("memberships", {}))
+    total_checks  = ud.get("total_checks", 0)
+    approved      = ud.get("approved_checks", 0)
+    declined      = ud.get("declined_checks", 0)
+    last_gate     = ud.get("last_gate", "N/A")
+    last_card     = ud.get("last_card", "N/A")
+    codes_red     = ud.get("codes_redeemed", 0)
+    keys_red      = ud.get("keys_redeemed", 0)
+    ban_status    = f"{E_ERRORS} {B('Banned')}" if ud.get("banned", False) else f"{E_LIVE} {B('Active')}"
+    approval_rate = f"{(approved / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
+
+    if premium and expires > now:
+        exp_date     = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+        rem_d        = int((expires - now) / 86400)
+        rem_h        = int(((expires - now) % 86400) / 3600)
+        expire_line  = (
+            f"✰ <b>{B('Expires')}</b>   ➔ {exp_date}\n"
+            f"✰ <b>{B('Time Left')}</b>  ➔ {rem_d}d {rem_h}h"
+        )
+        last_receipt = ud.get("last_receipt")
+        if last_receipt:
+            expire_line += f"\n✰ <b>{B('Receipt')}</b>   ➔ <code>{last_receipt}</code>"
+    else:
+        expire_line = f"✰ <b>{B('Expires')}</b>   ➔ {B('Never')} ({B('Trial')})"
+
+    lines = [
+        f"⭅ <b>{B('User Profile')}</b> ⭆",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"✰ <b>{B('Username')}</b>  ➔ {uname} {plan_emoji}",
+        f"✰ <b>{B('User ID')}</b>   ➔ <code>{user.id}</code>",
+        f"✰ <b>{B('Access')}</b>    ➔ {get_styled_plan(raw_plan)}",
+        f"✰ <b>{B('Status')}</b>    ➔ {ban_status}",
+        f"✰ <b>{B('Credits')}</b>   ➔ {credits}",
+        f"✰ <b>{B('Joined')}</b>    ➔ {joined}",
+        expire_line,
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"✰ <b>{B('Last Active')}</b>  ➔ {last_active}",
+        f"✰ <b>{B('Daily Checks')}</b> ➔ {today_count} {B('cards today')}",
+        f"✰ <b>{B('Group Memberships')}</b> ➔ {memberships}",
+        f"✰ <b>{B('Total Checks')}</b> ➔ {total_checks}",
+        f"✰ <b>{B('Approved')}</b>   ➔ {approved}",
+        f"✰ <b>{B('Declined')}</b>    ➔ {declined}",
+        f"✰ <b>{B('Approval Rate')}</b> ➔ {approval_rate}",
+        f"✰ <b>{B('Last Gate')}</b>   ➔ {last_gate}",
+        f"✰ <b>{B('Last BIN')}</b>    ➔ <code>{last_card}</code>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"✰ <b>{B('Referrals')}</b>   ➔ {total_refs} (+{total_refs * REFERRAL_CREDITS} {B('credits')})",
+        f"✰ <b>{B('Codes')}</b>      ➔ {codes_red} {B('redeemed')}",
+        f"✰ <b>{B('Keys')}</b>       ➔ {keys_red} {B('redeemed')}",
+    ]
+
+    # ── Daily mass limit section (trial users only) ───────────────
+    if not premium:
+        _today      = datetime.now().strftime("%Y-%m-%d")
+        _msh_date   = ud.get("msh_daily_date", "")
+        _msh_used   = ud.get("msh_daily_cards", 0) if _msh_date == _today else 0
+        _msh_remain = max(0, 500 - _msh_used)
+        _msh_status = (
+            f"✅ Available ({_msh_remain} cards left)"
+            if _msh_used == 0
+            else (
+                f"🔒 Used ({_msh_used}/500 cards) — resets tomorrow"
+                if _msh_used >= 500
+                else f"⚡ Partial ({_msh_used}/500 used, {_msh_remain} left)"
+            )
+        )
+        lines += [
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"📊 <b>{B('Mass Checker Limits')} ({B('Trial')})</b>",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"✰ <b>{B('Daily Limit')}</b>  ➔ 500 {B('cards per day')}",
+            f"✰ <b>{B('Used Today')}</b>  ➔ {_msh_used} {B('cards')}",
+            f"✰ <b>{B('Remaining')}</b>   ➔ {_msh_remain} {B('cards')}",
+            f"✰ <b>{B('Status')}</b>     ➔ {_msh_status}",
+            f"✰ <b>{B('Credits')}</b>    ➔ {ud.get('credits', 0)} ({B('1 credit = 1 card')})",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+    else:
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+
+    lines.append(f"{E_DEV} {B('Version')} ➔ {VERSION}  |  <a href='{DEV_LINK}'>{B('Batamanchk')}</a> {E_PRO}")
+    return "\n".join(lines)
+
+def ui_start_screen(user, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Dashboard shown when a user opens the bot."""
+    ud       = get_user_data(user.id, context)
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    expires  = ud.get("expires", 0)
+    now      = time.time()
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0
+    premium  = raw_plan != "TRIAL"
+    credits  = "∞" if premium else str(ud.get("credits", 150))
+    uname    = escape(user.first_name or "User")
+    access   = get_styled_plan(raw_plan)
+    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    dev_emoji = tg_emoji(DEV_EMOJI_ID, "👑")
+
+    return (
+        f"<b>[❄️] {B('Welcome to Batmancardchk')} {E_PRO}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"{E_USER} <b>{B('User')}</b>       ➳ {uname}\n"
+        f"{E_USER} <b>{B('User ID')}</b>    ➳ <code>{user.id}</code>\n"
+        f"{plan_emoji} <b>{B('Access')}</b>     ➳ {access}\n"
+        f"{E_CARD} <b>{B('Credits')}</b>    ➳ {credits}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<b>{B('Choose an option below.')}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"{dev_emoji} <b>{B('Dev')}</b> ➳ "
+        f"<a href='{DEV_LINK}'>{B('Batmancardchk')}</a> 🦇\n"
+        f"⚙️ <b>{B(VERSION)}</b>"
+    )
+
+
+async def welcome_new_members(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Welcome newly joined members in the configured community group."""
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat or not message.new_chat_members:
+        return
+
+    expected_username = GROUP_USERNAME.lstrip("@").lower()
+    if not chat.username or chat.username.lower() != expected_username:
+        return
+
+    await _observe_raid_joins(chat, message.new_chat_members, context)
+    for member in message.new_chat_members:
+        if member.is_bot:
+            continue
+
+        member_name = escape(member.full_name or member.first_name or "Member")
+        member_link = (
+            f'<a href="tg://user?id={member.id}"><b>{member_name}</b></a>'
+        )
+        welcome_text = (
+            f"<b>[❆] Welcome to Batmancardchk Group 💎</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 Welcome, {member_link}!\n\n"
+            f"<b>We are happy to have you here.</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ <b>Community</b> ➳ "
+            f"<a href='{GROUP_LINK}'>Batmancardchk</a> ⭐"
+        )
+        try:
+            await _send_as_media(
+                context.bot,
+                chat.id,
+                get_random_live_emoji(),
+                caption=welcome_text,
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.warning("Welcome sticker failed for uid=%s: %s", member.id, exc)
+            await message.reply_text(
+                welcome_text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+
+
+def gate_info_text(gate_name: str, cmd: str, cost: int) -> str:
+    return (
+        f"━━━━━━━━━━━━━━━━━\n<b>{gate_name}</b>\n━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>Cost</b>    ➳ {cost} Credit(s) per check\n\n"
+        f"<b>Usage:</b>\n<code>/{cmd} cc|mm|yy|cvv</code>\n\n"
+        f"<b>Example:</b>\n<code>/{cmd} 4111111111111111|12|2026|123</code>\n\n"
+        "━━━━━━━━━━━━━━━━━"
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FORCE-SUB CACHE & HELPERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_force_sub_cache: dict = {}
+# Cache TTL constants (seconds)
+_FS_PASS_TTL  = 300   # confirmed joined: recheck after 5 min
+_FS_FAIL_TTL  = 30    # not joined yet: recheck after 30 s (fast re-verify)
+
+async def check_force_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
+    """
+    Returns a list of (uname, link, label) tuples for channels the user
+    has NOT yet joined.  Empty list = all joined → allow through.
+    """
+    if _is_admin(user_id):
+        return []
+
+    cached = _force_sub_cache.get(user_id)
+    if cached:
+        passed, ts, cached_list = cached
+        ttl = _FS_PASS_TTL if passed else _FS_FAIL_TTL
+        if time.time() - ts < ttl:
+            return cached_list   # [] if passed, list of missing if not
+
+    not_joined = []
+    for uname, link, label in FORCE_JOIN_FULL:
+        try:
+            member = await context.bot.get_chat_member(f"@{uname}", user_id)
+            if member.status in ("left", "kicked", "restricted"):
+                not_joined.append((uname, link, label))
+        except Forbidden:
+            # Bot is not an admin of this channel — cannot verify membership.
+            # Treat as NOT joined so users are forced to join (strict mode).
+            logger.warning(
+                f"[FORCE-SUB] Bot has no admin rights in @{uname}. "
+                "Add the bot as administrator to enable membership checks."
+            )
+            not_joined.append((uname, link, label))
+        except BadRequest as e:
+            err = str(e).lower()
+            # Telegram sends these when the user is not in the chat
+            if any(x in err for x in (
+                "user not found", "user_not_participant",
+                "participant_id_invalid", "chat not found",
+                "not a member", "not found",
+            )):
+                not_joined.append((uname, link, label))
+        except Exception as exc:
+            logger.debug(f"[FORCE-SUB] check error for @{uname}: {exc}")
+            # Unknown error — don't block the user, skip this channel
+            pass
+
+    if not not_joined:
+        _force_sub_cache[user_id] = (True, time.time(), [])
+    else:
+        _force_sub_cache[user_id] = (False, time.time(), not_joined)
+    return not_joined
+
+def _force_join_text(not_joined: list) -> str:
+    total  = len(FORCE_JOIN_FULL)
+    joined = total - len(not_joined)
+    lines  = [
+        f"⭅ <b>{B('Join Required')}</b> ⭆",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "To use this bot you must join <b>all</b> our",
+        "channels and groups listed below.",
+        "",
+        f"📊 <b>Progress:</b>  {joined}/{total} joined",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for uname, _link, label in not_joined:
+        lines.append(f"  ✗  {label}  <code>@{uname}</code>")
+    lines += [
+        "━━━━━━━━━━━━━━━━━━━━",
+        "👇 Click each button below to join,",
+        "   then press <b>✅ Verify</b>.",
+    ]
+    return "\n".join(lines)
+
+def kb_force_sub(not_joined: list) -> RawMarkup:
+    rows = []
+    for uname, link, label in not_joined:
+        rows.append([_btn(f"{label}  ➳  @{uname}", url=link, style="primary")])
+    rows.append([_btn("✅  I Joined All — Verify Now", cb="check_sub", style="primary")])
+    return RawMarkup(rows)
+
+
+async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    not_joined = await check_force_sub(update.effective_user.id, context)
+    if not_joined:
+        await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
+        return False
+    return True
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BAN CHECK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def require_not_banned(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user:
+        return True
+    user_id = user.id
+    if _is_admin(user_id):
+        return True
+    ud = get_user_data(user_id, context)
+    if ud.get("banned", False):
+        try:
+            await update.effective_message.reply_text(
+                f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
+                "You have been banned from using this bot.\n"
+                "Contact support if you think this is a mistake.\n"
+                "──────────",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return False
+    return True
+
+
+async def banned_update_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Globally stop banned users before any command or private update runs."""
+    user = update.effective_user
+    if not user or _is_admin(user.id):
+        return
+    if not get_user_data(user.id, context).get("banned", False):
+        return
+    message = update.effective_message
+    if message:
+        try:
+            await message.reply_text(
+                f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
+                "You have been banned from using this bot.\n"
+                "Contact support if you think this is a mistake.\n──────────",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+    raise ApplicationHandlerStop
+
+
+async def banned_callback_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Globally stop every inline-button action made by a banned user."""
+    query = update.callback_query
+    if not query or not query.from_user or _is_admin(query.from_user.id):
+        return
+    if not get_user_data(query.from_user.id, context).get("banned", False):
+        return
+    try:
+        await query.answer(
+            "You are banned from using this bot. Contact support if this is a mistake.",
+            show_alert=True,
+        )
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CARD CHECK RESULT  — mst.py _build_hit_dm() style
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def build_check_result(card_raw: str, gate_name: str, raw_response: str,
+                       bin_data: dict, username: str, plan: str,
+                       time_taken: str, is_approved: bool,
+                       is_timeout: bool = False, is_error: bool = False) -> str:
+    """Clean result card — mst.py style with [❆] status line and tg-emoji tags."""
+    from config import (CHANNEL_LINK, CARD_EMOJI_ID, TIME_EMOJI_ID, USER_EMOJI_ID,
+                        DEV_EMOJI_ID, PRO_EMOJI_ID, PROG_LIVE_EMOJI_ID, PROG_DEAD_EMOJI_ID)
+
+    ch_link  = f'<a href="{CHANNEL_LINK}">[❆]</a>'
+    live_eid = get_random_live_emoji()
+
+    if is_timeout:
+        status_line = '<b>⏱ TIMEOUT</b>'
+        resp_te     = f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⏱</tg-emoji>'
+    elif is_error:
+        status_line = '<b>⚠️ ERROR</b>'
+        resp_te     = f'<tg-emoji emoji-id="{PROG_ERRORS_EMOJI_ID}">⚠️</tg-emoji>'
+    elif is_approved:
+        status_line = (f'<b>{ch_link} HIT LIVE '
+                       f'<tg-emoji emoji-id="{live_eid}">✅</tg-emoji></b>')
+        resp_te     = f'<tg-emoji emoji-id="{PROG_LIVE_EMOJI_ID}">✅</tg-emoji>'
+    else:
+        status_line = (f'<b>{ch_link} DEAD DECLINED '
+                       f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji></b>')
+        resp_te     = f'<tg-emoji emoji-id="{PROG_DEAD_EMOJI_ID}">❌</tg-emoji>'
+
+    plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
+    plan_label = get_styled_plan(plan)
+
+    bin_txt = "N/A"
+    if bin_data and not bin_data.get("error"):
+        scheme  = str(bin_data.get("scheme", "N/A")).upper()
+        bank    = bin_data.get("bank", "N/A")
+        country = str(bin_data.get("country", "N/A")).upper()
+        flag    = bin_data.get("country_emoji", "")
+        bin_txt = f"{scheme} - {bank} - {flag} {country}".strip("- ")
+
+    uname_display = escape(username)
+
+    return (
+        f'{status_line}\n'
+        f'\n'
+        f'<b><tg-emoji emoji-id="{CARD_EMOJI_ID}">💳</tg-emoji></b>\n'
+        f'<b>   ⤷ <code>{card_raw}</code></b>\n'
+        f'<b>Gate ➛ {gate_name}</b>\n'
+        f'<b>──────────</b>\n'
+        f'<b>{resp_te} Resp ➛ {escape(raw_response)}</b>\n'
+        f'<b>Bin ➛ <code>{bin_txt}</code></b>\n'
+        f'<b>──────────</b>\n'
+        f'<b><tg-emoji emoji-id="{TIME_EMOJI_ID}">⏱</tg-emoji> ➛ {time_taken}s</b>\n'
+        f'<b><tg-emoji emoji-id="{USER_EMOJI_ID}">👤</tg-emoji> ➛ {uname_display} '
+        f'{plan_emoji} ({plan_label})</b>\n'
+        f'<b><tg-emoji emoji-id="{DEV_EMOJI_ID}">⚡</tg-emoji> ➛ '
+        f'<a href="{DEV_LINK}">Batmancardchk</a> '
+        f'<tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# KEYBOARDS  — mst.py coloured button style
+#   style="primary"  → blue button
+#   style="danger"   → red button
+#   (no style)       → default grey
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def kb_main(user_id: int) -> RawMarkup:
+    return RawMarkup([
+        [_btn(B("Checker"),  cb="mgates",    style="primary"),
+         _btn(B("Buy Now"),  cb="mprice",    style="primary")],
+        [_btn(B("Referral"), cb="mreferral", style="primary"),
+         _btn(B("Profile"),  cb="mprofile",  style="primary")],
+    ])
+
+def kb_back(cb: str) -> RawMarkup:
+    return RawMarkup([[_btn(B("BACK"), cb=cb, style="primary")]])
+
+def kb_profile() -> RawMarkup:
+    return RawMarkup([
+        [_btn(B("Buy"), cb="mprice", style="primary"),
+         _btn(B("Support"), url=SUPPORT_LINK, style="primary")],
+        [_btn(B("Back"), cb="bmain", style="primary")],
+    ])
+
+def kb_price() -> RawMarkup:
+    return RawMarkup([
+        [_btn(B("Core $1.50 — 1 Day"), cb="pay1d", style="primary")],
+        [_btn(B("Core $8 — 7 Days"), cb="pay10", style="primary")],
+        [_btn(B("Elite $12 — 15 Days"), cb="pay15", style="primary")],
+        [_btn(B("Root $25 — 30 Days"), cb="pay30", style="primary")],
+        [_btn(B("BACK"),          cb="bmain")],
+    ])
+
+def kb_payment() -> RawMarkup:
+    return RawMarkup([
+        [_btn(B("CONTACT SUPPORT"), url=SUPPORT_LINK, style="primary")],
+        [_btn(B("BACK"), cb="mprice")],
+    ])
+
+
+def kb_crypto_methods(
+    plan_key: str,
+    method_keys: list[str] | None = None,
+) -> RawMarkup:
+    def coin(method_key: str) -> dict:
+        method = payments.PAYMENT_METHODS[method_key]
+        return _btn(
+            B(method["label"]),
+            cb=f"wlpay:{plan_key}:{method_key}",
+            style="primary",
+        )
+
+    available = method_keys if method_keys is not None else list(payments.PAYMENT_METHODS)
+    rows = [
+        [coin(key) for key in available[index:index + 2]]
+        for index in range(0, len(available), 2)
+    ]
+    rows.append([_btn(B("BACK"), cb="mprice")])
+    return RawMarkup(rows)
+
+def kb_gate_main() -> RawMarkup:
+    return RawMarkup([
+        [_btn("⚡ " + B("SHOPIFY MASS"), cb="imsh",  style="primary"),
+         _btn("🔥 " + B("SHOPIFY SINGLE"), cb="ish", style="primary")],
+        [_btn(B("ALLCM"), cb="allcm_show", icon=PROG_LIVE_EMOJI_ID)],
+        [_btn("🔙 " + B("BACK"),    cb="bmain")],
+    ])
+
+
+def kb_upgrade() -> RawMarkup:
+    return RawMarkup([
+        [_btn("💎 " + B("BUY PREMIUM"), cb="mprice",     style="primary")],
+        [_btn(B("SUPPORT"),             url=SUPPORT_LINK)],
+    ])
+
+def kb_cooldown() -> RawMarkup:
+    return RawMarkup([
+        [_btn("💎 " + B("BUY PREMIUM") + " — No Cooldown", cb="mprice", style="primary")],
+    ])
+
+def kb_result_raw(is_premium: bool = False) -> RawMarkup:
+    if is_premium:
+        return RawMarkup([
+            [_btn("🤖 " + B("Open Bot"), url=BOT_LINK,      style="primary"),
+             _btn("📢 " + B("Channel"),  url=CHANNEL_LINK,  style="primary")],
+        ])
+    return RawMarkup([
+        [_btn("💎 " + B("BUY PREMIUM") + " — Unlimited Checks", cb="mprice", style="primary")],
+        [_btn("📢 @Batcardchk", url=CHANNEL_LINK)],
+    ])
+
+def kb_msh_result(task_id: str, has_approved: bool, is_premium: bool) -> RawMarkup:
+    """End-of-check keyboard: download buttons + optional upgrade row."""
+    rows = []
+    # Row 1: download buttons
+    dl_row = []
+    if has_approved:
+        dl_row.append(_btn("📄 Approved", cb=f"dl_approved_{task_id}", style="primary"))
+    dl_row.append(_btn("📋 ALL Cards", cb=f"dl_all_{task_id}"))
+    rows.append(dl_row)
+    # Row 2: upgrade nudge for trial users
+    if not is_premium:
+        rows.append([_btn("💎 " + B("BUY PREMIUM") + " — Unlimited", cb="mprice", style="primary")])
+    return RawMarkup(rows)
+
+def kb_fb_owner(key: str) -> RawMarkup:
+    return RawMarkup([[
+        _btn("✅ Approve", cb=f"fb_ok_{key}", style="primary"),
+        _btn("❌ Decline", cb=f"fb_no_{key}", style="danger"),
+    ]])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CMD PAGES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CMD_TOTAL_PAGES = 5
+CMD_PAGES = {
+    1: (
+        f"⭅ <b>{B('Commands')}</b> ⭆\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>{B('Available Modules')}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>[+] 🔥 {B('Single Checker')}</b>  (2)\n"
+        f"<b>[+] ⚡ {B('Mass Checker')}</b>   (3)\n"
+        f"<b>[+] 👑 {B('Mass Module')}</b>    (4)  <i>{B('Premium')}</i>\n"
+        f"<b>[+] 🛠 {B('Tools')}</b>          (4)\n"
+        f"<b>[+] 👤 {B('Account')}</b>        (3)\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>{B('Use Next to explore each module')}</i>"
+    ),
+    2: (
+        f"⭅ <b>🔥 {B('Single Checker')}</b> ⭆\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>────────────</b>\n"
+        "<b>Gate</b>    ➳ Shopify 0-20$\n"
+        "<b>Command</b> ➳ <code>/sh</code>\n"
+        "<b>Limit</b>   ➳ Unlimited\n"
+        "<b>Type</b>    ➳ Single Checker\n"
+        "<b>Cost</b>    ➳ ∞ (Premium)\n"
+        "<b>Credits</b> ➳ ∞\n"
+        "<b>Status</b>  ➳ ✅ Available\n"
+        "<b>────────────</b>\n"
+        "Usage: <code>/sh cc|mm|yy|cvv</code>"
+    ),
+    3: (
+        f"⭅ <b>⚡ {B('Mass Checker')}</b> ⭆\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>────────────</b>\n"
+        "<b>Gate</b>    ➳ Shopify 0-20$\n"
+        "<b>Command</b> ➳ <code>/msh</code>\n"
+        "<b>Limit</b>   ➳ Unlimited\n"
+        "<b>Type</b>    ➳ Mass Checker\n"
+        "<b>Stop</b>    ➳ Button\n"
+        "<b>Cost</b>    ➳ ∞ (Premium)\n"
+        "<b>Credits</b> ➳ ∞\n"
+        "<b>Status</b>  ➳ ✅ Available\n"
+        "<b>────────────</b>\n"
+        "Reply to a .txt file → <code>/msh</code>"
+    ),
+    4: (
+        f"⭅ <b>👑 {B('Mass Module')}</b> ⭆\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔒 <b>Premium Plan Required</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>/msh</b>  ➳ Shopify Mass 0-20$\n"
+        "       Limit ➳ 5000 cards (trial: 1 credit = 1 card)\n"
+        "       Reply to a .txt file → <code>/msh</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Upgrade via /buy to unlock these gates</i>"
+    ),
+    5: (
+        f"⭅ <b>🛠 {B('Tools')}</b> ⭆\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>/bin</b>   ➳ BIN Lookup\n"
+        "        Usage: <code>/bin 411111</code>\n\n"
+        "<b>/split</b> ➳ Split Text Files\n"
+        "        Usage: reply to a <code>.txt</code> file with <code>/split</code>\n\n"
+        "<b>/ping</b>  ➳ Bot Speed Test\n"
+        "        Usage: <code>/ping</code>\n\n"
+        "<b>/rm</b>    ➳ Redeem Code / Key\n"
+        "        Usage: <code>/rm CODE</code>\n\n"
+        "<b>/fb</b>    ➳ Submit Feedback\n"
+        "        Usage: <code>/fb</code> (reply to photo/video)\n\n"
+        "<b>/refer</b> ➳ Refer & Earn\n"
+        "        Usage: <code>/refer</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    ),
+    6: (
+        f"⭅ <b>👤 {B('Account')}</b> ⭆\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>/start</b> ➳ Open Dashboard\n\n"
+        "<b>/buy</b>  ➳ View Premium Plans\n\n"
+        "<b>/refer</b> ➳ Referral Program\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>{E_PRO} How Credits Work</b>\n"
+        "• Trial users start with 150 credits\n"
+        "• Each gate check costs 1 credit\n"
+        "• Earn credits by referring friends\n"
+        "• Premium = Unlimited credits 👑\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    ),
+}
+
+def kb_cmd_nav(page: int) -> RawMarkup:
+    nav_row = []
+    if page > 1:
+        nav_row.append(_btn("◀ " + B("PREV"), cb=f"cmd_pg_{page - 1}", style="primary"))
+    nav_row.append(_btn(f"📄 {page}/{CMD_TOTAL_PAGES}", cb="cmd_pg_noop"))
+    if page < CMD_TOTAL_PAGES:
+        nav_row.append(_btn(B("NEXT") + " ▶", cb=f"cmd_pg_{page + 1}", style="primary"))
+    return RawMarkup([
+        nav_row,
+        [_btn("✖ " + B("CLOSE"), cb="bmain", style="danger")],
+    ])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# REFERRAL SYSTEM
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def process_referral(new_user_id: int, referrer_id: int,
+                            context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if new_user_id == referrer_id: return False
+    referred_set = context.bot_data.setdefault("referred_users", set())
+    if new_user_id in referred_set: return False
+    referrer_ud = context.bot_data.get("user_data", {}).get(str(referrer_id))
+    if referrer_ud is None: return False
+    referred_set.add(new_user_id)
+    referrer_ud["credits"]    = referrer_ud.get("credits", 0) + REFERRAL_CREDITS
+    referrer_ud["total_refs"] = referrer_ud.get("total_refs", 0) + 1
+    try:
+        await context.bot.send_message(
+            chat_id=referrer_id,
+            text=(
+                f"<b>{E_LIVE} {B('Referral Bonus')}</b>\n──────────\n"
+                f"Someone joined via your link!\n"
+                f"<b>Credits Added</b>   ➳ +{REFERRAL_CREDITS}\n"
+                f"<b>Total Referrals</b> ➳ {referrer_ud['total_refs']}\n"
+                "──────────"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    return True
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GATE PROCESSING  (single checks)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _api_request(session, url: str, card: str, site: str) -> dict:
+    if "{card}" in url:
+        url = url.replace("{card}", card)
+        async with session.get(url) as resp:
+            try:    data = await resp.json(content_type=None)
+            except: data = {"value": await resp.text()}
+    else:
+        async with session.get(url, params={"cc": card, "site": site}) as resp:
+            try:    data = await resp.json(content_type=None)
+            except: data = {"value": await resp.text()}
+    return data if isinstance(data, dict) else {"value": str(data)}
+
+async def process_gate(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       gate_key: str, gate_name: str):
+    user = update.effective_user
+    if not await require_not_banned(update, context): return
+    if context.bot_data.get("maintenance") and not _is_admin(user.id):
+        await update.message.reply_text(
+            f"<b>{E_ERRORS} {B('Maintenance')}</b>\nBot is under maintenance.", parse_mode="HTML"
+        )
+        return
+    if not context.bot_data.get(f"{gate_key}_on", True):
+        await update.message.reply_text(
+            f"<b>{E_DECLINED} Gate [{gate_name}] is currently OFF.</b>", parse_mode="HTML"
+        )
+        return
+
+    if not await require_membership(update, context): return
+
+    ud      = get_user_data(user.id, context)
+    premium = is_user_premium(ud)
+    _update_user_meta(ud, user)
+
+    if gate_key in PREMIUM_GATES and not premium:
+        await update.message.reply_text(
+            f"<b>{E_PRO} {B('Premium Only')}</b>\n──────────\nUse /buy to upgrade.",
+            parse_mode="HTML", reply_markup=kb_upgrade()
+        )
+        return
+
+    card_raw = None
+    if context.args:
+        card_raw = context.args[0].strip()
+    elif update.message.reply_to_message and update.message.reply_to_message.text:
+        card_raw = update.message.reply_to_message.text.strip()
+
+    if not card_raw:
+        await update.message.reply_text(
+            f"<b>Usage:</b> <code>/{gate_key} cc|mm|yy|cvv</code>", parse_mode="HTML"
+        )
+        return
+
+    if not premium:
+        credits = ud.get("credits", 0)
+        if credits <= 0:
+            # Out of credits — invite to upgrade, don't hard-block the UI
+            await update.message.reply_text(
+                f"<b>{E_PRO} {B('Credits Used Up!')}</b>\n──────────\n"
+                f"You've used all your free credits.\n\n"
+                f"<b>💎 Upgrade to Premium</b> for:\n"
+                f"• Unlimited checks — no credit limit\n"
+                f"• No cooldowns\n"
+                f"• Mass checking without daily caps\n"
+                f"──────────\n"
+                f"Tap <b>Buy Now</b> below to get a plan.",
+                reply_markup=kb_upgrade(), parse_mode="HTML"
+            )
+            return
+
+        remaining = get_cooldown_remaining(user.id, context)
+        if remaining > 0:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} {B('Cooldown')}</b>\n──────────\n"
+                f"Please wait <b>{remaining:.1f}s</b> before your next check.\n\n"
+                f"{E_PRO} <b>Premium removes all cooldowns.</b>\n"
+                "──────────",
+                reply_markup=kb_cooldown(), parse_mode="HTML"
+            )
+            return
+
+        set_cooldown(user.id, context)
+        ud["credits"] = credits - 1   # deduct 1 credit per single check
+
+    api_url  = context.bot_data.get(f"gate_url_{gate_key}") or GATE_URLS.get(gate_key, "")
+    site_url = GATE_SITES.get(gate_key, "example.com")
+    bin_num  = card_raw[:6]
+
+    if not api_url:
+        await update.message.reply_text(
+            f"<b>{E_ERRORS} Gate API not configured.</b>", parse_mode="HTML"
+        )
+        return
+
+    _sp_html = f'<b>🔄 Gate ➳ {gate_name}</b>'
+    msg = await update.message.reply_text(_sp_html, parse_mode="HTML")
+    start_time = time.time()
+    uname      = f"@{user.username}" if user.username else user.first_name or "User"
+    plan       = ud.get("plan", "TRIAL")
+
+    try:
+        timeout = _aiohttp.ClientTimeout(total=API_TIMEOUT)
+        async with _aiohttp.ClientSession(timeout=timeout) as session:
+            results = await asyncio.gather(
+                _api_request(session, api_url, card_raw, site_url),
+                get_bin_info(bin_num),
+                return_exceptions=True,
+            )
+        data     = results[0] if not isinstance(results[0], Exception) else {}
+        bin_data = results[1] if not isinstance(results[1], Exception) else {"error": True}
+        if isinstance(results[0], Exception): raise results[0]
+
+        raw_response = str(
+            data.get("value") or data.get("message") or
+            data.get("Response") or data.get("category") or "ERROR"
+        ).strip()
+        is_approved = any(
+            w in raw_response.lower()
+            for w in ["approved", "captured", "success", "charged", "true"]
+        )
+
+        ud["total_checks"] = ud.get("total_checks", 0) + 1
+        ud["last_gate"]    = gate_name
+        ud["last_card"]    = card_raw[:6] + "xxxxxxxxxx"
+        ud["last_active"]  = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if is_approved: ud["approved_checks"] = ud.get("approved_checks", 0) + 1
+        else:           ud["declined_checks"]  = ud.get("declined_checks", 0) + 1
+        today = datetime.now().strftime("%Y-%m-%d")
+        if ud.get("daily_check_date") != today:
+            ud["daily_check_date"] = today
+            ud["daily_checks"] = 0
+        ud["daily_checks"] = ud.get("daily_checks", 0) + 1
+        await _save_state(context.bot_data)
+        await db.save_user_stats_now(user.id, ud)
+
+        time_taken = f"{time.time() - start_time:.2f}"
+        text = build_check_result(
+            card_raw=card_raw, gate_name=gate_name, raw_response=raw_response,
+            bin_data=bin_data, username=uname, plan=plan,
+            time_taken=time_taken, is_approved=is_approved,
+        )
+        await _edit_custom_html(
+            msg, text, reply_markup=kb_result_raw(premium),
+            disable_web_page_preview=True
+        )
+
+    except asyncio.TimeoutError:
+        if not premium: ud["credits"] = ud.get("credits", 0) + 1
+        time_taken = f"{time.time() - start_time:.2f}"
+        text = build_check_result(
+            card_raw=card_raw, gate_name=gate_name,
+            raw_response="Request Timeout", bin_data={},
+            username=uname, plan=plan, time_taken=time_taken,
+            is_approved=False, is_timeout=True,
+        )
+        await _edit_custom_html(
+            msg, text, reply_markup=kb_result_raw(premium),
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        if not premium: ud["credits"] = ud.get("credits", 0) + 1
+        logger.error(f"Gate [{gate_key}] error: {e}")
+        time_taken = f"{time.time() - start_time:.2f}"
+        text = build_check_result(
+            card_raw=card_raw, gate_name=gate_name,
+            raw_response=str(e)[:120], bin_data={},
+            username=uname, plan=plan, time_taken=time_taken,
+            is_approved=False, is_error=True,
+        )
+        await _edit_custom_html(
+            msg, text, reply_markup=kb_result_raw(premium),
+            disable_web_page_preview=True
+        )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GATE ON/OFF  (owner only)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _gate_toggle(update, context, gate: str, state: bool):
+    if not _is_admin(update.effective_user.id): return
+    context.bot_data[f"{gate}_on"] = state
+    icon = E_LIVE if state else E_DECLINED
+    await update.message.reply_text(
+        f"<b>{icon} Gate [{gate.upper()}] turned {'ON' if state else 'OFF'}.</b>",
+        parse_mode="HTML"
+    )
+
+async def cmd_onsh(u, c):    await _gate_toggle(u, c, "sh",   True)
+async def cmd_offsh(u, c):   await _gate_toggle(u, c, "sh",   False)
+
+
+async def cmd_updatesites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /updatesites — Owner only.
+    Re-probe all sites and report how many are alive.
+    Useful after updating sites.txt or when all cards come back Dead.
+    """
+    user = update.effective_user
+    if not _is_admin(user.id):
+        await update.message.reply_text("❌ Owner only.", parse_mode="HTML")
+        return
+
+    from sh import _PROBE_IN_PROGRESS, PROBE_CONCURRENCY, PROBE_TIMEOUT
+    if _PROBE_IN_PROGRESS:
+        await update.message.reply_text(
+            "⏳ <b>Site probe already running.</b> Please wait.", parse_mode="HTML")
+        return
+
+    all_sites = _load_sites()
+    proxies   = _load_proxies()
+
+    status_msg = await update.message.reply_text(
+        f"🔍 <b>Probing {len(all_sites)} sites...</b>\n"
+        f"Concurrency: {PROBE_CONCURRENCY} | Timeout: {PROBE_TIMEOUT}s per site\n"
+        f"This may take 30–60 seconds.",
+        parse_mode="HTML",
+    )
+
+    edit_count = [0]
+    async def on_progress(done, total):
+        edit_count[0] += 1
+        if edit_count[0] % 3 != 0:   # only edit every 3rd callback (~every 150 sites)
+            return
+        try:
+            await status_msg.edit_text(
+                f"🔍 <b>Probing sites...</b>\n"
+                f"Progress: {done}/{total}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+    working = await probe_all_sites(all_sites, proxies, on_progress=on_progress)
+
+    await status_msg.edit_text(
+        f"✅ <b>Site probe complete!</b>\n\n"
+        f"Total sites: <b>{len(all_sites)}</b>\n"
+        f"✅ Working: <b>{len(working)}</b>\n"
+        f"❌ Dead (404): <b>{len(all_sites) - len(working)}</b>\n\n"
+        f"Bot will now use only the {len(working)} working sites for checks.",
+        parse_mode="HTML",
+    )
+async def cmd_onmsh(u, c):   await _gate_toggle(u, c, "msh",  True)
+async def cmd_offmsh(u, c):  await _gate_toggle(u, c, "msh",  False)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PREMIUM ACTIVATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def send_activation_msg(user_id: int, plan: str, days: int,
+                               context: ContextTypes.DEFAULT_TYPE) -> str:
+    receipt  = gen_receipt()
+    name, username = "Unknown", None
+    try:
+        chat     = await context.bot.get_chat(user_id)
+        name     = chat.first_name or "Unknown"
+        username = chat.username
+    except Exception:
+        pass
+
+    ud = get_user_data(user_id, context)
+    if ud.get("plan", "TRIAL").upper() == "TRIAL":
+        ud["pre_premium_credits"] = ud.get("credits", 150)
+    expires_ts = time.time() + days * 86400
+    ud["name"]         = name
+    ud["plan"]         = plan.upper()
+    ud["expires"]      = expires_ts
+    ud["last_receipt"] = receipt
+    ud["granted_at"]   = time.time()
+    if username: ud["username"] = username
+
+    # Persist premium immediately — JSON backup + instant Postgres write
+    await _save_premium(context.bot_data)
+
+    plan_emoji   = tg_emoji(get_plan_emoji_id(plan), "⭐")
+    exp_date     = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
+    display_name = f"@{username}" if username else name
+    styled       = get_styled_plan(plan)
+
+    txt = (
+        f"<b>{E_LIVE} {B('Access Activated')}</b>\n──────────\n"
+        f"<b>User</b>     ➳ {display_name}\n"
+        f"<b>Access</b>   ➳ {styled} {plan_emoji}\n"
+        f"<b>Days</b>     ➳ {days}\n"
+        f"<b>Credits</b>  ➳ Unlimited\n"
+        f"<b>Expires</b>  ➳ {exp_date}\n"
+        f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
+        f"──────────\nSave this receipt ID.\n{E_DEV} Batamanchk {E_PRO}"
+    )
+    try: await context.bot.send_message(chat_id=user_id, text=txt, parse_mode="HTML")
+    except Exception: pass
+    return receipt
+
+
+async def _activate_oxapay_plan(app: Application, order: dict) -> None:
+    """Sync an atomically committed paid entitlement and notify its user."""
+    user_id = int(order["user_id"])
+    plan = str(order["plan"]).upper()
+    days = int(order["days"])
+    order_id = str(order["order_id"])
+    ud = get_user_data(user_id, app)
+    now = time.time()
+    if ud.get("plan", "TRIAL").upper() == "TRIAL":
+        ud["pre_premium_credits"] = ud.get("credits", 150)
+    expires_ts = float(order["expires"])
+    ud["plan"] = plan
+    ud["expires"] = expires_ts
+    ud["last_receipt"] = order_id
+    ud["granted_at"] = now
+    await asyncio.to_thread(_save_premium_file, app.bot_data)
+
+    plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
+    exp_date = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
+    try:
+        await app.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"<b>{E_LIVE} {B('Payment Confirmed')}</b>\n"
+                "──────────\n"
+                f"<b>Access</b>  ➳ {get_styled_plan(plan)} {plan_emoji}\n"
+                f"<b>Days</b>    ➳ {days}\n"
+                f"<b>Credits</b> ➳ Unlimited\n"
+                f"<b>Expires</b> ➳ {exp_date}\n"
+                f"<b>Receipt</b> ➳ <code>{escape(order_id)}</code>\n"
+                "──────────\n"
+                "Your plan was activated automatically."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning(
+            "[OXAPAY] Plan committed for %s but notification failed: %s",
+            user_id, exc,
+        )
+
+async def resolve_user(target: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
+    target = target.strip().lstrip("@")
+    if target.lstrip("-").isdigit(): return int(target)
+    for attempt in (f"@{target}", target):
+        try: return (await context.bot.get_chat(attempt)).id
+        except Exception: continue
+    all_users    = context.bot_data.get("user_data", {})
+    target_lower = target.lower()
+    for uid_str, ud in all_users.items():
+        stored = ud.get("username", "").lower().lstrip("@")
+        if stored and stored == target_lower: return int(uid_str)
+    return None
+
+async def _grant(uid: int, plan: str, days: int,
+                 update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ud = get_user_data(uid, context)
+    granted_at = time.time()
+    ud["plan"]    = plan
+    ud["expires"] = granted_at + days * 86400
+    ud["granted_at"] = granted_at
+
+    display_name  = ud.get("name", "Unknown")
+    display_uname = ud.get("username", "")
+    try:
+        chat = await context.bot.get_chat(uid)
+        display_name  = chat.first_name or "Unknown"
+        display_uname = chat.username or ""
+    except Exception:
+        pass
+
+    # Persist so this grant survives a bot restart — JSON + Postgres
+    await _save_premium(context.bot_data)
+
+    plan_emoji = tg_emoji(get_plan_emoji_id(plan), "⭐")
+    await update.message.reply_text(
+        f"<b>{E_LIVE} {B('Premium Granted')}</b>\n──────────\n"
+        f"<b>User</b>   ➳ {display_name} (@{display_uname or 'N/A'})\n"
+        f"<b>Access</b> ➳ {get_styled_plan(plan)} {plan_emoji}\n"
+        f"<b>Days</b>   ➳ {days}\n"
+        "──────────",
+        parse_mode="HTML"
+    )
+    await send_activation_msg(uid, plan, days, context)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OWNER COMMANDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            f"<b>{E_DEV} {B('Generate Code / Key')}</b>\n──────────\n"
+            f"<b>Credit Code:</b>\n"
+            f"<code>/gen code &lt;credits&gt;</code>\n"
+            f"<code>/gen code &lt;credits&gt; &lt;count&gt;</code>\n\n"
+            f"<b>Premium Key:</b>\n"
+            f"<code>/gen key &lt;PLAN&gt; &lt;days&gt;</code>\n"
+            f"<code>/gen key &lt;PLAN&gt; &lt;days&gt; &lt;count&gt;</code>\n\n"
+            f"<b>Plans:</b>  CORE | ELITE | ROOT\n\n"
+            f"<b>Examples:</b>\n"
+            f"<code>/gen code 50</code>\n"
+            f"<code>/gen code 100 5</code>\n"
+            f"<code>/gen key ELITE 30</code>\n"
+            f"<code>/gen key ROOT 7 3</code>\n"
+            f"──────────\n"
+            f"Users redeem with: <code>/rm CODE</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    kind = context.args[0].lower()
+
+    if kind == "code":
+        try:
+            value = int(context.args[1])
+            if value <= 0: raise ValueError
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Credits value must be a positive number.</b>", parse_mode="HTML"
+            )
+            return
+        count = 1
+        if len(context.args) >= 3:
+            try:
+                count = int(context.args[2])
+                if count <= 0 or count > 50: raise ValueError
+            except ValueError:
+                await update.message.reply_text(
+                    f"<b>{E_ERRORS} Count must be 1–50.</b>", parse_mode="HTML"
+                )
+                return
+
+        codes_store = context.bot_data.setdefault("codes", {})
+        generated   = []
+        for _ in range(count):
+            code = gen_code()
+            codes_store[code] = {"value": value, "used": False}
+            generated.append(code)
+
+        if count == 1:
+            await update.message.reply_text(
+                f"<b>{E_LIVE} {B('Code Generated')}</b>\n──────────\n"
+                f"<b>Code</b>    ➳ <code>{generated[0]}</code>\n"
+                f"<b>Credits</b> ➳ +{value}\n"
+                f"──────────\n"
+                f"Redeem: <code>/rm {generated[0]}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            lines = [
+                f"<b>{E_LIVE} {B('Codes Generated')}</b>",
+                "──────────",
+                f"<b>Credits each</b> ➳ +{value}",
+                f"<b>Count</b>        ➳ {count}",
+                "──────────",
+            ]
+            for i, c in enumerate(generated, 1):
+                lines.append(f"<b>{i}.</b> <code>{c}</code>")
+            lines += ["──────────", "Redeem with: <code>/rm CODE</code>"]
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    elif kind == "key":
+        if len(context.args) < 3:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Usage:</b> <code>/gen key PLAN DAYS [count]</code>",
+                parse_mode="HTML"
+            )
+            return
+        plan_arg = context.args[1].upper()
+        if plan_arg not in ("CORE", "ELITE", "ROOT"):
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Invalid plan.</b> Use: <b>CORE</b>, <b>ELITE</b>, or <b>ROOT</b>",
+                parse_mode="HTML"
+            )
+            return
+        try:
+            days = int(context.args[2])
+            if days <= 0: raise ValueError
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Days must be a positive number.</b>", parse_mode="HTML"
+            )
+            return
+        count = 1
+        if len(context.args) >= 4:
+            try:
+                count = int(context.args[3])
+                if count <= 0 or count > 50: raise ValueError
+            except ValueError:
+                await update.message.reply_text(
+                    f"<b>{E_ERRORS} Count must be 1–50.</b>", parse_mode="HTML"
+                )
+                return
+
+        keys_store = context.bot_data.setdefault("keys", {})
+        plan_emoji = tg_emoji(get_plan_emoji_id(plan_arg), "⭐")
+        generated  = []
+        for _ in range(count):
+            key = gen_code(12)
+            keys_store[key] = {"plan": plan_arg, "days": days, "used": False}
+            generated.append(key)
+
+        if count == 1:
+            await update.message.reply_text(
+                f"<b>{E_LIVE} {B('Key Generated')}</b>\n──────────\n"
+                f"<b>Key</b>    ➳ <code>{generated[0]}</code>\n"
+                f"<b>Plan</b>   ➳ {get_styled_plan(plan_arg)} {plan_emoji}\n"
+                f"<b>Days</b>   ➳ {days}\n"
+                f"──────────\n"
+                f"Redeem: <code>/rm {generated[0]}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            lines = [
+                f"<b>{E_LIVE} {B('Keys Generated')}</b>",
+                "──────────",
+                f"<b>Plan</b>  ➳ {get_styled_plan(plan_arg)} {plan_emoji}",
+                f"<b>Days</b>  ➳ {days}",
+                f"<b>Count</b> ➳ {count}",
+                "──────────",
+            ]
+            for i, k in enumerate(generated, 1):
+                lines.append(f"<b>{i}.</b> <code>{k}</code>")
+            lines += ["──────────", "Redeem with: <code>/rm KEY</code>"]
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    else:
+        await update.message.reply_text(
+            f"<b>{E_ERRORS} Unknown type.</b> Use: <b>code</b> or <b>key</b>",
+            parse_mode="HTML"
+        )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HOUR-BASED PREMIUM KEYS  /hr  /hr1  /hr2  /hr3
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def cmd_hr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — generate hour-based ELITE premium key(s).
+    Shortcuts : /hr1  /hr2  /hr3  (N hours, 1 key each)
+    Full form : /hr <hours>            (1 key)
+                /hr <hours> <count>    (count keys)
+    Silent for everyone except the owner.
+    """
+    if not _is_admin(update.effective_user.id):
+        return  # silent
+
+    # Determine how many hours from the command name itself (/hr1 etc.) or args
+    cmd_text = (update.message.text or "").split()[0].lstrip("/").lower()
+    if "@" in cmd_text:
+        cmd_text = cmd_text.split("@")[0]
+
+    hours: Optional[int] = None
+    count = 1
+
+    if len(cmd_text) > 2 and cmd_text[:2] == "hr" and cmd_text[2:].isdigit():
+        # /hr1 /hr2 /hr3 … shortcut
+        hours = int(cmd_text[2:])
+        # optional count in first arg
+        if context.args:
+            try:
+                c = int(context.args[0])
+                if 1 <= c <= 50:
+                    count = c
+            except ValueError:
+                pass
+    else:
+        # /hr  N  [count]
+        if not context.args:
+            await update.message.reply_text(
+                f"<b>⏱ Hour Key Generator</b>\n──────────\n"
+                f"<code>/hr &lt;hours&gt;</code>           — 1 key\n"
+                f"<code>/hr &lt;hours&gt; &lt;count&gt;</code>  — multiple keys\n\n"
+                f"<b>Shortcuts:</b>\n"
+                f"<code>/hr1</code> → 1 h  │  <code>/hr2</code> → 2 h  │  <code>/hr3</code> → 3 h\n\n"
+                f"<b>Examples:</b>\n"
+                f"<code>/hr 6</code>      → 6-hour key\n"
+                f"<code>/hr 12 3</code>   → 3 keys, each 12 hours\n"
+                f"──────────\n"
+                f"Users redeem with: <code>/rm KEY</code>",
+                parse_mode="HTML",
+            )
+            return
+        try:
+            hours = int(context.args[0])
+            if hours <= 0:
+                raise ValueError
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "<b>❌ Hours must be a positive whole number.</b>", parse_mode="HTML"
+            )
+            return
+        if len(context.args) >= 2:
+            try:
+                count = int(context.args[1])
+                if count <= 0 or count > 50:
+                    raise ValueError
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>❌ Count must be 1–50.</b>", parse_mode="HTML"
+                )
+                return
+
+    # Build duration label
+    if hours < 24:
+        dur_label = f"{hours} hour{'s' if hours != 1 else ''}"
+    else:
+        d, h = divmod(hours, 24)
+        dur_label = f"{d}d" + (f" {h}h" if h else "")
+
+    keys_store = context.bot_data.setdefault("keys", {})
+    generated  = []
+    for _ in range(count):
+        key = gen_code(12)
+        keys_store[key] = {"plan": "ELITE", "hours": hours, "used": False}
+        generated.append(key)
+
+    plan_emoji = tg_emoji(get_plan_emoji_id("ELITE"), "⭐")
+
+    if count == 1:
+        await update.message.reply_text(
+            f"<b>⏱ Hour Key Generated</b>\n──────────\n"
+            f"<b>Key</b>      ➳ <code>{generated[0]}</code>\n"
+            f"<b>Access</b>   ➳ {get_styled_plan('ELITE')} {plan_emoji}\n"
+            f"<b>Duration</b> ➳ {dur_label}\n"
+            f"──────────\n"
+            f"Redeem: <code>/rm {generated[0]}</code>",
+            parse_mode="HTML",
+        )
+    else:
+        lines = [
+            f"<b>⏱ Hour Keys Generated</b>",
+            f"──────────",
+            f"<b>Access</b>   ➳ {get_styled_plan('ELITE')} {plan_emoji}",
+            f"<b>Duration</b> ➳ {dur_label}",
+            f"<b>Count</b>    ➳ {count}",
+            f"──────────",
+        ]
+        for i, k in enumerate(generated, 1):
+            lines.append(f"<b>{i}.</b> <code>{k}</code>")
+        lines += ["──────────", "Redeem with: <code>/rm KEY</code>"]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            f"<b>{E_DEV} {B('Grant Premium')}</b>\n──────────\n"
+            f"<b>Usage:</b>\n"
+            f"<code>/add @username PLAN DAYS</code>\n"
+            f"<code>/add UserID PLAN DAYS</code>\n\n"
+            f"<b>Plans:</b>  CORE | ELITE | ROOT\n\n"
+            f"<b>Example:</b>\n"
+            f"<code>/add @john ELITE 30</code>\n"
+            f"<code>/add 123456789 ROOT 7</code>\n"
+            f"──────────",
+            parse_mode="HTML"
+        )
+        return
+    raw_target = context.args[0]
+    uid = await resolve_user(raw_target, context)
+    if not uid:
+        await update.message.reply_text(
+            f"{E_ERRORS} <b>User not found:</b> <code>{raw_target}</code>\n"
+            f"Make sure the user has started the bot first.",
+            parse_mode="HTML"
+        )
+        return
+    plan_arg = context.args[1].upper()
+    if plan_arg not in ("CORE", "ELITE", "ROOT"):
+        await update.message.reply_text(
+            f"{E_ERRORS} Invalid plan. Use: <b>CORE</b>, <b>ELITE</b>, or <b>ROOT</b>",
+            parse_mode="HTML"
+        )
+        return
+    try:
+        days = int(context.args[2])
+        if days <= 0: raise ValueError
+    except ValueError:
+        await update.message.reply_text(f"{E_ERRORS} Days must be a positive number.", parse_mode="HTML")
+        return
+    await _grant(uid, plan_arg, days, update, context)
+
+
+async def cmd_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    target = None
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        target = update.message.reply_to_message.from_user.id
+    elif context.args:
+        target = await resolve_user(context.args[0], context)
+    if not target:
+        await update.message.reply_text(
+            f"<b>Usage:</b> /rem @user|ID or reply → /rem", parse_mode="HTML"
+        )
+        return
+    ud = get_user_data(target, context)
+    ud["plan"] = "TRIAL"; ud["expires"] = 0
+    await _save_premium(context.bot_data)
+    await update.message.reply_text(
+        f"<b>{E_DECLINED} Premium removed for <code>{target}</code>.</b>", parse_mode="HTML"
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# OWNER: /find <username|@username|ID>
+#   Searches all bot users for a match and shows full
+#   profile — plan, credits, bans, checks, join date.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            f"<b>{E_DEV} {B('Find User')}</b>\n──────────\n"
+            f"<b>Usage:</b>\n"
+            f"<code>/find @username</code>\n"
+            f"<code>/find username</code>\n"
+            f"<code>/find UserID</code>\n"
+            f"──────────\n"
+            f"Searches all registered bot users.",
+            parse_mode="HTML"
+        )
+        return
+
+    raw = context.args[0]
+    now = time.time()
+
+    # ── 1. Try numeric ID or @username via Telegram API ─────────────────
+    uid = await resolve_user(raw, context)
+
+    # ── 2. If not found, do a local username substring search ───────────
+    if not uid:
+        needle = raw.lstrip("@").lower()
+        all_users = context.bot_data.get("user_data", {})
+        matches = []
+        for uid_str, ud in all_users.items():
+            stored = ud.get("username", "").lower().lstrip("@")
+            name   = ud.get("name", "").lower()
+            if stored and needle in stored:
+                matches.append((int(uid_str), ud))
+            elif needle in name:
+                matches.append((int(uid_str), ud))
+
+        if not matches:
+            await update.message.reply_text(
+                f"{E_ERRORS} <b>No user found for:</b> <code>{raw}</code>\n"
+                f"Make sure the user has started the bot first.",
+                parse_mode="HTML"
+            )
+            return
+
+        if len(matches) > 1:
+            lines = [f"<b>{E_USER} {B('Multiple Matches')}</b>\n──────────"]
+            for mid, mud in matches[:10]:
+                ustr = f"@{mud.get('username','')}" if mud.get("username") else str(mid)
+                plan = mud.get("plan", "TRIAL").upper()
+                lines.append(f"• {mud.get('name','?')} — {ustr} — {get_styled_plan(plan)}")
+            lines.append("──────────\nRefine your search to narrow down.")
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        uid = matches[0][0]
+
+    # ── 3. Pull profile ──────────────────────────────────────────────────
+    ud_t = get_user_data(uid, context)
+    try:
+        chat = await context.bot.get_chat(uid)
+        ud_t["name"]     = chat.first_name or ud_t.get("name", "Unknown")
+        ud_t["username"] = chat.username   or ud_t.get("username", "")
+    except Exception:
+        pass
+
+    raw_plan = ud_t.get("plan", "TRIAL").upper()
+    expires  = ud_t.get("expires", 0)
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; expires = 0
+    premium    = raw_plan != "TRIAL" and expires > now
+    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    uname_d    = f"@{ud_t.get('username','')}" if ud_t.get("username") else f"ID <code>{uid}</code>"
+    ban_str    = f"{E_ERRORS} {B('Banned')}" if ud_t.get("banned") else f"{E_LIVE} {B('Active')}"
+
+    if premium:
+        rem = expires - now
+        expire_line = (
+            f"<b>Expires</b>    ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+            f"<b>Remaining</b>  ➳ <b>{int(rem//86400)}d {int((rem%86400)//3600)}h</b>"
+        )
+    else:
+        expire_line = f"<b>Expires</b>    ➳ Trial (no expiry)"
+
+    txt = (
+        f"<b>{E_USER} {B('User Found')}</b>\n──────────\n"
+        f"<b>Name</b>      ➳ {ud_t.get('name','Unknown')}\n"
+        f"<b>Username</b>  ➳ {uname_d}\n"
+        f"<b>ID</b>        ➳ <code>{uid}</code>\n"
+        f"<b>Status</b>    ➳ {ban_str}\n"
+        f"──────────\n"
+        f"<b>Plan</b>      ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>   ➳ {ud_t.get('credits', 150)}\n"
+        f"{expire_line}\n"
+        f"──────────\n"
+        f"<b>Joined</b>    ➳ {ud_t.get('joined', 'N/A')}\n"
+        f"<b>Last Active</b> ➳ {ud_t.get('last_active', 'N/A')}\n"
+        f"<b>Total Checks</b> ➳ {ud_t.get('total_checks', 0)}\n"
+        f"<b>Total Refs</b>   ➳ {ud_t.get('total_refs', 0)}\n"
+        f"──────────"
+    )
+    kb = RawMarkup([
+        [
+            _btn(f"{E_DECLINED} Ban",    cb=f"owner_ban_{uid}",   style="danger"),
+            _btn(f"{E_LIVE} Unban",      cb=f"owner_unban_{uid}", style="primary"),
+        ],
+        [_btn(f"💎 Grant Plan via /sub {uid}", cb=f"find_sub_{uid}", style="primary")],
+    ])
+    await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+
+
+async def cmd_resub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+
+    target_id = None
+    target_name, target_uname = "Unknown", ""
+
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        ru = update.message.reply_to_message.from_user
+        target_id    = ru.id
+        target_name  = ru.first_name or "Unknown"
+        target_uname = ru.username or ""
+    elif context.args:
+        raw = context.args[0]
+        target_id = await resolve_user(raw, context)
+        if not target_id:
+            await update.message.reply_text(
+                f"{E_ERRORS} <b>User not found:</b> <code>{raw}</code>",
+                parse_mode="HTML"
+            )
+            return
+    else:
+        await update.message.reply_text(
+            f"<b>{E_DEV} {B('Remove Premium')}</b>\n──────────\n"
+            f"<b>Usage:</b>\n"
+            f"<code>/resub @username</code>\n"
+            f"<code>/resub UserID</code>\n"
+            f"Or reply to a user's message → <code>/resub</code>\n\n"
+            f"<b>Alias:</b> /rsub works too\n"
+            f"──────────",
+            parse_mode="HTML"
+        )
+        return
+
+    ud       = get_user_data(target_id, context)
+    old_plan = ud.get("plan", "TRIAL").upper()
+    old_exp  = ud.get("expires", 0)
+    now      = time.time()
+
+    if old_plan == "TRIAL" or old_exp <= now:
+        try:
+            chat = await context.bot.get_chat(target_id)
+            target_name  = chat.first_name or "Unknown"
+            target_uname = chat.username or ""
+        except Exception:
+            target_name  = ud.get("name", "Unknown")
+            target_uname = ud.get("username", "")
+        uname_d = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
+        await update.message.reply_text(
+            f"{E_ERRORS} <b>{target_name}</b> ({uname_d}) has no active premium.",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        chat = await context.bot.get_chat(target_id)
+        target_name  = chat.first_name or "Unknown"
+        target_uname = chat.username or ""
+    except Exception:
+        target_name  = ud.get("name", "Unknown")
+        target_uname = ud.get("username", "")
+
+    ud["plan"]    = "TRIAL"
+    ud["expires"] = 0
+    await _save_premium(context.bot_data)
+
+    uname_d      = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
+    old_plan_str = get_styled_plan(old_plan)
+    rem_was      = int((old_exp - now) // 86400)
+
+    await update.message.reply_text(
+        f"<b>{E_DECLINED} {B('Premium Removed')}</b>\n──────────\n"
+        f"<b>User</b>       ➳ {target_name} ({uname_d})\n"
+        f"<b>ID</b>         ➳ <code>{target_id}</code>\n"
+        f"<b>Plan Was</b>   ➳ {old_plan_str}\n"
+        f"<b>Days Left</b>  ➳ {rem_was}d (cancelled)\n"
+        f"──────────\n"
+        f"<b>Status</b>     ➳ Reset to {B('Trial')}",
+        parse_mode="HTML"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=(
+                f"<b>{E_ERRORS} {B('Subscription Cancelled')}</b>\n──────────\n"
+                f"Your <b>{old_plan_str}</b> premium has been removed by the admin.\n"
+                f"Use /buy to purchase a new subscription.\n"
+                f"──────────"
+            ),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BROADCAST  —  /broadcast + /bstatus
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Settings
+_BROADCAST_UPDATE_N    = 100   # refresh progress every N users
+_BROADCAST_MAX_CONC    = 200   # max simultaneous sends (Telegram rate-safe)
+
+# Lock — prevents two broadcasts running at the same time
+_broadcast_lock = asyncio.Lock()
+
+
+def _broadcast_controls(broadcast_id: str) -> RawMarkup:
+    """Owner control panel shown under a completed broadcast status card."""
+    return RawMarkup([[
+        _btn("✏️ Editor", cb=f"br_edit:{broadcast_id}", style="primary"),
+        _btn("🗑 Delete", cb=f"br_delete:{broadcast_id}", style="danger"),
+    ]])
+
+
+def _broadcast_status_text(total: int, done: int, sent: int,
+                            blocked: int, failed: int,
+                            finished: bool = False) -> str:
+    """Build the live-updating broadcast status card."""
+    header   = f"✅ <b>Broadcast Complete</b>" if finished else "📡 <b>Broadcasting…</b>"
+    filled   = int((done / total) * 20) if total else 20
+    bar      = "█" * filled + "░" * (20 - filled)
+    pct      = f"{int(done / total * 100)}%" if total else "100%"
+    return (
+        f"{header}\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>Total</b>   ➛ <b>{total}</b>\n"
+        f"📨 <b>Sent</b>    ➛ <b>{sent}</b>\n"
+        f"🚫 <b>Blocked</b> ➛ <b>{blocked}</b>\n"
+        f"❌ <b>Failed</b>  ➛ <b>{failed}</b>\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"<code>[{bar}]</code> {done}/{total}  ({pct})"
+    )
+
+
+async def _broadcast_worker(bot, status_msg, user_ids: list,
+                             bot_data: dict, broadcast_id: str,
+                             src_chat_id: int = None, src_msg_id: int = None,
+                             text: str = None):
+    """
+    Core broadcast engine — runs as a background task.
+    • Sends ALL messages concurrently, capped by semaphore.
+    • Progress card refreshes every _BROADCAST_UPDATE_N users.
+    • Releases _broadcast_lock when done.
+    """
+    total   = len(user_ids)
+    sent    = blocked = failed = done = 0
+    sem     = asyncio.Semaphore(_BROADCAST_MAX_CONC)
+    counter_lock = asyncio.Lock()
+    delivered = {}
+
+    async def _send_one(uid: int):
+        nonlocal sent, blocked, failed, done
+        async with sem:
+            try:
+                if src_chat_id and src_msg_id:
+                    # Native copy — no "Forwarded from" header
+                    sent_message = await bot.copy_message(
+                        chat_id=uid,
+                        from_chat_id=src_chat_id,
+                        message_id=src_msg_id,
+                    )
+                else:
+                    sent_message = await bot.send_message(
+                        chat_id=uid, text=text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                async with counter_lock:
+                    delivered[uid] = sent_message.message_id
+                    sent += 1
+            except Forbidden:
+                async with counter_lock:
+                    blocked += 1
+                    logging.debug(f"[broad] blocked by {uid}")
+            except BadRequest as e:
+                async with counter_lock:
+                    failed += 1
+                    logging.debug(f"[broad] bad request {uid}: {e}")
+            except Exception as e:
+                async with counter_lock:
+                    failed += 1
+                    logging.debug(f"[broad] error {uid}: {e}")
+            finally:
+                async with counter_lock:
+                    done += 1
+
+    # Fire every send concurrently (semaphore keeps it safe)
+    tasks        = [asyncio.create_task(_send_one(uid)) for uid in user_ids]
+    last_report  = 0
+
+    # Live progress updater loop
+    try:
+        while True:
+            await asyncio.sleep(0.3)
+            async with counter_lock:
+                cur_done, cur_sent = done, sent
+                cur_blocked, cur_failed = blocked, failed
+            if cur_done >= total:
+                break
+            if cur_done - last_report >= _BROADCAST_UPDATE_N:
+                try:
+                    await status_msg.edit_text(
+                        _broadcast_status_text(
+                            total, cur_done, cur_sent, cur_blocked, cur_failed
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                last_report = cur_done
+    except Exception:
+        pass
+
+    # Wait for all sends to settle
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    async with counter_lock:
+        fs, fb, ff = sent, blocked, failed
+
+    bot_data.setdefault("broadcast_records", {})[broadcast_id] = {
+        "messages": delivered,
+        "deleted": False,
+        "created_at": time.time(),
+        "owner_chat_id": status_msg.chat_id,
+        "status_message_id": status_msg.message_id,
+    }
+    await _save_state(bot_data)
+
+    # Final status card
+    try:
+        await status_msg.edit_text(
+            _broadcast_status_text(total, total, fs, fb, ff, finished=True),
+            parse_mode="HTML",
+            reply_markup=_broadcast_controls(broadcast_id),
+        )
+    except Exception:
+        pass
+
+    # Release lock so a new broadcast can start
+    if _broadcast_lock.locked():
+        _broadcast_lock.release()
+
+    logging.info(
+        f"[broad] Done — total={total} sent={fs} blocked={fb} failed={ff}"
+    )
+
+
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /broadcast — owner only.
+
+    Two modes:
+      1. Reply to any message with /broadcast  → copies it natively (no 'Forwarded from')
+      2. /broadcast <text>                     → sends a plain-text HTML message
+    Runs in the BACKGROUND — other commands still work while it runs.
+    """
+    if not _is_admin(update.effective_user.id):
+        return
+
+    # ── Usage check ──────────────────────────────────────────────────────────
+    has_reply = bool(update.message.reply_to_message)
+    has_args  = bool(context.args)
+
+    if not has_reply and not has_args:
+        await update.message.reply_text(
+            "↩️ <b>Usage:</b>\n"
+            "• Reply to any message with <b>/broadcast</b> — copies it to all users\n"
+            "• <b>/broadcast</b> &lt;text&gt; — sends a text message to all users\n\n"
+            "<i>No 'Forwarded from' header. Runs in background.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    # ── Duplicate-broadcast guard ────────────────────────────────────────────
+    if _broadcast_lock.locked():
+        await update.message.reply_text(
+            "⚠️ A broadcast is already in progress.\n"
+            "Use /bstatus to check, or wait for it to finish.",
+        )
+        return
+
+    await _broadcast_lock.acquire()
+
+    try:
+        # Collect all known user IDs from bot_data
+        all_users = list(context.bot_data.get("user_data", {}).keys())
+        user_ids  = []
+        for uid_str in all_users:
+            try:
+                user_ids.append(int(uid_str))
+            except ValueError:
+                pass
+
+        total = len(user_ids)
+        if total == 0:
+            await update.message.reply_text("⚠️ No users found in user_data.")
+            _broadcast_lock.release()
+            return
+
+        # Determine source
+        src_chat_id = src_msg_id = None
+        text        = None
+        if has_reply:
+            src_chat_id = update.message.reply_to_message.chat_id
+            src_msg_id  = update.message.reply_to_message.message_id
+        else:
+            text = " ".join(context.args)
+
+        broadcast_id = (
+            f"{int(time.time())}{random.randint(100, 999)}"
+        )
+
+        # Initial status card
+        status_msg = await update.message.reply_text(
+            _broadcast_status_text(total, 0, 0, 0, 0),
+            parse_mode="HTML",
+        )
+
+        # Confirm + launch in background
+        await update.message.reply_text(
+            f"🚀 <b>Broadcast started!</b>\n"
+            f"Sending to <b>{total}</b> users in background…\n\n"
+            f"<i>Progress updates every {_BROADCAST_UPDATE_N} users.</i>",
+            parse_mode="HTML",
+        )
+
+        asyncio.create_task(
+            _broadcast_worker(
+                context.bot, status_msg, user_ids,
+                context.bot_data, broadcast_id,
+                src_chat_id=src_chat_id, src_msg_id=src_msg_id,
+                text=text,
+            )
+        )
+
+    except Exception as e:
+        if _broadcast_lock.locked():
+            _broadcast_lock.release()
+        logging.error(f"[broad] Failed to start: {e}")
+        await update.message.reply_text(f"❌ Error starting broadcast: {e}")
+
+
+async def cmd_bstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check whether a broadcast is currently running."""
+    if not _is_admin(update.effective_user.id):
+        return
+    if _broadcast_lock.locked():
+        await update.message.reply_text(
+            "📡 <b>Status:</b> Broadcast is currently running…",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            "✅ <b>Status:</b> No broadcast in progress.",
+            parse_mode="HTML",
+        )
+
+
+async def _delete_broadcast_messages(bot, messages: dict) -> tuple[int, int]:
+    """Delete tracked broadcast copies with bounded concurrency."""
+    deleted = failed = 0
+    lock = asyncio.Lock()
+    sem = asyncio.Semaphore(50)
+
+    async def _delete_one(chat_id: int, message_id: int) -> None:
+        nonlocal deleted, failed
+        async with sem:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                async with lock:
+                    deleted += 1
+            except Exception:
+                async with lock:
+                    failed += 1
+
+    await asyncio.gather(
+        *[
+            asyncio.create_task(_delete_one(int(chat_id), int(message_id)))
+            for chat_id, message_id in messages.items()
+        ],
+        return_exceptions=True,
+    )
+    return deleted, failed
+
+
+async def broadcast_control_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Handle owner-only Editor/Delete buttons under completed broadcasts."""
+    query = update.callback_query
+    if not query or not query.from_user or not _is_admin(query.from_user.id):
+        if query:
+            await query.answer("⛔ Owner only.", show_alert=True)
+        return
+
+    action, broadcast_id = query.data.split(":", 1)
+    records = context.bot_data.setdefault("broadcast_records", {})
+    record = records.get(broadcast_id)
+    if not record:
+        await query.answer("This broadcast record has expired.", show_alert=True)
+        return
+    if record.get("busy"):
+        await query.answer("This broadcast is already being updated.", show_alert=True)
+        return
+    if record.get("deleted"):
+        await query.answer("This broadcast was already deleted.", show_alert=True)
+        return
+
+    if action == "br_edit":
+        pending = context.bot_data.setdefault("broadcast_edit_pending", {})
+        pending[query.from_user.id] = broadcast_id
+        await query.answer()
+        await query.message.reply_text(
+            "✏️ <b>Broadcast Editor</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Send the replacement message now.\n\n"
+            "<i>The previous broadcast will be deleted from every reachable "
+            "user, then this new message will be sent.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    record["busy"] = True
+    await query.answer("Deleting broadcast from all users…")
+    try:
+        deleted, failed = await _delete_broadcast_messages(
+            context.bot,
+            dict(record.get("messages", {})),
+        )
+        record["messages"] = {}
+        record["deleted"] = True
+        await query.message.edit_text(
+            "🗑 <b>Broadcast Deleted</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>Deleted</b> ➛ {deleted}\n"
+            f"❌ <b>Failed</b>  ➛ {failed}",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    finally:
+        record["busy"] = False
+
+
+async def broadcast_edit_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Use an owner's next message to replace a previously sent broadcast."""
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not _is_admin(user.id):
+        return
+
+    pending = context.bot_data.setdefault("broadcast_edit_pending", {})
+    broadcast_id = pending.pop(user.id, None)
+    if not broadcast_id:
+        return
+
+    record = context.bot_data.setdefault("broadcast_records", {}).get(broadcast_id)
+    if not record or record.get("deleted"):
+        await message.reply_text("⚠️ This broadcast is no longer available.")
+        return
+    if record.get("busy"):
+        await message.reply_text("⚠️ This broadcast is already being updated.")
+        return
+
+    record["busy"] = True
+    old_messages = dict(record.get("messages", {}))
+    progress = await message.reply_text(
+        f"✏️ Replacing the broadcast for <b>{len(old_messages)}</b> users…",
+        parse_mode="HTML",
+    )
+
+    sent = failed = 0
+    new_messages = {}
+    counter_lock = asyncio.Lock()
+    sem = asyncio.Semaphore(50)
+
+    async def _replace_one(chat_id: int, old_message_id: int) -> None:
+        nonlocal sent, failed
+        async with sem:
+            try:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=chat_id,
+                        message_id=old_message_id,
+                    )
+                except Exception:
+                    pass
+
+                copied = await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=message.chat_id,
+                    message_id=message.message_id,
+                )
+                async with counter_lock:
+                    new_messages[chat_id] = copied.message_id
+                    sent += 1
+            except Exception:
+                async with counter_lock:
+                    failed += 1
+
+    try:
+        await asyncio.gather(
+            *[
+                asyncio.create_task(_replace_one(int(chat_id), int(message_id)))
+                for chat_id, message_id in old_messages.items()
+            ],
+            return_exceptions=True,
+        )
+        record["messages"] = new_messages
+        record["updated_at"] = time.time()
+
+        await progress.edit_text(
+            "✅ <b>Broadcast Updated</b>\n"
+            "━━━━━━━━━━━━━━━━\n"
+            f"📨 <b>Replaced</b> ➛ {sent}\n"
+            f"❌ <b>Failed</b>   ➛ {failed}",
+            parse_mode="HTML",
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=record["owner_chat_id"],
+                message_id=record["status_message_id"],
+                text=(
+                    "✅ <b>Broadcast Updated</b>\n"
+                    "━━━━━━━━━━━━━━━━\n"
+                    f"📨 <b>Active copies</b> ➛ {sent}\n"
+                    f"❌ <b>Failed</b>        ➛ {failed}"
+                ),
+                parse_mode="HTML",
+                reply_markup=_broadcast_controls(broadcast_id),
+            )
+        except Exception:
+            pass
+    finally:
+        record["busy"] = False
+
+
+async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    uid = None
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        uid = update.message.reply_to_message.from_user.id
+    elif context.args:
+        uid = await resolve_user(context.args[0], context)
+    if not uid:
+        await update.message.reply_text(
+            f"<b>Usage:</b> /ban @user|ID or reply → /ban", parse_mode="HTML"
+        )
+        return
+    if _is_admin(uid):
+        await update.message.reply_text(f"{E_ERRORS} Cannot ban an owner.", parse_mode="HTML"); return
+    ud = get_user_data(uid, context)
+    ud.update({
+        "banned": True,
+        "ban_reason": "Banned by administrator",
+        "banned_by": update.effective_user.id,
+        "banned_at": time.time(),
+    })
+    await db.save_ban_now(
+        uid, active=True, reason=ud["ban_reason"],
+        moderator_id=update.effective_user.id,
+    )
+    await _save_state(context.bot_data)
+    if update.effective_chat.type in ("group", "supergroup"):
+        try:
+            await context.bot.ban_chat_member(update.effective_chat.id, uid)
+        except Exception as exc:
+            logger.warning("Group ban failed for uid=%s: %s", uid, exc)
+    await update.message.reply_text(
+        f"<b>{E_ERRORS} User <code>{uid}</code> has been banned.</b>", parse_mode="HTML"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
+                "You have been banned from using this bot.\n"
+                "Contact support if you think this is a mistake.\n"
+                "──────────"
+            ),
+            parse_mode="HTML"
+        )
+    except Exception: pass
+
+async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    uid = None
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        uid = update.message.reply_to_message.from_user.id
+    elif context.args:
+        uid = await resolve_user(context.args[0], context)
+    if not uid:
+        await update.message.reply_text(
+            f"<b>Usage:</b> /unban @user|ID or reply → /unban", parse_mode="HTML"
+        )
+        return
+    ud = get_user_data(uid, context)
+    ud["banned"] = False
+    ud.pop("ban_reason", None)
+    ud.pop("banned_by", None)
+    ud.pop("banned_at", None)
+    await db.save_ban_now(
+        uid, active=False, reason="Unbanned by administrator",
+        moderator_id=update.effective_user.id,
+    )
+    await _save_state(context.bot_data)
+    if update.effective_chat.type in ("group", "supergroup"):
+        try:
+            await context.bot.unban_chat_member(
+                update.effective_chat.id,
+                uid,
+                only_if_banned=True,
+            )
+        except Exception as exc:
+            logger.warning("Group unban failed for uid=%s: %s", uid, exc)
+    await update.message.reply_text(
+        f"<b>{E_LIVE} User <code>{uid}</code> has been unbanned.</b>", parse_mode="HTML"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                f"<b>{E_LIVE} {B('Unbanned')}</b>\n──────────\n"
+                "You can now use the bot again.\n──────────"
+            ),
+            parse_mode="HTML"
+        )
+    except Exception: pass
+
+
+async def cmd_mute_minutes(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Reply with /mute10, /mute30, etc. to mute a member for that many minutes."""
+    actor = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+    if not actor or not message or not chat or not _is_admin(actor.id):
+        return
+    if chat.type not in ("group", "supergroup"):
+        await message.reply_text("Use this command inside the group.")
+        return
+
+    match = re.match(r"^/mute(\d+)(?:@\w+)?(?:\s|$)", message.text or "", re.I)
+    if not match:
+        return
+    minutes = min(max(int(match.group(1)), 1), 10080)
+
+    replied = message.reply_to_message
+    target = replied.from_user if replied else None
+    if not target:
+        await message.reply_text(
+            "<b>Reply to a member with:</b> <code>/mute10</code>\n"
+            "Change 10 to any number of minutes.",
+            parse_mode="HTML",
+        )
+        return
+    if _is_admin(target.id) or target.is_bot:
+        await message.reply_text("❌ Owners and bots cannot be muted.")
+        return
+
+    until = datetime.now().astimezone() + timedelta(minutes=minutes)
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until,
+        )
+        name = escape(target.full_name or target.first_name or "Member")
+        await message.reply_text(
+            f"🔇 <b>{name}</b> has been muted for "
+            f"<b>{minutes} minute{'s' if minutes != 1 else ''}</b>.",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("Mute failed for uid=%s: %s", target.id, exc)
+        await message.reply_text(
+            "❌ I could not mute this member. Give the bot permission to restrict members."
+        )
+
+
+async def cmd_unmute(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Reply with /unmute to restore a member's group messaging permissions."""
+    actor = update.effective_user
+    message = update.effective_message
+    chat = update.effective_chat
+    if not actor or not message or not chat or not _is_admin(actor.id):
+        return
+    if chat.type not in ("group", "supergroup"):
+        await message.reply_text("Use this command inside the group.")
+        return
+
+    replied = message.reply_to_message
+    target = replied.from_user if replied else None
+    if not target:
+        await message.reply_text(
+            "<b>Reply to a muted member with:</b> <code>/unmute</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_invite_users=True,
+            ),
+        )
+        name = escape(target.full_name or target.first_name or "Member")
+        await message.reply_text(
+            f"🔊 <b>{name}</b> has been unmuted.",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("Unmute failed for uid=%s: %s", target.id, exc)
+        await message.reply_text(
+            "❌ I could not unmute this member. Check the bot's administrator permissions."
+        )
+
+
+async def replace_external_group_links(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Reply with the official group link when a member posts another link."""
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat or not user or user.is_bot:
+        return
+    if chat.type not in ("group", "supergroup"):
+        return
+    if not chat.username or chat.username.lower() != GROUP_USERNAME.lstrip("@").lower():
+        return
+    if _is_admin(user.id):
+        return
+
+    text = message.text or message.caption or ""
+    if GROUP_LINK.lower() in text.lower() or "t.me/batcardchkgroup" in text.lower():
+        return
+
+    await message.reply_text(
+        f"🔗 <b>Official group link:</b>\n"
+        f"<a href='{GROUP_LINK}'>{GROUP_LINK}</a>",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    await update.message.reply_text(
+        "<b>🦇 ADMINISTRATION COMMANDS</b>\n━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Owners / admins</b>\n"
+        "/warn, /warnings, /clearwarnings — group warnings\n"
+        "/ban, /unban, /mute&lt;minutes&gt;, /unmute — moderation\n"
+        "/raid status|off — community raid controls\n"
+        "/user &lt;id|@username&gt; (or reply) — safe user panel\n"
+        "/note &lt;text&gt; (reply or ID), /clearnotes — private notes\n"
+        "/maintenance on|off|status — public-command maintenance mode\n"
+        "/broadcast, /bstatus — broadcasts\n"
+        "/add, /sub, /resub, /rsub, /rem — subscription administration\n"
+        "/gen, /1day — codes and keys\n/find, /info, /allsub — user/subscription lookup\n"
+        "/dbstatus, /updatesites, /onsh, /offsh, /onmsh, /offmsh — diagnostics/gates\n"
+        "/admin — public current group admin list\n"
+        "\n<b>Primary owner only</b>\n"
+        "/boton, /botoff — enable or disable access for all public users\n"
+        "/restart — restart service\n/backup — state export\n/restore — confirmed state import\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
+        "/sh ➳ Shopify Single Checker\n"
+        "/msh ➳ Shopify Mass 0-20$ (trial: 1cr=1card, limit 5000)\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
+        "/start ➳ Dashboard\n/buy ➳ Premium plans\n"
+        "/sub ➳ My subscription\n/sub @user|ID ➳ [Owner] View & grant plan\n/bin ➳ BIN lookup\n"
+        "/split ➳ Split a replied .txt file into smaller files\n"
+        "/refer ➳ Referral link\n/rm ➳ Redeem code or key\n"
+        "/ping ➳ Bot speed test\n/fb ➳ Send feedback\n"
+        "━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML"
+    )
+
+
+async def _panel_admin_allowed(update: Update, context) -> bool:
+    actor, chat = update.effective_user, update.effective_chat
+    if not actor:
+        return False
+    if _is_admin(actor.id):
+        return True
+    return bool(chat and chat.type in ("group", "supergroup")
+                and await _is_chat_admin(chat.id, actor.id, context))
+
+
+def _stored_user_matches(raw: str, context) -> list[tuple[str, dict]]:
+    needle = raw.lstrip("@").strip().lower()
+    return [(uid, ud) for uid, ud in context.bot_data.get("user_data", {}).items()
+            if ud.get("username", "").lstrip("@").lower() == needle]
+
+
+async def _panel_target(update: Update, context):
+    reply = update.effective_message.reply_to_message if update.effective_message else None
+    if reply and reply.from_user:
+        return str(reply.from_user.id), get_user_data(reply.from_user.id, context), None
+    if not context.args:
+        return None, None, "Reply to a member or use /user <id|@username>."
+    raw = context.args[0]
+    if raw.lstrip("-").isdigit():
+        uid = raw.lstrip("+")
+        return uid, context.bot_data.get("user_data", {}).get(uid, {}), None
+    matches = _stored_user_matches(raw, context)
+    if len(matches) != 1:
+        return None, None, ("No stored user has that username." if not matches
+                            else "More than one stored user matches; use their numeric ID.")
+    return matches[0][0], matches[0][1], None
+
+
+async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _panel_admin_allowed(update, context):
+        await update.effective_message.reply_text("❌ Admin access required.")
+        return
+    uid, ud, error = await _panel_target(update, context)
+    if error:
+        await update.effective_message.reply_text(error)
+        return
+    now, plan, expires = time.time(), ud.get("plan", "TRIAL").upper(), ud.get("expires", 0)
+    if plan != "TRIAL" and expires <= now:
+        plan, expires = "TRIAL", 0
+    warnings = context.bot_data.get("warnings", {})
+    warning_rows = [f"{escape(group)}: {len(users.get(uid, []))}" for group, users in warnings.items() if users.get(uid)]
+    memberships = ud.get("memberships", {})
+    notes = context.bot_data.get("admin_notes", {}).get(uid, [])
+    name = escape(ud.get("name") or ud.get("first_name") or "Unknown")
+    username = f"@{escape(ud['username'])}" if ud.get("username") else "None"
+    activity = ud.get("daily_activity", {})
+    recent = sum(activity.get((datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d"), 0) for i in range(7))
+    text = (
+        f"<b>👤 User panel</b>\n<b>Name:</b> {name}\n<b>Username:</b> {username}\n"
+        f"<b>ID:</b> <code>{uid}</code>\n<b>Plan:</b> {escape(plan)}\n"
+        f"<b>Credits:</b> {'Unlimited' if plan != 'TRIAL' else ud.get('credits', 150)}\n"
+        f"<b>Banned:</b> {'Yes' if ud.get('banned') else 'No'}\n<b>Referrals:</b> {ud.get('total_refs', 0)}\n"
+        f"<b>Last active:</b> {escape(str(ud.get('last_active', 'N/A')))}\n"
+        f"<b>Recent activity:</b> {recent} updates / 7 days\n"
+        f"<b>Groups seen:</b> {len(memberships)}\n<b>Warnings by group:</b> {', '.join(warning_rows) or 'None'}\n"
+        f"<b>Private notes:</b> {escape(' | '.join(notes[-5:])) or 'None'}"
+    )
+    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+
+async def cmd_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _panel_admin_allowed(update, context):
+        await update.effective_message.reply_text("❌ Admin access required.")
+        return
+    reply = update.effective_message.reply_to_message
+    if reply and reply.from_user:
+        uid, text = str(reply.from_user.id), " ".join(context.args).strip()
+    else:
+        if len(context.args) < 2 or not context.args[0].lstrip("-").isdigit():
+            await update.effective_message.reply_text("Use /note <user_id> <text>, or reply with /note <text>.")
+            return
+        uid, text = context.args[0], " ".join(context.args[1:]).strip()
+    if not text:
+        await update.effective_message.reply_text("A note cannot be empty.")
+        return
+    notes = context.bot_data.setdefault("admin_notes", {}).setdefault(uid, [])
+    notes.append(text[:500])
+    del notes[:-20]  # bounded private operational notes
+    await _save_state(context.bot_data)
+    await update.effective_message.reply_text("✅ Private admin note saved.")
+
+
+async def cmd_clearnotes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _panel_admin_allowed(update, context):
+        await update.effective_message.reply_text("❌ Admin access required.")
+        return
+    uid, _, error = await _panel_target(update, context)
+    if error:
+        await update.effective_message.reply_text(error.replace("/user", "/clearnotes"))
+        return
+    context.bot_data.setdefault("admin_notes", {}).pop(uid, None)
+    await _save_state(context.bot_data)
+    await update.effective_message.reply_text("✅ Private notes cleared.")
+
+async def cmd_allsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    now     = time.time()
+    all_u   = context.bot_data.get("user_data", {})
+    premium = [
+        (uid_s, ud) for uid_s, ud in all_u.items()
+        if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > now
+    ]
+    if not premium:
+        await update.message.reply_text(
+            f"<b>{E_USER} No active premium users.</b>", parse_mode="HTML"
+        )
+        return
+
+    premium.sort(key=lambda x: x[1].get("expires", 0))
+    lines = [f"<b>{E_PRO} {B('Live Premium Users')} ➳ {len(premium)}</b>\n──────────"]
+    for idx, (uid_s, ud) in enumerate(premium, 1):
+        uname_d = f"@{ud.get('username','')}" if ud.get("username") else ud.get("name", "?")
+        plan    = ud.get("plan", "TRIAL").upper()
+        expires = ud.get("expires", 0)
+        rem_d   = int((expires - now) // 86400)
+        rem_h   = int(((expires - now) % 86400) // 3600)
+        lines.append(
+            f"<b>{idx}.</b> <code>{uid_s}</code> | {uname_d}\n"
+            f"    ➳ {get_styled_plan(plan)} | <b>{rem_d}d {rem_h}h left</b>"
+        )
+
+    txt = "\n".join(lines)
+    if len(txt) > 4000:
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 4000:
+                await update.message.reply_text(chunk, parse_mode="HTML")
+                chunk = line + "\n"
+            else:
+                chunk += line + "\n"
+        if chunk:
+            await update.message.reply_text(chunk, parse_mode="HTML")
+    else:
+        await update.message.reply_text(txt, parse_mode="HTML")
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    now = time.time()
+
+    if not context.args and not (
+        update.message.reply_to_message and update.message.reply_to_message.from_user
+    ):
+        all_users     = context.bot_data.get("user_data", {})
+        if not all_users:
+            await update.message.reply_text("No users found."); return
+        total         = len(all_users)
+        premium_count = sum(
+            1 for ud in all_users.values()
+            if ud.get("plan", "TRIAL").upper() != "TRIAL" and ud.get("expires", 0) > now
+        )
+        banned_count  = sum(1 for ud in all_users.values() if ud.get("banned", False))
+        trial_count   = total - premium_count
+
+        header = (
+            f"<b>{E_USER} All Users</b>\n──────────\n"
+            f"<b>Total</b>   ➳ {total}\n"
+            f"<b>Premium</b> ➳ {premium_count}\n"
+            f"<b>Trial</b>   ➳ {trial_count}\n"
+            f"<b>Banned</b>  ➳ {banned_count}\n"
+            "──────────\n"
+        )
+        lines = []
+        for uid_str, ud in list(all_users.items())[:30]:
+            rp   = ud.get("plan", "TRIAL").upper()
+            ex   = ud.get("expires", 0)
+            if rp != "TRIAL" and ex <= now: rp = "TRIAL"
+            prem = rp != "TRIAL" and ex > now
+            ban  = f"{E_ERRORS}" if ud.get("banned", False) else f"{E_LIVE}"
+            uname_d = f"@{ud.get('username','')}" if ud.get("username") else ud.get("name", "?")
+            rem  = f"{int((ex-now)//86400)}d" if prem else "—"
+            lines.append(f"{ban} <code>{uid_str}</code> | {uname_d} | {get_styled_plan(rp)} | {rem}")
+        txt = header + "\n".join(lines)
+        if total > 30:
+            txt += f"\n\n...and {total - 30} more. Use /info @user or /info ID."
+        await update.message.reply_text(txt, parse_mode="HTML")
+        return
+
+    target_id, target_name, target_username = None, "N/A", None
+    target_last_name, target_lang = "", "N/A"
+
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        ru = update.message.reply_to_message.from_user
+        target_id, target_name = ru.id, ru.first_name or "N/A"
+        target_last_name, target_username, target_lang = ru.last_name or "", ru.username, ru.language_code or "N/A"
+    elif context.args:
+        raw = " ".join(context.args).strip().lstrip("@")
+        if raw.lstrip("-").isdigit():
+            target_id = int(raw)
+        else:
+            try:
+                chat = await context.bot.get_chat(f"@{raw}")
+                target_id, target_name = chat.id, chat.first_name or "N/A"
+                target_last_name, target_username = getattr(chat, "last_name", "") or "", chat.username
+            except Exception: pass
+            if not target_id:
+                raw_lower = raw.lower()
+                for uid_str, ud in context.bot_data.get("user_data", {}).items():
+                    if (raw_lower in ud.get("username", "").lower().lstrip("@") or
+                            raw_lower in ud.get("name", "").lower()):
+                        target_id = int(uid_str)
+                        target_name, target_username = ud.get("name", "N/A"), ud.get("username")
+                        target_lang = ud.get("language_code", "N/A")
+                        break
+
+    if not target_id:
+        await update.message.reply_text(
+            f"<b>Usage:</b>\n/info — all users\n/info @username\n/info 123456789\nOr reply → /info",
+            parse_mode="HTML"
+        )
+        return
+
+    if target_name == "N/A":
+        try:
+            chat = await context.bot.get_chat(target_id)
+            target_name, target_last_name, target_username = (
+                chat.first_name or "N/A", getattr(chat, "last_name", "") or "", chat.username
+            )
+        except Exception: pass
+
+    uid_str  = str(target_id)
+    udata    = context.bot_data.get("user_data", {}).get(uid_str, {})
+    raw_plan = udata.get("plan", "TRIAL").upper()
+    expires  = udata.get("expires", 0)
+    if raw_plan != "TRIAL" and expires <= now: raw_plan = "TRIAL"; expires = 0
+    premium  = raw_plan != "TRIAL" and expires > now
+    credits_d = "Unlimited" if premium else str(udata.get("credits", 150))
+    banned   = udata.get("banned", False)
+
+    plan_emoji  = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    full_name   = f"{target_name} {target_last_name}".strip()
+    uname_d     = f"@{target_username}" if target_username else "None"
+    total_refs  = udata.get("total_refs", 0)
+    total_checks = udata.get("total_checks", 0)
+    approved_checks = udata.get("approved_checks", 0)
+    declined_checks = udata.get("declined_checks", 0)
+    approval_rate   = f"{(approved_checks / total_checks * 100):.1f}%" if total_checks > 0 else "N/A"
+    ban_icon        = f"{E_ERRORS} {B('Banned')}" if banned else f"{E_LIVE} {B('Active')}"
+
+    txt = (
+        f"<b>{E_USER} {B('User Info')}</b>\n──────────\n"
+        f"<b>Name</b>       ➳ {full_name}\n"
+        f"<b>Username</b>   ➳ {uname_d}\n"
+        f"<b>ID</b>         ➳ <code>{target_id}</code>\n"
+        f"<b>Status</b>     ➳ {ban_icon}\n"
+        "──────────\n"
+        f"<b>Plan</b>       ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>    ➳ {credits_d}\n"
+    )
+    if premium and expires > now:
+        rem = expires - now
+        txt += (
+            f"<b>Expires</b>    ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+            f"<b>Remaining</b>  ➳ {int(rem // 86400)}d {int((rem % 86400) // 3600)}h\n"
+        )
+    last_receipt = udata.get("last_receipt")
+    if last_receipt: txt += f"<b>Receipt</b>    ➳ <code>{last_receipt}</code>\n"
+    txt += (
+        "──────────\n"
+        f"<b>Joined</b>      ➳ {udata.get('joined', 'N/A')}\n"
+        f"<b>Last Active</b> ➳ {udata.get('last_active', 'N/A')}\n"
+        "──────────\n"
+        f"<b>Total Checks</b> ➳ {total_checks}\n"
+        f"<b>Approved</b>     ➳ {approved_checks}\n"
+        f"<b>Declined</b>     ➳ {declined_checks}\n"
+        f"<b>Rate</b>         ➳ {approval_rate}\n"
+        f"<b>Last Gate</b>    ➳ {udata.get('last_gate', 'N/A')}\n"
+        f"<b>Last BIN</b>     ➳ <code>{udata.get('last_card', 'N/A')}</code>\n"
+        "──────────\n"
+        f"<b>Referrals</b>    ➳ {total_refs}\n"
+        f"<b>Codes</b>        ➳ {udata.get('codes_redeemed', 0)} redeemed\n"
+        f"<b>Keys</b>         ➳ {udata.get('keys_redeemed', 0)} redeemed\n"
+        "──────────"
+    )
+    action_kb = RawMarkup([
+        [
+            _btn(f"{E_ERRORS} Ban"    if not banned else f"{E_LIVE} Unban",
+                 cb=f"owner_ban_{target_id}" if not banned else f"owner_unban_{target_id}",
+                 style="danger" if not banned else "primary"),
+            _btn(f"{E_DECLINED} Remove Premium",
+                 cb=f"owner_resub_{target_id}", style="danger"),
+        ],
+        [_btn("🔙 Back", cb="owner_info_back")],
+    ])
+    await update.message.reply_text(txt, parse_mode="HTML", reply_markup=action_kb)
+
+async def cmd_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id): return
+    if not context.args or context.args[0].lower() == "status":
+        state = context.bot_data.get("maintenance", False)
+        await update.message.reply_text(
+            f"Maintenance is currently: <b>{'ON' if state else 'OFF'}</b>\n"
+            "Use: /maintenance on|off|status",
+            parse_mode="HTML"
+        )
+        return
+    arg = context.args[0].lower()
+    if arg in ("on", "1", "true"):
+        context.bot_data["maintenance"] = True
+        await _save_state(context.bot_data)
+        await update.message.reply_text(
+            f"<b>{E_ERRORS} {B('Maintenance Mode ON.')}</b> Users cannot use commands.", parse_mode="HTML"
+        )
+    elif arg in ("off", "0", "false"):
+        context.bot_data["maintenance"] = False
+        await _save_state(context.bot_data)
+        await update.message.reply_text(
+            f"<b>{E_LIVE} {B('Maintenance Mode OFF.')}</b> Bot is live.", parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text("Use: /maintenance on|off|status")
+
+
+async def cmd_botoff(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Primary owner only — disable all public bot access."""
+    user, message = update.effective_user, update.effective_message
+    if not user or user.id != OWNER_ID or not message:
+        return
+    if context.bot_data.get("bot_off", False):
+        await message.reply_text("<b>Bot access is already OFF.</b>", parse_mode="HTML")
+        return
+    context.bot_data["bot_off"] = True
+    await _save_state(context.bot_data)
+    await message.reply_text(
+        "<b>Bot access is now OFF.</b>\n"
+        "Only the primary owner can use the bot. Use /boton to enable access again.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_boton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Primary owner only — restore normal bot access."""
+    user, message = update.effective_user, update.effective_message
+    if not user or user.id != OWNER_ID or not message:
+        return
+    if not context.bot_data.get("bot_off", False):
+        await message.reply_text("<b>Bot access is already ON.</b>", parse_mode="HTML")
+        return
+    context.bot_data["bot_off"] = False
+    await _save_state(context.bot_data)
+    await message.reply_text(
+        "<b>Bot access is now ON.</b>\nAll users can use the bot normally.",
+        parse_mode="HTML",
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# USER COMMANDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    now  = time.time()
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # OWNER: /sub @user | /sub ID | reply → /sub
+    #   Shows target user's plan + inline buttons to grant
+    #   CORE / ELITE / ROOT with preset days instantly.
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    has_target = bool(context.args) or (
+        update.message.reply_to_message and
+        update.message.reply_to_message.from_user
+    )
+    if _is_admin(user.id) and has_target:
+        # ── Resolve target ──────────────────────────────────
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            ru = update.message.reply_to_message.from_user
+            target_id    = ru.id
+            target_name  = ru.first_name or "Unknown"
+            target_uname = ru.username or ""
+        else:
+            raw = context.args[0]
+            target_id = await resolve_user(raw, context)
+            if not target_id:
+                await update.message.reply_text(
+                    f"{E_ERRORS} <b>User not found:</b> <code>{raw}</code>\n"
+                    f"Make sure the user has started the bot first.",
+                    parse_mode="HTML"
+                )
+                return
+            target_name, target_uname = "Unknown", ""
+            try:
+                chat = await context.bot.get_chat(target_id)
+                target_name  = chat.first_name or "Unknown"
+                target_uname = chat.username or ""
+            except Exception:
+                ud_t = get_user_data(target_id, context)
+                target_name  = ud_t.get("name", "Unknown")
+                target_uname = ud_t.get("username", "")
+
+        # ── Current plan info ───────────────────────────────
+        ud_t     = get_user_data(target_id, context)
+        raw_plan = ud_t.get("plan", "TRIAL").upper()
+        expires  = ud_t.get("expires", 0)
+        if raw_plan != "TRIAL" and expires <= now:
+            raw_plan = "TRIAL"; expires = 0
+        premium    = raw_plan != "TRIAL" and expires > now
+        plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+        uname_d    = f"@{target_uname}" if target_uname else f"<code>{target_id}</code>"
+
+        if premium:
+            rem = expires - now
+            expire_line = (
+                f"<b>Expires</b>   ➳ {datetime.fromtimestamp(expires).strftime('%Y-%m-%d %H:%M')}\n"
+                f"<b>Remaining</b> ➳ <b>{int(rem//86400)}d {int((rem%86400)//3600)}h</b>"
+            )
+        else:
+            expire_line = "<b>Expires</b>   ➳ Trial (no expiry)"
+
+        txt = (
+            f"<b>{E_USER} {B('User Subscription')}</b>\n──────────\n"
+            f"<b>Name</b>     ➳ {target_name}\n"
+            f"<b>Username</b> ➳ {uname_d}\n"
+            f"<b>ID</b>       ➳ <code>{target_id}</code>\n"
+            f"──────────\n"
+            f"<b>Plan</b>     ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+            f"{expire_line}\n"
+            f"──────────\n"
+            f"<b>Grant a Plan:</b>"
+        )
+        kb = RawMarkup([
+            [
+                _btn("⭐ CORE · 7d",   cb=f"ogs_CORE_7_{target_id}",
+                     style="primary", icon=PROG_LIVE_EMOJI_ID),
+                _btn("💎 ELITE · 15d", cb=f"ogs_ELITE_15_{target_id}",
+                     style="primary", icon=PROG_LIVE_EMOJI_ID),
+                _btn("👑 ROOT · 30d",  cb=f"ogs_ROOT_30_{target_id}",
+                     style="primary", icon=PROG_LIVE_EMOJI_ID),
+            ],
+            [
+                _btn("⭐ CORE · 15d",  cb=f"ogs_CORE_15_{target_id}",  style="primary"),
+                _btn("💎 ELITE · 30d", cb=f"ogs_ELITE_30_{target_id}", style="primary"),
+                _btn("👑 ROOT · 60d",  cb=f"ogs_ROOT_60_{target_id}",  style="primary"),
+            ],
+            [_btn(f"{E_DECLINED} Remove Plan", cb=f"owner_resub_{target_id}",
+                  style="danger", icon=PROG_DEAD_EMOJI_ID)],
+        ])
+        await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+        return
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # REGULAR USER (and owner without args): own subscription
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ud       = get_user_data(user.id, context)
+    raw_plan = ud.get("plan", "TRIAL").upper()
+    expires  = ud.get("expires", 0)
+    if raw_plan != "TRIAL" and expires <= now:
+        raw_plan = "TRIAL"; ud["plan"] = "TRIAL"; ud["expires"] = 0; expires = 0
+    premium    = raw_plan != "TRIAL" and expires > now
+    uname      = f"@{user.username}" if user.username else user.first_name or "User"
+    plan_emoji = tg_emoji(get_plan_emoji_id(raw_plan), "⭐")
+    credits_d  = "Unlimited" if premium else str(ud.get("credits", 150))
+
+    if premium:
+        rem     = expires - now
+        rem_d   = int(rem // 86400)
+        rem_h   = int((rem % 86400) // 3600)
+        exp_str = datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M")
+        expire_line = (
+            f"<b>Expires</b>    ➳ {exp_str}\n"
+            f"<b>Remaining</b>  ➳ <b>{rem_d} days {rem_h} hours</b>"
+        )
+    else:
+        expire_line = "<b>Expires</b>    ➳ Trial (no expiry)"
+
+    txt = (
+        f"<b>{E_USER} {B('My Subscription')}</b>\n"
+        f"──────────\n"
+        f"<b>Name</b>      ➳ {escape(uname)}\n"
+        f"<b>ID</b>        ➳ <code>{user.id}</code>\n"
+        f"──────────\n"
+        f"<b>Plan</b>      ➳ {get_styled_plan(raw_plan)} {plan_emoji}\n"
+        f"<b>Credits</b>   ➳ {credits_d}\n"
+        f"{expire_line}\n"
+        f"──────────\n"
+        f"<b>Joined</b>    ➳ {ud.get('joined', 'N/A')}\n"
+        f"──────────"
+    )
+    kb = RawMarkup([
+        [_btn("💎 " + B("Upgrade Plan"), cb="mprice", style="primary")],
+    ]) if not premium else None
+    await update.message.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ud   = get_user_data(user.id, context)
+    ud.setdefault("joined", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    ud.setdefault("total_refs", 0)
+    _update_user_meta(ud, user)
+
+    if context.args:
+        arg = context.args[0]
+        if arg.startswith("ref_"):
+            # Secure HMAC token verification — prevents fake referral links
+            referrer_id = _verify_ref_token(arg[4:])
+            if referrer_id:
+                await process_referral(user.id, referrer_id, context)
+
+    if ud.get("banned", False) and not _is_admin(user.id):
+        await update.message.reply_text(
+            f"<b>{E_ERRORS} {B('Banned')}</b>\n──────────\n"
+            "You have been banned from using this bot.\n──────────",
+            parse_mode="HTML"
+        )
+        return
+
+    not_joined = await check_force_sub(user.id, context)
+    if not_joined:
+        await update.message.reply_text(_force_join_text(not_joined), parse_mode="HTML", reply_markup=kb_force_sub(not_joined))
+        return
+
+    await _send_as_media(
+        context.bot,
+        update.effective_chat.id,
+        get_mst_live_emoji(),
+        caption=ui_start_screen(user, context),
+        parse_mode="HTML",
+        reply_markup=kb_main(user.id),
+        reply_to_message_id=update.message.message_id,
+    )
+
+MSH_LIMIT           = 5000   # absolute hard cap
+TRIAL_MASS_DAY_LIMIT = 500   # trial users: max cards per day
+
+async def cmd_msh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mass Shopify Checker — /msh  (new UI: Gate/Progress/Charged/Live/Dead/Errors/Time)."""
+    user = update.effective_user
+    if not await require_not_banned(update, context): return
+    if context.bot_data.get("maintenance") and not _is_admin(user.id):
+        await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.", parse_mode="HTML")
+        return
+    if not context.bot_data.get("msh_on", True):
+        await update.message.reply_text(f"<b>{E_ERRORS} Shopify Mass gate is currently OFF.</b>", parse_mode="HTML")
+        return
+    if not await require_membership(update, context): return
+
+    ud        = get_user_data(user.id, context)
+    premium   = is_user_premium(ud)
+    is_trial  = not premium and not _is_admin(user.id)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    _update_user_meta(ud, user)
+    plan      = ud.get("plan", "TRIAL")
+
+    if is_trial:
+        last_date = ud.get("msh_daily_date", "")
+        if last_date == today_str:
+            used_today = ud.get("msh_daily_cards", 0)
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} {B('Daily Limit Reached')}</b>\n──────────\n"
+                f"You already used <b>/msh</b> today.\n\n"
+                f"<b>Used Today:</b>  {used_today} / {TRIAL_MASS_DAY_LIMIT} cards\n"
+                f"<b>Resets:</b>      Tomorrow midnight\n"
+                f"──────────\n"
+                f"💡 Upgrade to <b>Premium</b> for unlimited daily mass checking.",
+                parse_mode="HTML", reply_markup=kb_upgrade()
+            )
+            return
+        if ud.get("credits", 0) <= 0:
+            # Trial user out of credits — friendly upgrade prompt
+            await update.message.reply_text(
+                f"<b>{E_PRO} {B('Credits Used Up!')}</b>\n──────────\n"
+                f"You've used all your free credits.\n\n"
+                f"<b>💎 Upgrade to Premium</b> for:\n"
+                f"• Unlimited mass checking\n"
+                f"• No daily card caps\n"
+                f"• No credit limits ever\n"
+                f"──────────\n"
+                f"Tap <b>Buy Now</b> below to get a plan.",
+                parse_mode="HTML", reply_markup=kb_upgrade()
+            )
+            return
+
+    # ── Collect cards ───────────────────────────────────────────────
+    cards = []
+    doc = update.message.document or (
+        update.message.reply_to_message.document
+        if update.message.reply_to_message else None
+    )
+    if doc:
+        if doc.mime_type not in ("text/plain", "application/octet-stream"):
+            await update.message.reply_text("<b>❌ Please send a .txt file with cards (one per line).</b>", parse_mode="HTML")
+            return
+        try:
+            file    = await doc.get_file()
+            content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
+            cards   = [l.strip() for l in content.splitlines() if l.strip() and "|" in l]
+        except Exception as e:
+            await update.message.reply_text(f"<b>❌ Error reading file: {escape(str(e))}</b>", parse_mode="HTML")
+            return
+    else:
+        txt = ""
+        if update.message.reply_to_message:
+            txt = (update.message.reply_to_message.text or update.message.reply_to_message.caption or "").strip()
+        elif context.args:
+            txt = " ".join(context.args)
+        cards = [l.strip() for l in txt.splitlines() if l.strip() and "|" in l]
+
+    if not cards:
+        await update.message.reply_text(
+            "<b>────────────</b>\n"
+            "<b>Gate</b>    ➳ Shopify 0-20$\n"
+            "<b>Command</b> ➳ <code>/msh</code>\n"
+            "<b>Limit</b>   ➳ Unlimited\n"
+            "<b>Type</b>    ➳ Mass Checker\n"
+            "<b>Stop</b>    ➳ Button\n"
+            "<b>Cost</b>    ➳ ∞ (Premium)\n"
+            "<b>Credits</b> ➳ ∞\n"
+            "<b>Status</b>  ➳ ✅ Available\n"
+            "<b>────────────</b>",
+            parse_mode="HTML"
+        )
+        return
+
+    # ── Enforce limits ──────────────────────────────────────────────
+    if len(cards) > MSH_LIMIT:
+        cards = cards[:MSH_LIMIT]
+
+    if is_trial:
+        orig           = len(cards)
+        trial_credits  = ud.get("credits", 0)
+        eff_limit      = min(TRIAL_MASS_DAY_LIMIT, trial_credits)
+        if orig > eff_limit:
+            cards = cards[:eff_limit]
+            reason = (f"{TRIAL_MASS_DAY_LIMIT} cards/day limit"
+                      if eff_limit == TRIAL_MASS_DAY_LIMIT
+                      else f"{trial_credits} credits")
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} {B('Trial Limit Applied')}</b>\n──────────\n"
+                f"You sent <b>{orig}</b> cards. Limit: <b>{reason}</b>.\n"
+                f"Only <b>{eff_limit}</b> cards will be checked.\n──────────",
+                parse_mode="HTML"
+            )
+
+    # ── Validate & format ───────────────────────────────────────────
+    valid_cards = []   # list of (formatted_str, cc_number)
+    for raw in cards:
+        parts = raw.split("|")
+        if len(parts) != 4: continue
+        cc, mm, yy, cvv = [p.strip() for p in parts]
+        mm = mm.zfill(2)
+        if len(yy) == 4: yy = yy[2:]
+        valid_cards.append((f"{cc}|{mm}|{yy}|{cvv}", cc))
+    if not valid_cards:
+        await update.message.reply_text("<b>❌ No valid cards found (need cc|mm|yy|cvv format).</b>", parse_mode="HTML")
+        return
+
+    total = len(valid_cards)
+
+    # ── Load sites & proxies ────────────────────────────────────────
+    sites   = _load_sites()
+    proxies = _load_proxies()
+
+    # ── Create session & send progress message ──────────────────────
+    import random as _random
+    import string as _string
+    sid = "".join(_random.choices(_string.ascii_uppercase + _string.digits, k=8))
+
+    # Post the initial progress message first so we have a message ID
+    from sh import _progress_text as _pt, _msh_buttons
+    sess = create_msh_session(
+        sid=sid,
+        chat_id=update.message.chat_id,
+        user_id=user.id,
+        msg_id=0,                        # filled after reply
+        user_msg_id=update.message.message_id,
+        total=total,
+        user_obj=user,
+        plan=plan,
+        hide=bool(ud.get("hide", False)),
+    )
+    init_html = _pt(sess)   # _progress_text returns HTML string — parse_mode="HTML"
+    msg = await update.message.reply_text(
+        init_html, parse_mode="HTML",
+        reply_markup=_msh_buttons(sid, running=True),
+        disable_web_page_preview=True,
+    )
+    sess["msg_id"] = msg.message_id
+
+    # ── Fire mass batch in the background ───────────────────────────
+    asyncio.create_task(
+        run_mass_batch(context.bot, sid, valid_cards, user, plan, sites, proxies,
+                       bot_data=context.bot_data)
+    )
+
+    # ── Deduct trial credits ────────────────────────────────────────
+    if is_trial:
+        ud["credits"]       = max(0, ud.get("credits", 0) - total)
+        ud["msh_daily_date"]  = today_str
+        ud["msh_daily_cards"] = total
+
+    ud["total_checks"] = ud.get("total_checks", 0) + total
+    ud["last_gate"]    = "Shopify | 0-20$"
+    ud["last_active"]  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if ud.get("daily_check_date") != today_str:
+        ud["daily_check_date"] = today_str
+        ud["daily_checks"] = 0
+    ud["daily_checks"] = ud.get("daily_checks", 0) + total
+    await _save_state(context.bot_data)
+    await db.save_user_stats_now(user.id, ud)
+
+
+async def cmd_1day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only shortcut: /1day [count] — generate 1-day CORE premium keys."""
+    if not _is_admin(update.effective_user.id): return
+    count = 1
+    if context.args:
+        try:
+            count = int(context.args[0])
+            if count <= 0 or count > 50: raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Usage:</b> <code>/1day [count]</code>\n"
+                f"<b>Example:</b> <code>/1day 5</code>\n"
+                f"Max 50 keys per call.",
+                parse_mode="HTML"
+            )
+            return
+
+    plan_emoji = tg_emoji(get_plan_emoji_id("CORE"), "⭐")
+    keys_store = context.bot_data.setdefault("keys", {})
+    generated  = []
+    for _ in range(count):
+        key = gen_code(12)
+        keys_store[key] = {"plan": "CORE", "days": 1, "used": False}
+        generated.append(key)
+
+    if count == 1:
+        await update.message.reply_text(
+            f"<b>{E_LIVE} {B('1-Day Key Generated')}</b>\n──────────\n"
+            f"<b>Key</b>    ➳ <code>{generated[0]}</code>\n"
+            f"<b>Plan</b>   ➳ {B('Core')} {plan_emoji}\n"
+            f"<b>Days</b>   ➳ 1\n"
+            f"──────────\n"
+            f"Redeem: <code>/rm {generated[0]}</code>",
+            parse_mode="HTML"
+        )
+    else:
+        lines = [
+            f"<b>{E_LIVE} {B('1-Day Keys Generated')}</b>",
+            "──────────",
+            f"<b>Plan</b>  ➳ {B('Core')} {plan_emoji}",
+            f"<b>Days</b>  ➳ 1",
+            f"<b>Count</b> ➳ {count}",
+            "──────────",
+        ]
+        for i, k in enumerate(generated, 1):
+            lines.append(f"<b>{i}.</b> <code>{k}</code>")
+        lines += ["──────────", "Redeem with: <code>/rm KEY</code>"]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    t   = time.time()
+    msg = await update.message.reply_text(
+        '<b>🔄 Pinging...</b>',
+        parse_mode="HTML"
+    )
+    ms  = int((time.time() - t) * 1000)
+    await msg.edit_text(
+        f'<b>✅ {B("Pong")}</b>\n'
+        f'──────────\n'
+        f'<b>⏱ ➳ {ms}ms</b>\n'
+        f'──────────',
+        parse_mode="HTML"
+    )
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Live leaderboard — top 5 users by lifetime CHARGED cards from this bot."""
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+
+    # ── Emoji IDs ────────────────────────────────────────────────────────────
+    _EM = lambda eid, fb: f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>'
+    CROWN   = _EM("6181649972757271368", "⚜")
+    DIAMOND = _EM("4958610528588008305", "💎")
+    BLUE    = _EM("5416111497224920515", "🔵")   # rank 1
+    WHITE1  = _EM("5415586905624420894", "⚪")   # rank 2
+    WHITE2  = _EM("5415982270248918567", "⚪")   # rank 3
+    TOP     = _EM("6170155021070506364", "🔝")   # all ranks
+    DEV_E   = _EM("6267091732861555879", "⚡")   # dev line
+    HIDDEN  = _EM(PROG_LIVE_EMOJI_ID, "🔒")
+
+    rank_markers = [BLUE, WHITE1, WHITE2, "4.", "5."]
+
+    # ── Pull all users and sort by total_charged ──────────────────────────────
+    user_data = context.bot_data.get("user_data", {})
+    board = sorted(
+        [
+            {
+                "display": (
+                    f"@{ud['username']}" if ud.get("username")
+                    else ud.get("first_name") or ud.get("name") or "User"
+                ),
+                "count": ud.get("total_charged", 0),
+                "hidden": bool(ud.get("hide", False)),
+            }
+            for ud in user_data.values()
+            if ud.get("total_charged", 0) > 0
+        ],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:5]
+
+    divider = "────────────"
+
+    lines = [
+        f"{CROWN} <b>Leaderboard</b> {DIAMOND}",
+        divider,
+    ]
+
+    if not board:
+        lines.append("No charge cards yet — be the first! 🎯")
+    else:
+        for i, entry in enumerate(board):
+            marker = rank_markers[i]
+            display = (
+                f"{HIDDEN} <b>Hidden User</b>"
+                if entry["hidden"] else escape(entry["display"])
+            )
+            lines.append(
+                f"{marker} {display} ➳ "
+                f"<b>{entry['count']}</b> {DIAMOND} {TOP}"
+            )
+
+    # Pad to always show 5 slots (so layout is consistent even with few users)
+    for i in range(len(board), 5):
+        marker = rank_markers[i]
+        lines.append(f"{marker} ———")
+
+    lines += [
+        divider,
+        f"{DEV_E} Dev ➳@Batxchk_bot🦇",
+    ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Configure identity visibility in public logs and leaderboards."""
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+
+    user = update.effective_user
+    hidden = bool(get_user_data(user.id, context).get("hide", False))
+    text = (
+        f"<b>{E_USER} {B('Hide Identity')}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Status</b> ➳ {'ON — Hidden' if hidden else 'OFF — Visible'}\n\n"
+        "When enabled, your name, username, and Telegram ID are replaced "
+        "with <b>Hidden User</b> in public result logs and the leaderboard.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Choose your privacy setting below.</i>"
+    )
+    await update.effective_message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=RawMarkup([
+            [_btn("ON — Hide My Identity", cb="hide_on",
+                  style="success", icon=PROG_LIVE_EMOJI_ID)],
+            [_btn("OFF — Show My Identity", cb="hide_off",
+                  style="success", icon=PROG_DEAD_EMOJI_ID)],
+            [_btn(B("BACK"), cb="bmain")],
+        ]),
+    )
+
+
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+
+    core_e  = tg_emoji(PLAN_EMOJIS["CORE"],  "⭐")
+    elite_e = tg_emoji(PLAN_EMOJIS["ELITE"], "⭐")
+    root_e  = tg_emoji(PLAN_EMOJIS["ROOT"],  "⭐")
+
+    txt = (
+        f"<b>{core_e} {B('Core')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 1\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 1.5$\n"
+        "──────────\n"
+        f"<b>{core_e} {B('Core')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 7\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 8$\n"
+        "──────────\n"
+        f"<b>{elite_e} {B('Elite')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 15\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 12$\n"
+        "──────────\n"
+        f"<b>{root_e} {B('Root')} Plan</b>\n──────────\n"
+        "<b>Days</b>     ➳ 30\n"
+        "<b>Credits</b>  ➳ Unlimited\n"
+        "<b>Price</b>    ➳ 25$\n"
+        "──────────"
+    )
+    await update.message.reply_text(txt, reply_markup=kb_price(), parse_mode="HTML")
+
+async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    user       = update.effective_user
+    ud         = get_user_data(user.id, context)
+    link       = get_referral_link(user.id)
+    total_refs = ud.get("total_refs", 0)
+    txt = (
+        f"<b>{E_USER} {B('Referral')}</b>\n──────────\n"
+        f"<b>Link</b>      ➳ <code>{link}</code>\n──────────\n"
+        f"<b>Referrals</b> ➳ {total_refs}\n"
+        f"<b>Earned</b>    ➳ {total_refs * REFERRAL_CREDITS} credits\n"
+        f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
+        "Share your link to earn free credits!"
+    )
+    await update.message.reply_text(
+        txt, parse_mode="HTML",
+        reply_markup=kb_referral(user.id),
+        disable_web_page_preview=True,
+    )
+
+async def cmd_rm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    if not context.args:
+        await update.message.reply_text(
+            f"<b>{E_CARD} {B('Redeem Code / Key')}</b>\n──────────\n"
+            f"<b>Usage:</b> <code>/rm CODE</code>\n\n"
+            f"Redeem a <b>credit code</b> to top up your balance,\n"
+            f"or a <b>premium key</b> to activate a plan.\n"
+            f"──────────",
+            parse_mode="HTML"
+        )
+        return
+    code  = context.args[0].upper().strip()
+    uid   = update.effective_user.id
+    ud    = get_user_data(uid, context)
+    codes = context.bot_data.get("codes", {})
+    keys  = context.bot_data.get("keys",  {})
+
+    if code in codes:
+        if codes[code]["used"]:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Code Already Used</b>\n──────────\n"
+                f"This code has already been redeemed.\n──────────",
+                parse_mode="HTML"
+            )
+            return
+        value              = codes[code]["value"]
+        codes[code]["used"] = True
+        ud["credits"]       = ud.get("credits", 0) + value
+        ud["codes_redeemed"] = ud.get("codes_redeemed", 0) + 1
+        await update.message.reply_text(
+            f"<b>{E_LIVE} {B('Code Redeemed')}</b>\n──────────\n"
+            f"<b>Code</b>           ➳ <code>{code}</code>\n"
+            f"<b>Credits Added</b>  ➳ +{value}\n"
+            f"<b>New Balance</b>    ➳ {ud['credits']}\n"
+            "──────────",
+            parse_mode="HTML"
+        )
+        return
+
+    if code in keys:
+        if keys[code]["used"]:
+            await update.message.reply_text(
+                f"<b>{E_ERRORS} Key Already Used</b>\n──────────\n"
+                f"This key has already been redeemed.\n──────────",
+                parse_mode="HTML"
+            )
+            return
+        keys[code]["used"] = True
+        p  = keys[code]["plan"]
+        ud["keys_redeemed"] = ud.get("keys_redeemed", 0) + 1
+        plan_emoji = tg_emoji(get_plan_emoji_id(p), "⭐")
+
+        # ── Hour-based key (e.g. /hr1 /hr2 /hr3) ──
+        if "hours" in keys[code]:
+            hours      = keys[code]["hours"]
+            expires_ts = time.time() + hours * 3600
+            if ud.get("plan", "TRIAL").upper() == "TRIAL":
+                ud["pre_premium_credits"] = ud.get("credits", 150)
+            ud["plan"]         = p.upper()
+            ud["expires"]      = expires_ts
+            receipt            = gen_receipt()
+            ud["last_receipt"] = receipt
+            ud["granted_at"]   = time.time()
+            await _save_premium(context.bot_data)
+
+            exp_str   = datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M")
+            if hours < 24:
+                dur_label = f"{hours} hour{'s' if hours != 1 else ''}"
+            else:
+                d2, h2 = divmod(hours, 24)
+                dur_label = f"{d2}d" + (f" {h2}h" if h2 else "")
+
+            await update.message.reply_text(
+                f"<b>{E_LIVE} {B('Hour Key Redeemed!')}</b>\n──────────\n"
+                f"<b>Key</b>      ➳ <code>{code}</code>\n"
+                f"<b>Access</b>   ➳ {get_styled_plan(p)} {plan_emoji}\n"
+                f"<b>Duration</b> ➳ {dur_label}\n"
+                f"<b>Expires</b>  ➳ <code>{exp_str}</code>\n"
+                f"<b>Receipt</b>  ➳ <code>{receipt}</code>\n"
+                f"──────────\n"
+                f"Your plan is active! Use /sub to check.",
+                parse_mode="HTML",
+            )
+            return
+
+        # ── Day-based key (standard /gen key flow) ──
+        d      = keys[code]["days"]
+        receipt = await send_activation_msg(uid, p, d, context)
+        await update.message.reply_text(
+            f"<b>{E_LIVE} {B('Key Redeemed')}</b>\n──────────\n"
+            f"<b>Key</b>     ➳ <code>{code}</code>\n"
+            f"<b>Access</b>  ➳ {get_styled_plan(p)} {plan_emoji}\n"
+            f"<b>Days</b>    ➳ {d}\n"
+            f"<b>Receipt</b> ➳ <code>{receipt}</code>\n"
+            "──────────\n"
+            "Your plan is now active! Use /sub to check.",
+            parse_mode="HTML"
+        )
+        return
+
+    await update.message.reply_text(
+        f"<b>{E_ERRORS} {B('Invalid Code')}</b>\n──────────\n"
+        "This code or key is invalid.\n"
+        "Make sure you typed it correctly (case-insensitive).\n"
+        "──────────",
+        parse_mode="HTML"
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FEEDBACK (/fb)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _fb_key(user_id: int) -> str:
+    return f"{user_id}_{int(time.time())}_{random.randint(1000, 9999)}"
+
+async def _process_fb_group(mgid: str, context: ContextTypes.DEFAULT_TYPE):
+    """Called after a short delay to process a buffered media-group /fb submission."""
+    await asyncio.sleep(1.5)   # wait for all album photos to arrive
+    buf   = context.bot_data.get("fb_mg_buf", {})
+    group = buf.pop(mgid, None)
+    if not group:
+        return
+
+    file_ids  = group["file_ids"]
+    user      = group["user"]
+    user_note = group["user_note"]
+    submitted = group["submitted"]
+    uname     = f"@{user.username}" if user.username else user.first_name or "User"
+    key       = _fb_key(user.id)
+
+    context.bot_data.setdefault("fb_pending", {})[key] = {
+        "file_ids": file_ids, "file_type": "photo",
+        "user_id": user.id, "username": uname,
+        "name": user.full_name or user.first_name or "User",
+        "note": user_note, "date": submitted,
+    }
+
+    count         = len(file_ids)
+    owner_caption = (
+        f"<b>{E_DEV} {B('New Feedback')} ({count} photo{'s' if count > 1 else ''})</b>\n──────────\n"
+        f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {user.id}\n"
+        f"<b>Date</b> ➳ {submitted}\n"
+    )
+    if user_note:
+        owner_caption += f"<b>Note</b> ➳ {user_note[:200]}\n"
+    owner_caption += "──────────\nApprove ALL to post to channel?"
+
+    try:
+        if count == 1:
+            await context.bot.send_photo(chat_id=OWNER_ID, photo=file_ids[0],
+                                         caption=owner_caption,
+                                         reply_markup=kb_fb_owner(key),
+                                         parse_mode="HTML")
+        else:
+            # Send album (media groups can't carry inline keyboards in Telegram)
+            media = [InputMediaPhoto(media=fid) for fid in file_ids]
+            media[0] = InputMediaPhoto(media=file_ids[0],
+                                       caption=owner_caption, parse_mode="HTML")
+            await context.bot.send_media_group(chat_id=OWNER_ID, media=media)
+            # Separate message carries the approve/decline buttons
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=f"☝️ <b>Approve all {count} photos above?</b>",
+                reply_markup=kb_fb_owner(key),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"Feedback notify owner failed: {e}")
+
+async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    msg   = update.message
+    user  = update.effective_user
+
+    # ── resolve the media message ──────────────────────────────────────────────
+    media_msg = None
+    if msg.photo or msg.video:
+        media_msg = msg
+    elif msg.reply_to_message and (msg.reply_to_message.photo or msg.reply_to_message.video):
+        media_msg = msg.reply_to_message
+
+    if not media_msg:
+        await msg.reply_text(
+            f"<b>📸 {B('Feedback')}</b>\n──────────\n"
+            "Send one or more photos with <code>/fb</code> as caption,\n"
+            "or reply to a photo/video with <code>/fb</code>.\n"
+            "──────────",
+            parse_mode="HTML"
+        )
+        return
+
+    # ── strip /fb prefix from caption / text ──────────────────────────────────
+    user_note = (msg.text or msg.caption or "").strip()
+    bot_uname = context.bot.username or ""
+    for prefix in (f"/fb@{bot_uname}", "/fb"):
+        if user_note.lower().startswith(prefix.lower()):
+            user_note = user_note[len(prefix):].strip()
+            break
+
+    submitted = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # ── media-group (album) — buffer and process after delay ──────────────────
+    if media_msg.photo and media_msg.media_group_id:
+        mgid = media_msg.media_group_id
+        buf  = context.bot_data.setdefault("fb_mg_buf", {})
+        if mgid not in buf:
+            buf[mgid] = {
+                "file_ids":  [],
+                "user":      user,
+                "user_note": user_note,
+                "submitted": submitted,
+                "task":      None,
+            }
+            # Acknowledge only on first photo of the album
+            await msg.reply_text(
+                f"<b>{E_LIVE} {B('Feedback Submitted')}</b>\n──────────\n"
+                "All photos are under review.\n──────────",
+                parse_mode="HTML"
+            )
+        buf[mgid]["file_ids"].append(media_msg.photo[-1].file_id)
+        # Cancel old delayed task, schedule a fresh one
+        old_task = buf[mgid].get("task")
+        if old_task and not old_task.done():
+            old_task.cancel()
+        buf[mgid]["task"] = asyncio.create_task(_process_fb_group(mgid, context))
+        return
+
+    # ── single photo or video ──────────────────────────────────────────────────
+    if media_msg.photo:
+        file_id, file_type = media_msg.photo[-1].file_id, "photo"
+    else:
+        file_id, file_type = media_msg.video.file_id, "video"
+
+    uname = f"@{user.username}" if user.username else user.first_name or "User"
+    key   = _fb_key(user.id)
+
+    context.bot_data.setdefault("fb_pending", {})[key] = {
+        "file_ids": [file_id], "file_type": file_type, "user_id": user.id,
+        "username": uname, "name": user.full_name or user.first_name or "User",
+        "note": user_note, "date": submitted,
+    }
+    await msg.reply_text(
+        f"<b>{E_LIVE} {B('Feedback Submitted')}</b>\n──────────\n"
+        "Your feedback is under review.\n──────────",
+        parse_mode="HTML"
+    )
+
+    owner_caption = (
+        f"<b>{E_DEV} {B('New Feedback')}</b>\n──────────\n"
+        f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {user.id}\n"
+        f"<b>Date</b> ➳ {submitted}\n<b>Type</b> ➳ {file_type.capitalize()}\n"
+    )
+    if user_note:
+        owner_caption += f"<b>Note</b> ➳ {user_note[:200]}\n"
+    owner_caption += "──────────\nApprove to post to channel?"
+
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(chat_id=OWNER_ID, photo=file_id,
+                                         caption=owner_caption,
+                                         reply_markup=kb_fb_owner(key),
+                                         parse_mode="HTML")
+        else:
+            await context.bot.send_video(chat_id=OWNER_ID, video=file_id,
+                                         caption=owner_caption,
+                                         reply_markup=kb_fb_owner(key),
+                                         parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Feedback notify owner failed: {e}")
+
+async def _fb_approve(query, context: ContextTypes.DEFAULT_TYPE, key: str):
+    fb = context.bot_data.get("fb_pending", {}).get(key)
+    if not fb: await query.answer("Already handled.", show_alert=True); return
+    uname, uid, submitted = fb["username"], fb["user_id"], fb["date"]
+    file_type  = fb["file_type"]
+    user_note  = fb.get("note", "")
+    # support both old single-file_id and new file_ids list
+    file_ids   = fb.get("file_ids") or ([fb["file_id"]] if fb.get("file_id") else [])
+
+    channel_caption = "──────────\n"
+    if user_note: channel_caption += f"{user_note}\n──────────\n"
+    channel_caption += (
+        f"<b>User</b> ➳ {uname}\n<b>ID</b>   ➳ {uid}\n"
+        f"<b>Date</b> ➳ {submitted}\n──────────"
+    )
+    posted = False
+    try:
+        if file_type == "photo" and len(file_ids) > 1:
+            # Post all photos as a media group to the channel
+            media = [InputMediaPhoto(media=fid) for fid in file_ids]
+            media[0] = InputMediaPhoto(media=file_ids[0],
+                                       caption=channel_caption, parse_mode="HTML")
+            await context.bot.send_media_group(chat_id=CHANNEL_ID, media=media)
+        elif file_type == "photo":
+            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_ids[0],
+                                         caption=channel_caption, parse_mode="HTML")
+        else:
+            await context.bot.send_video(chat_id=CHANNEL_ID, video=file_ids[0],
+                                         caption=channel_caption, parse_mode="HTML")
+        posted = True
+    except Exception as e:
+        logger.error(f"Feedback channel post failed: {e}")
+    context.bot_data["fb_pending"].pop(key, None)
+    status_txt = f"{'Posted ✅' if posted else 'Post Failed ⚠️'}"
+    try:
+        await query.message.edit_caption(
+            caption=f"<b>{E_LIVE} {B('Feedback')} {status_txt}</b>\n──────────",
+            reply_markup=None, parse_mode="HTML"
+        )
+    except Exception:
+        try:
+            await query.message.edit_text(
+                text=f"<b>{E_LIVE} {B('Feedback')} {status_txt}</b>\n──────────",
+                reply_markup=None, parse_mode="HTML"
+            )
+        except Exception: pass
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                f"<b>{E_LIVE} {B('Feedback Accepted')}</b>\n──────────\n"
+                f"Posted to channel!\n📢 {CHANNEL_LINK}\n──────────"
+            ),
+            parse_mode="HTML"
+        )
+    except Exception: pass
+
+async def _fb_decline(query, context: ContextTypes.DEFAULT_TYPE, key: str):
+    fb = context.bot_data.get("fb_pending", {}).get(key)
+    if not fb: await query.answer("Already handled.", show_alert=True); return
+    uid = fb["user_id"]
+    context.bot_data["fb_pending"].pop(key, None)
+    try:
+        await query.message.edit_caption(
+            caption=f"<b>{E_DECLINED} {B('Feedback Declined')}</b>\n──────────",
+            reply_markup=None, parse_mode="HTML"
+        )
+    except Exception: pass
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=f"<b>{E_DECLINED} {B('Feedback Declined')}</b>\n──────────",
+            parse_mode="HTML"
+        )
+    except Exception: pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# /sh GATE WRAPPER  — force-join + ban guard for Shopify
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _cmd_sh_gated(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Wrapper around sh.py's cmd_sh that enforces the force-join check.
+    cmd_sh itself has no force-sub logic, so we gate it here to keep
+    sh.py clean and avoid a circular import.
+    """
+    if not await require_not_banned(update, context): return
+    if not await require_membership(update, context): return
+    await cmd_sh(update, context)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CALLBACK QUERY HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user  = query.from_user
+    data  = query.data
+
+    # ── Answer policy ────────────────────────────────────────────────────────
+    # Telegram allows EXACTLY ONE answer() per callback query.
+    # Branches that need show_alert or a custom message handle their own answer().
+    # All pure-navigation branches (edit_text / edit_caption only) are answered
+    # silently right here so the loading indicator clears on the client.
+    # Any branch that calls query.answer() itself MUST be listed below.
+    _self_answering = (
+        data == "check_sub"           or   # may show "still need to join" alert
+        data.startswith("mshr:")      or   # new msh Live/All button — handles own answer
+        data.startswith("mshs:")      or   # new msh Stop button — handles own answer
+        data.startswith("stop_msh_")  or   # legacy stop (kept for old sessions)
+        data.startswith("dl_approved_") or # legacy download
+        data.startswith("dl_all_")    or   # legacy download
+        data.startswith("ogs_")       or   # shows "granted!" alert
+        data.startswith("owner_ban_") or
+        data.startswith("owner_unban_") or
+        data.startswith("owner_resub_") or
+        data.startswith("find_sub_")  or
+        data.startswith("fb_ok_")     or   # _fb_approve handles its own answer
+        data.startswith("fb_no_")     or   # _fb_decline handles its own answer
+        data in payments.PLANS         or   # answers before OxaPay network request
+        data.startswith("wlpay:")      or   # answers before OxaPay network request
+        data in ("hide_on", "hide_off")
+    )
+    if not _self_answering:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    if data == "check_sub":
+        not_joined = await check_force_sub(user.id, context)
+        if not_joined:
+            # Still missing channels — update the message with fresh status
+            try:
+                await query.message.edit_text(
+                    _force_join_text(not_joined),
+                    parse_mode="HTML",
+                    reply_markup=kb_force_sub(not_joined),
+                )
+            except Exception:
+                pass
+            await query.answer(
+                f"⚠️ Still need to join {len(not_joined)} channel(s)! Join then press Verify.",
+                show_alert=True,
+            )
+            return
+        # All joined — cache the pass, delete the gate message, show start screen
+        _force_sub_cache[user.id] = (True, time.time(), [])
+        await query.answer("✅ Verified! Welcome.", show_alert=False)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        ud = get_user_data(user.id, context)
+        _update_user_meta(ud, user)
+        await _send_custom_html(
+            context.bot, user.id, ui_start_screen(user, context),
+            reply_markup=kb_main(user.id),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data == "bmain":
+        await _edit_custom_html(
+            query.message, ui_start_screen(user, context),
+            reply_markup=kb_main(user.id), disable_web_page_preview=True
+        )
+        return
+    if data == "mreferral":
+        ud_r       = get_user_data(user.id, context)
+        link       = get_referral_link(user.id)
+        total_refs = ud_r.get("total_refs", 0)
+        await _edit_custom_html(
+            query.message,
+            f"<b>{E_USER} {B('Referral Program')}</b>\n──────────\n"
+            f"<b>Link</b>      ➳ <code>{link}</code>\n──────────\n"
+            f"<b>Referrals</b> ➳ {total_refs}\n"
+            f"<b>Earned</b>    ➳ {total_refs * REFERRAL_CREDITS} credits\n"
+            f"<b>Per Ref</b>   ➳ +{REFERRAL_CREDITS} credits\n──────────\n"
+            "Share your link to earn free credits!",
+            reply_markup=kb_referral(user.id),
+            disable_web_page_preview=True,
+        )
+        return
+    if data == "mprofile":
+        await _edit_custom_html(
+            query.message, ui_full_profile(user, context),
+            reply_markup=kb_profile(), disable_web_page_preview=True
+        )
+        return
+    if data == "mgates":
+        await _edit_custom_html(
+            query.message,
+            f"<b>{E_GATE} {B('Gates')}</b>\n──────────\nChoose a gate category:",
+            reply_markup=kb_gate_main()
+        )
+        return
+    if data == "allcm_show":
+        await query.message.edit_text(
+            f"⭅ <b>{B('All User Commands')}</b> ⭆\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Checker Commands</b>\n"
+            "<b>/sh</b> ➳ Shopify Single Checker\n"
+            "<b>/msh</b> ➳ Shopify Mass Checker\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Account Commands</b>\n"
+            "<b>/start</b> ➳ Dashboard\n"
+            "<b>/buy</b> ➳ Premium plans\n"
+            "<b>/sub</b> ➳ My subscription\n"
+            "<b>/me</b> ➳ My charged stats\n"
+            "<b>/status</b> ➳ Leaderboard\n"
+            "<b>/hide</b> ➳ Identity privacy\n"
+            "<b>/refer</b> ➳ Referral link\n"
+            "<b>/rm</b> ➳ Redeem code or key\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Tools</b>\n"
+            "<b>/bin</b> ➳ BIN lookup\n"
+            "<b>/ping</b> ➳ Bot speed test\n"
+            "<b>/fb</b> ➳ Send feedback\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>Owner commands are hidden from this list.</i>",
+            parse_mode="HTML",
+            reply_markup=kb_back("mgates"),
+        )
+        return
+    if data in ("hide_on", "hide_off"):
+        hidden = data == "hide_on"
+        ud_h = get_user_data(user.id, context)
+        ud_h["hide"] = hidden
+        await db.save_user_stats_now(user.id, ud_h)
+        await _save_state(context.bot_data)
+        await query.answer(
+            "Identity hiding enabled." if hidden
+            else "Identity hiding disabled.",
+            show_alert=True,
+        )
+        await query.message.edit_text(
+            f"<b>{E_USER} {B('Hide Identity')}</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Status</b> ➳ {'ON — Hidden' if hidden else 'OFF — Visible'}\n\n"
+            f"Your public identity is now "
+            f"<b>{'hidden' if hidden else 'visible'}</b>.\n"
+            "━━━━━━━━━━━━━━━━━━━━",
+            parse_mode="HTML",
+            reply_markup=RawMarkup([
+                [_btn(
+                    "Turn OFF — Show Identity" if hidden
+                    else "Turn ON — Hide Identity",
+                    cb="hide_off" if hidden else "hide_on",
+                    style="success",
+                    icon=PROG_DEAD_EMOJI_ID if hidden
+                    else PROG_LIVE_EMOJI_ID,
+                )],
+                [_btn(B("BACK"), cb="bmain")],
+            ]),
+        )
+        return
+    if data == "mprice":
+        txt = "<b>Choose a plan to proceed with secure crypto payment</b>"
+        await query.message.edit_text(txt, parse_mode="HTML", reply_markup=kb_price())
+        return
+
+    # ── Shopify Mass gate info (special layout) ──────────────────
+    if data == "imsh":
+        ud_i    = get_user_data(user.id, context)
+        prem_i  = is_user_premium(ud_i)
+        _today  = datetime.now().strftime("%Y-%m-%d")
+        if prem_i:
+            limit_line   = "Unlimited"
+            status_line  = "✅ Available"
+            credits_line = "∞"
+        else:
+            _used    = ud_i.get("msh_daily_cards", 0) if ud_i.get("msh_daily_date", "") == _today else 0
+            _remain  = max(0, 500 - _used)
+            _cr      = ud_i.get("credits", 0)
+            limit_line   = f"500 cards / day"
+            credits_line = str(_cr)
+            if ud_i.get("msh_daily_date", "") == _today:
+                status_line = f"🔒 Used today ({_used}/500)" if _used >= 500 else f"⚡ {_remain} cards left today"
+            else:
+                status_line = "✅ Available"
+        await query.message.edit_text(
+            f"<b>────────────</b>\n"
+            f"<b>Gate</b>    ➳ Shopify 0-20$\n"
+            f"<b>Command</b> ➳ <code>/msh</code>\n"
+            f"<b>Limit</b>   ➳ {limit_line}\n"
+            f"<b>Type</b>    ➳ Mass Checker\n"
+            f"<b>Stop</b>    ➳ Button\n"
+            f"<b>Cost</b>    ➳ {'∞ (Premium)' if prem_i else '1 credit / card'}\n"
+            f"<b>Credits</b> ➳ {credits_line}\n"
+            f"<b>Status</b>  ➳ {status_line}\n"
+            f"<b>────────────</b>",
+            parse_mode="HTML",
+            reply_markup=kb_back("mgates")
+        )
+        return
+
+    if data == "ish":
+        ud_i   = get_user_data(user.id, context)
+        prem_i = is_user_premium(ud_i)
+        _cr    = ud_i.get("credits", 0)
+        credits_line = "∞" if prem_i else str(_cr)
+        status_line  = "✅ Available" if (prem_i or _cr > 0) else "🔒 No Credits"
+        await query.message.edit_text(
+            f"<b>────────────</b>\n"
+            f"<b>Gate</b>    ➳ Shopify 0-20$\n"
+            f"<b>Command</b> ➳ <code>/sh</code>\n"
+            f"<b>Limit</b>   ➳ {'Unlimited' if prem_i else '1 card / check'}\n"
+            f"<b>Type</b>    ➳ Single Checker\n"
+            f"<b>Stop</b>    ➳ Automatic\n"
+            f"<b>Cost</b>    ➳ {'∞ (Premium)' if prem_i else '1 Credit'}\n"
+            f"<b>Credits</b> ➳ {credits_line}\n"
+            f"<b>Status</b>  ➳ {status_line}\n"
+            f"<b>────────────</b>",
+            parse_mode="HTML",
+            reply_markup=kb_back("mgates")
+        )
+        return
+
+    # ── New msh Stop button (mshs:<sid>) ─────────────────────────
+    if data.startswith("mshs:"):
+        await cb_msh_stop(update, context)
+        return
+
+    # ── New msh Live/All button (mshr:<sid>:<kind>) ───────────────
+    if data.startswith("mshr:"):
+        await cb_msh_result(update, context)
+        return
+
+    # ── Legacy stop (old sessions before UI update) ───────────────
+    if data.startswith("stop_msh_"):
+        task_id = data[len("stop_msh_"):]
+        tasks   = context.bot_data.get("msh_tasks", {})
+        if task_id in tasks:
+            tasks[task_id]["running"] = False
+            await query.answer("⏹ Stopping...", show_alert=False)
+        else:
+            await query.answer("Task already finished.", show_alert=True)
+        return
+
+    # ── Legacy download: Approved ─────────────────────────────────
+    if data.startswith("dl_approved_"):
+        task_id = data[len("dl_approved_"):]
+        results = context.bot_data.get("msh_results", {}).get(task_id)
+        if not results or not results.get("approved"):
+            await query.answer("No approved cards found or results expired.", show_alert=True)
+            return
+        await query.answer("Sending approved cards file…", show_alert=False)
+        content  = "\n".join(results["approved"]).encode("utf-8")
+        filename = f"approved_{task_id}.txt"
+        try:
+            await query.message.reply_document(
+                document=BytesIO(content), filename=filename,
+                caption=(f"<b>✅ Approved Cards</b>\nTotal: <b>{len(results['approved'])}</b> cards\nGate: Shopify 0-20$"),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Legacy download: ALL ───────────────────────────────────────
+    if data.startswith("dl_all_"):
+        task_id = data[len("dl_all_"):]
+        results = context.bot_data.get("msh_results", {}).get(task_id)
+        if not results or not results.get("all"):
+            await query.answer("Results expired or not found.", show_alert=True)
+            return
+        await query.answer("Sending all results file…", show_alert=False)
+        content  = "\n".join(results["all"]).encode("utf-8")
+        filename = f"all_results_{task_id}.txt"
+        try:
+            await query.message.reply_document(
+                document=BytesIO(content), filename=filename,
+                caption=(f"<b>📋 All Checked Cards</b>\nTotal: <b>{len(results['all'])}</b> cards\nGate: Shopify 0-20$"),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
+    if data in payments.PLANS:
+        await query.answer("Loading available payment methods…", show_alert=False)
+        plan = payments.PLANS[data]
+        plan_emoji = tg_emoji(get_plan_emoji_id(plan["plan"]), "⭐")
+        try:
+            accepted_methods = await payments.get_accepted_method_keys(force=True)
+        except Exception as exc:
+            logger.error("[OXAPAY] Could not load accepted currencies: %s", exc)
+            await query.message.edit_text(
+                f"<b>{E_ERRORS} {B('Payment Methods Unavailable')}</b>\n"
+                "──────────\n"
+                f"{B('The payment service is temporarily unavailable.')} "
+                f"{B('Please try again.')}",
+                parse_mode="HTML",
+                reply_markup=kb_payment(),
+            )
+            return
+        if not accepted_methods:
+            await query.message.edit_text(
+                f"<b>{E_ERRORS} No Payment Methods Enabled</b>\n"
+                "──────────\n"
+                "Enable at least one supported cryptocurrency in your "
+                "payment service settings.",
+                parse_mode="HTML",
+                reply_markup=kb_payment(),
+            )
+            return
+        await query.message.edit_text(
+            f"<b>{plan_emoji} {B(plan['name'])} Plan</b>\n"
+            f"<b>Price</b> ➳ ${plan['price']:.2f}\n"
+            f"<b>Duration</b> ➳ {plan['days']} Day{'s' if plan['days'] != 1 else ''}\n"
+            "<b>Credits</b> ➳ ∞\n"
+            "<b>Select Payment Method</b> ➳",
+            parse_mode="HTML",
+            reply_markup=kb_crypto_methods(data, accepted_methods),
+        )
+        return
+
+    if data.startswith("wlpay:"):
+        await query.answer("Creating secure payment address…", show_alert=False)
+        try:
+            _, plan_key, method_key = data.split(":", 2)
+            plan = payments.PLANS[plan_key]
+            payment = await payments.create_white_label_payment(
+                user.id, plan_key, method_key,
+            )
+        except Exception as exc:
+            logger.error("[OXAPAY] White-label payment creation failed: %s", exc)
+            await query.message.edit_text(
+                f"<b>{E_ERRORS} {B('Payment Address Unavailable')}</b>\n"
+                "──────────\n"
+                f"{B('The payment service is temporarily unavailable after automatic retries.')} "
+                f"{B('Please press Retry Payment.')}",
+                parse_mode="HTML",
+                reply_markup=RawMarkup([
+                    [_btn(B("RETRY PAYMENT"), cb=data, style="primary")],
+                    [_btn(B("SUPPORT"), url=SUPPORT_LINK, style="primary")],
+                    [_btn(B("BACK"), cb="mprice")],
+                ]),
+            )
+            return
+
+        plan_emoji = tg_emoji(get_plan_emoji_id(plan["plan"]), "⭐")
+        memo_line = ""
+        if payment["memo"]:
+            memo_line = f"\n<b>Memo/Tag</b> ➳ <code>{escape(payment['memo'])}</code>"
+        await query.message.edit_text(
+            f"<b>Plan</b> ➳ {B(plan['name'])} {plan_emoji}\n"
+            f"<b>Price</b> ➳ ${plan['price']:.2f} USD\n"
+            f"<b>Pay</b> ➳ {escape(payment['pay_amount'])} "
+            f"{escape(payment['pay_currency'])}\n"
+            f"<b>Network</b> ➳ {escape(payment['network_name'])}\n\n"
+            "<b>Address</b> ➳\n"
+            f"<code>{escape(payment['address'])}</code>"
+            f"{memo_line}\n\n"
+            f"<b>Expires in</b> ➳ {payment['lifetime']} min\n"
+            "<b>Status</b> ➳ ⏳ Waiting…\n\n"
+            "Send the exact amount using the selected network. "
+            "Your plan activates automatically after confirmation.",
+            parse_mode="HTML",
+            reply_markup=RawMarkup([
+                [_btn(B("SUPPORT"), url=SUPPORT_LINK, style="primary")],
+            ]),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data.startswith("cmd_pg_"):
+        if data == "cmd_pg_noop":
+            return
+        try:
+            page = int(data.split("_")[-1])
+        except ValueError:
+            return
+        page = max(1, min(CMD_TOTAL_PAGES, page))
+        await query.message.edit_text(
+            CMD_PAGES[page], parse_mode="HTML",
+            reply_markup=kb_cmd_nav(page)
+        )
+        return
+
+    if _is_admin(user.id):
+        # ── /sub grant plan buttons: ogs_PLAN_DAYS_UID ──────────────
+        if data.startswith("ogs_"):
+            parts    = data.split("_")           # ["ogs","PLAN","DAYS","UID"]
+            plan_key = parts[1]                  # CORE / ELITE / ROOT
+            days     = int(parts[2])
+            uid      = int(parts[3])
+            ud_t     = get_user_data(uid, context)
+            grant_time = time.time()
+            ud_t["plan"]    = plan_key
+            ud_t["expires"] = grant_time + days * 86400
+            ud_t["granted_at"] = grant_time
+            plan_emoji = tg_emoji(get_plan_emoji_id(plan_key), "⭐")
+            target_name = ud_t.get("name", f"User {uid}")
+            exp_str = datetime.fromtimestamp(ud_t["expires"]).strftime("%Y-%m-%d %H:%M")
+            # Persist grant immediately — JSON + Postgres
+            await _save_premium(context.bot_data)
+            try:
+                await send_activation_msg(uid, plan_key, days, context)
+            except Exception:
+                pass
+            await query.answer(f"✅ {plan_key} {days}d granted!", show_alert=True)
+            try:
+                await query.message.edit_text(
+                    f"<b>{E_LIVE} {B('Plan Granted')}</b>\n──────────\n"
+                    f"<b>User</b>    ➳ {target_name} (<code>{uid}</code>)\n"
+                    f"<b>Plan</b>    ➳ {get_styled_plan(plan_key)} {plan_emoji}\n"
+                    f"<b>Days</b>    ➳ {days}\n"
+                    f"<b>Expires</b> ➳ {exp_str}\n"
+                    f"──────────",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            return
+        # ── owner_ban / owner_unban / owner_resub ───────────────────
+        if data.startswith("owner_ban_"):
+            uid = int(data.split("_")[-1])
+            get_user_data(uid, context)["banned"] = True
+            await query.answer(f"Banned {uid}", show_alert=True)
+            return
+        if data.startswith("owner_unban_"):
+            uid = int(data.split("_")[-1])
+            get_user_data(uid, context)["banned"] = False
+            await query.answer(f"Unbanned {uid}", show_alert=True)
+            return
+        if data.startswith("owner_resub_"):
+            uid = int(data.split("_")[-1])
+            ud  = get_user_data(uid, context)
+            ud["plan"] = "TRIAL"; ud["expires"] = 0
+            await _save_premium(context.bot_data)
+            await query.answer(f"Premium removed for {uid}", show_alert=True)
+            return
+        if data.startswith("find_sub_"):
+            uid = int(data.split("_")[-1])
+            await query.answer(
+                f"Use: /sub {uid}  to grant a plan.", show_alert=True
+            )
+            return
+        if data == "owner_info_back":
+            return
+        if data.startswith("fb_ok_"):
+            await _fb_approve(query, context, data[6:])
+            return
+        if data.startswith("fb_no_"):
+            await _fb_decline(query, context, data[6:])
+            return
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ERROR HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STATE_FILE = os.environ.get("BOT_STATE_FILE", "bot_state.json")
+BACKUP_DIR = os.environ.get("BOT_BACKUP_DIR", "backups")
+MAX_BACKUP_BYTES = 10 * 1024 * 1024
+RAID_WINDOW_SECONDS = int(os.environ.get("RAID_WINDOW_SECONDS", "60"))
+RAID_JOIN_THRESHOLD = int(os.environ.get("RAID_JOIN_THRESHOLD", "12"))
+RAID_DURATION_SECONDS = int(os.environ.get("RAID_DURATION_SECONDS", "900"))
+_RAID_RESTRICT_PERMISSIONS = ChatPermissions(can_send_messages=False)
+
+
+def _state_payload(bot_data: dict) -> dict:
+    """The durable, non-secret portion of bot state."""
+    return {
+        "version": 1,
+        "saved_at": datetime.utcnow().isoformat() + "Z",
+        "user_data": bot_data.get("user_data", {}),
+        "warnings": bot_data.get("warnings", {}),
+        "group_bans": bot_data.get("group_bans", {}),
+        "broadcast_records": bot_data.get("broadcast_records", {}),
+        "admin_notes": bot_data.get("admin_notes", {}),
+        "raid_state": bot_data.get("raid_state", {}),
+        "maintenance": bool(bot_data.get("maintenance", False)),
+        "bot_off": bool(bot_data.get("bot_off", False)),
+    }
+
+
+def _write_json_atomic(path: str, value: dict) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temporary = f"{path}.{uuid.uuid4().hex}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, path)
+
+
+def _rotate_restore_points(bot_data: dict) -> None:
+    """Create daily/weekly/monthly snapshots and prune only managed snapshots."""
+    now = datetime.utcnow()
+    payload = _state_payload(bot_data)
+    periods = (("daily", now.strftime("%Y%m%d"), 14),
+               ("weekly", now.strftime("%G-W%V"), 8),
+               ("monthly", now.strftime("%Y%m"), 12))
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    for period, label, keep in periods:
+        path = os.path.join(BACKUP_DIR, f"{period}-{label}.json")
+        if not os.path.exists(path):
+            _write_json_atomic(path, payload)
+        managed = sorted(
+            name for name in os.listdir(BACKUP_DIR)
+            if re.fullmatch(rf"{period}-[A-Za-z0-9-]+\.json", name)
+        )
+        for old in managed[:-keep]:
+            os.unlink(os.path.join(BACKUP_DIR, old))
+
+
+async def _automatic_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await asyncio.to_thread(_rotate_restore_points, context.bot_data)
+    except Exception as exc:
+        logger.warning("Automatic backup rotation failed: %s", exc)
+        try:
+            await context.bot.send_message(OWNER_ID, f"⚠️ Automatic backup failed: {escape(str(exc))}", parse_mode="HTML")
+        except Exception:
+            pass
+
+
+async def _expire_raid_modes(context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = time.time()
+    raids = context.bot_data.get("raid_state", {})
+    expired = [chat_id for chat_id, state in raids.items()
+               if state.get("expires_at", 0) <= now]
+    for chat_id in expired:
+        raids.pop(chat_id, None)
+    if expired:
+        await _save_state(context.bot_data)
+
+
+async def _maintenance_jobs_loop(app: Application) -> None:
+    """Scheduler fallback when PTB's optional JobQueue dependency is absent."""
+    last_backup_day = datetime.utcnow().strftime("%Y-%m-%d")
+    while True:
+        await asyncio.sleep(60)
+        await _expire_raid_modes(app)
+        current_day = datetime.utcnow().strftime("%Y-%m-%d")
+        if current_day != last_backup_day:
+            await _automatic_backup(app)
+            last_backup_day = current_day
+
+
+async def _save_state(bot_data: dict) -> None:
+    try:
+        await asyncio.to_thread(_write_json_atomic, STATE_FILE, _state_payload(bot_data))
+    except Exception as exc:
+        logger.warning("State save failed: %s", exc)
+
+
+def _valid_state(value: object) -> bool:
+    required = ("user_data", "warnings", "group_bans", "broadcast_records")
+    optional = ("admin_notes", "raid_state")
+    return (isinstance(value, dict) and value.get("version") == 1
+            and all(isinstance(value.get(key), dict) for key in required)
+            and all(key not in value or isinstance(value[key], dict) for key in optional))
+
+
+def _load_state(bot_data: dict) -> None:
+    if not os.path.exists(STATE_FILE):
+        return
+    try:
+        if os.path.getsize(STATE_FILE) > MAX_BACKUP_BYTES:
+            raise ValueError("state file exceeds size limit")
+        with open(STATE_FILE, encoding="utf-8") as handle:
+            state = json.load(handle)
+        if not _valid_state(state):
+            raise ValueError("invalid state schema")
+        for key in ("user_data", "warnings", "group_bans", "broadcast_records",
+                    "admin_notes", "raid_state"):
+            bot_data[key] = state.get(key, {})
+        bot_data["maintenance"] = bool(state.get("maintenance", False))
+        bot_data["bot_off"] = bool(state.get("bot_off", False))
+        logger.info("Restored durable bot state from %s", STATE_FILE)
+    except Exception as exc:
+        logger.warning("State restore failed: %s", exc)
+
+
+def _is_community_group(chat) -> bool:
+    if not chat or chat.type not in ("group", "supergroup"):
+        return False
+    expected = GROUP_USERNAME.lstrip("@").lower()
+    return bool(chat.username and chat.username.lower() == expected)
+
+
+async def _community_admins(chat_id: int, context) -> list:
+    """Fetch current Telegram administrators; callers handle permission failures."""
+    return await context.bot.get_chat_administrators(chat_id)
+
+
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Public, group-only view of the current Telegram administration team."""
+    message, chat = update.effective_message, update.effective_chat
+    if not message or not chat or chat.type not in ("group", "supergroup"):
+        await message.reply_text("Use /admin in a group to view its administrators.")
+        return
+    try:
+        administrators = await _community_admins(chat.id, context)
+    except (Forbidden, BadRequest) as exc:
+        await message.reply_text(f"⚠️ I cannot read this group's administrators: {escape(str(exc))}", parse_mode="HTML")
+        return
+    except Exception:
+        await message.reply_text("⚠️ Administrator list is temporarily unavailable. Please try again.")
+        return
+    by_id = {item.user.id: item.user for item in administrators}
+    ordered_ids = [uid for uid in (OWNER_ID, SECOND_OWNER_ID) if uid in by_id]
+    ordered_ids.extend(uid for uid in by_id if uid not in ordered_ids)
+    lines = ["<b>👥 Group Administrators</b>"]
+    for number, uid in enumerate(ordered_ids, 1):
+        user = by_id[uid]
+        label = "Owner" if uid == OWNER_ID else "Second Owner" if uid == SECOND_OWNER_ID else "Admin"
+        name = escape(user.full_name or user.first_name or "Administrator")
+        username = f" (@{escape(user.username)})" if user.username else ""
+        lines.append(f"{number}. <b>{name}</b>{username} — {label}")
+    await message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def _notify_raid(chat, text: str, context) -> None:
+    recipient_ids = {OWNER_ID}
+    try:
+        recipient_ids.update(member.user.id for member in await _community_admins(chat.id, context))
+    except Exception as exc:
+        logger.warning("Raid admin lookup failed chat=%s: %s", chat.id, exc)
+    for uid in recipient_ids:
+        try:
+            await context.bot.send_message(uid, text, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+async def _observe_raid_joins(chat, members, context) -> None:
+    """Conservative join burst detector; only restricts people joining after detection."""
+    if not _is_community_group(chat):
+        return
+    now = time.time()
+    state = context.bot_data.setdefault("raid_state", {}).setdefault(str(chat.id), {})
+    joins = [stamp for stamp in state.get("joins", []) if now - stamp < RAID_WINDOW_SECONDS]
+    joins.extend([now] * sum(1 for member in members if not member.is_bot))
+    state["joins"] = joins[-RAID_JOIN_THRESHOLD:]  # bounded, transient evidence
+    expires = state.get("expires_at", 0)
+    if expires <= now and len(joins) >= RAID_JOIN_THRESHOLD:
+        expires = now + RAID_DURATION_SECONDS
+        state.update({"active": True, "expires_at": expires, "activated_at": now})
+        await _save_state(context.bot_data)
+        markup = RawMarkup([[
+            _btn("Disable raid mode", cb=f"raid_off:{chat.id}")
+        ]])
+        alert = (
+            f"⚠️ <b>Raid mode enabled</b> in {escape(chat.title or 'the community group')}.\n"
+            f"{len(joins)} joins in {RAID_WINDOW_SECONDS}s; new arrivals will be temporarily restricted "
+            f"until {datetime.fromtimestamp(expires).strftime('%H:%M')}."
+        )
+        try:
+            await context.bot.send_message(chat.id, alert, parse_mode="HTML", reply_markup=markup)
+        except Exception as exc:
+            logger.warning("Raid group alert failed: %s", exc)
+        await _notify_raid(chat, alert, context)
+    if state.get("active") and state.get("expires_at", 0) > now:
+        for member in members:
+            if member.is_bot or await _is_chat_admin(chat.id, member.id, context):
+                continue
+            try:
+                await context.bot.restrict_chat_member(
+                    chat.id, member.id, permissions=_RAID_RESTRICT_PERMISSIONS,
+                    until_date=int(state["expires_at"]),
+                )
+            except (Forbidden, BadRequest) as exc:
+                logger.warning("Raid restriction failed chat=%s user=%s: %s", chat.id, member.id, exc)
+                await _notify_raid(chat, f"⚠️ Raid restriction failed for <code>{member.id}</code>: {escape(str(exc))}", context)
+    elif state.get("active"):
+        # Keep a tiny expired marker only until the next observed join, then prune it.
+        context.bot_data["raid_state"].pop(str(chat.id), None)
+        await _save_state(context.bot_data)
+
+
+async def cmd_raid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or not _is_community_group(chat):
+        return
+    if not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can manage raid mode.")
+        return
+    state = context.bot_data.setdefault("raid_state", {}).get(str(chat.id), {})
+    arg = (context.args[0].lower() if context.args else "status")
+    if arg in ("off", "disable"):
+        context.bot_data["raid_state"].pop(str(chat.id), None)
+        await _save_state(context.bot_data)
+        await message.reply_text("✅ Raid mode disabled. Existing temporary restrictions retain their Telegram expiry.")
+    elif arg == "status":
+        active = state.get("active") and state.get("expires_at", 0) > time.time()
+        await message.reply_text("🛡 Raid mode: " + (f"ON until {datetime.fromtimestamp(state['expires_at']).strftime('%Y-%m-%d %H:%M')}" if active else "OFF"))
+    else:
+        await message.reply_text("Use /raid off or /raid status.")
+
+
+async def raid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data.startswith("raid_off:"):
+        return
+    chat_id = int(query.data.split(":", 1)[1])
+    if not await _is_chat_admin(chat_id, query.from_user.id, context):
+        await query.answer("Only group administrators can disable raid mode.", show_alert=True)
+        return
+    context.bot_data.setdefault("raid_state", {}).pop(str(chat_id), None)
+    await _save_state(context.bot_data)
+    await query.answer("Raid mode disabled.")
+    await query.message.edit_reply_markup(reply_markup=None)
+
+
+async def _is_chat_admin(chat_id: int, user_id: int, context) -> bool:
+    if _is_admin(user_id):
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        return member.status in ("administrator", "creator", "owner")
+    except Exception:
+        return False
+
+
+async def _issue_warning(chat, target, moderator, reason: str, context,
+                         automated: bool = False) -> int:
+    """Single warning pathway used by both moderators and anti-spam."""
+    if target.is_bot or _is_admin(target.id):
+        return 0
+    warnings = context.bot_data.setdefault("warnings", {})
+    if automated and await _is_chat_admin(chat.id, target.id, context):
+        return 0
+    history = warnings.setdefault(str(chat.id), {}).setdefault(str(target.id), [])
+    now = datetime.utcnow()
+    # Old warnings are history, not a permanent path to an accidental ban.
+    active_cutoff = now - timedelta(days=7 if automated else 30)
+    active_history = []
+    for item in history:
+        try:
+            stamp = datetime.fromisoformat(item.get("timestamp", "").rstrip("Z"))
+        except (TypeError, ValueError):
+            continue
+        if stamp >= active_cutoff:
+            active_history.append(item)
+    history[:] = active_history
+    history.append({
+        "timestamp": now.isoformat() + "Z",
+        "reason": reason[:300],
+        "moderator_id": moderator.id,
+        "moderator_name": getattr(moderator, "full_name", None)
+        or getattr(moderator, "first_name", None) or "Moderator",
+        "automated": automated,
+    })
+    number = len(history)
+    if number >= 3:
+        context.bot_data.setdefault("group_bans", {}).setdefault(str(chat.id), {})[str(target.id)] = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "reason": "Three warnings",
+        }
+        try:
+            await context.bot.ban_chat_member(chat.id, target.id)
+            outcome = " Permanently banned after the third warning."
+        except Exception as exc:
+            logger.warning("Third-warning ban failed chat=%s user=%s: %s", chat.id, target.id, exc)
+            outcome = " Third-warning ban failed; grant me ban permissions."
+    else:
+        outcome = f" ({3 - number} warning(s) remain before a ban.)"
+    await _save_state(context.bot_data)
+    return number
+
+
+async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or chat.type not in ("group", "supergroup"):
+        return
+    if not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can issue warnings.")
+        return
+    target = message.reply_to_message.from_user if message.reply_to_message else None
+    if not target:
+        await message.reply_text("Reply to a group member with /warn <reason>.")
+        return
+    if target.is_bot or await _is_chat_admin(chat.id, target.id, context):
+        await message.reply_text("❌ Administrators and bots cannot be warned.")
+        return
+    reason = " ".join(context.args).strip() or "No reason provided"
+    count = await _issue_warning(chat, target, actor, reason, context)
+    await message.reply_text(
+        f"⚠️ <b>{escape(target.full_name or 'Member')}</b> received warning {count}/3.\n"
+        f"<b>Reason:</b> {escape(reason)}",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or chat.type not in ("group", "supergroup"):
+        return
+    target = message.reply_to_message.from_user if message.reply_to_message else actor
+    if target.id != actor.id and not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can view another member's warnings.")
+        return
+    history = context.bot_data.get("warnings", {}).get(str(chat.id), {}).get(str(target.id), [])
+    if not history:
+        await message.reply_text(f"✅ No warning history for {escape(target.full_name or 'this member')}.", parse_mode="HTML")
+        return
+    rows = []
+    for index, item in enumerate(history[-10:], 1):
+        rows.append(f"{index}. <b>{escape(item.get('timestamp', 'unknown'))}</b> — "
+                    f"{escape(item.get('reason', 'No reason'))} "
+                    f"(by {escape(item.get('moderator_name', 'Unknown'))})")
+    await message.reply_text(
+        f"⚠️ <b>Warnings for {escape(target.full_name or 'member')} ({len(history)}/3)</b>\n" + "\n".join(rows),
+        parse_mode="HTML",
+    )
+
+
+async def cmd_clearwarnings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not chat or not actor or not message.reply_to_message:
+        return
+    if not await _is_chat_admin(chat.id, actor.id, context):
+        await message.reply_text("❌ Only group administrators can clear warnings.")
+        return
+    target = message.reply_to_message.from_user
+    context.bot_data.setdefault("warnings", {}).setdefault(str(chat.id), {}).pop(str(target.id), None)
+    await _save_state(context.bot_data)
+    await message.reply_text(f"✅ Cleared warnings for {escape(target.full_name or 'member')}.", parse_mode="HTML")
+
+
+async def track_activity_and_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Low-priority normal-update tracker plus conservative community anti-spam."""
+    message, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not message or not user or user.is_bot:
+        return
+    ud = get_user_data(user.id, context)
+    _update_user_meta(ud, user)
+    today = datetime.now().strftime("%Y-%m-%d")
+    activity = ud.setdefault("daily_activity", {})
+    activity[today] = activity.get(today, 0) + 1
+    # Retain just one month of activity counters.
+    for day in list(activity):
+        if day < (datetime.now() - timedelta(days=31)).strftime("%Y-%m-%d"):
+            activity.pop(day, None)
+    if chat and chat.type in ("group", "supergroup"):
+        ud.setdefault("memberships", {})[str(chat.id)] = {
+            "title": chat.title or "", "last_seen": ud["last_active"],
+        }
+    # This covers credits/profile metadata changed by normal command updates too.
+    await _save_state(context.bot_data)
+    if not _is_community_group(chat) or await _is_chat_admin(chat.id, user.id, context):
+        return
+    text = (message.text or message.caption or "").strip().lower()
+    now = time.time()
+    tracker = context.bot_data.setdefault("spam_tracker", {}).setdefault(str(chat.id), {}).setdefault(
+        str(user.id), {"times": [], "texts": [], "forward_times": [], "last_warning": 0}
+    )
+    tracker["times"] = [item for item in tracker["times"] if now - item < 20] + [now]
+    tracker["texts"] = [item for item in tracker["texts"] if now - item[0] < 300]
+    if text:
+        tracker["texts"].append((now, text[:500]))
+    repeated = len(text) >= 4 and sum(1 for _, prior in tracker["texts"] if prior == text[:500]) >= 5
+    flooding = len(tracker["times"]) >= 10
+    entities = message.entities or message.caption_entities or []
+    mentions = len(entities) and sum(
+        1 for entity in entities if entity.type in ("mention", "text_mention")
+    ) >= 8
+    forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_date", None))
+    if forwarded:
+        tracker["forward_times"] = [item for item in tracker["forward_times"] if now - item < 60] + [now]
+    forwarded_spam = forwarded and len(tracker["forward_times"]) >= 4 and ("http" in text or "t.me/" in text)
+    if not (repeated or flooding or mentions or forwarded_spam) or now - tracker["last_warning"] < 1800:
+        return
+    tracker["last_warning"] = now
+    reason = "Automated anti-spam: " + ("repeated messages" if repeated else "flooding" if flooding else "excessive mentions" if mentions else "forwarded spam")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    count = await _issue_warning(chat, user, context.bot, reason, context, automated=True)
+    if count:
+        await context.bot.send_message(chat.id, f"⚠️ {escape(user.full_name or 'Member')}: warning {count}/3 for spam.", parse_mode="HTML")
+
+
+async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    path = os.path.join(BACKUP_DIR, f"bot-backup-{stamp}.json")
+    try:
+        await asyncio.to_thread(_write_json_atomic, path, _state_payload(context.bot_data))
+        with open(path, "rb") as handle:
+            await update.effective_message.reply_document(
+                handle, filename=os.path.basename(path),
+                caption="✅ Versioned state backup (contains no bot configuration or secrets).",
+            )
+    except Exception as exc:
+        logger.warning("Backup failed: %s", exc)
+        await update.effective_message.reply_text(f"❌ Backup failed: {escape(str(exc))}", parse_mode="HTML")
+
+
+async def cmd_restore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    message = update.effective_message
+    source = message.reply_to_message.document if message and message.reply_to_message else None
+    if not source or not (source.file_name or "").lower().endswith(".json"):
+        await message.reply_text("Reply to a JSON backup document with /restore.")
+        return
+    if source.file_size and source.file_size > MAX_BACKUP_BYTES:
+        await message.reply_text("❌ Restore refused: backup exceeds the 10 MB limit.")
+        return
+    try:
+        payload = BytesIO()
+        await (await context.bot.get_file(source.file_id)).download_to_memory(payload)
+        if payload.tell() > MAX_BACKUP_BYTES:
+            raise ValueError("backup exceeds the 10 MB limit")
+        state = json.loads(payload.getvalue().decode("utf-8"))
+        if not _valid_state(state):
+            raise ValueError("expected version 1 state with object user_data, warnings, group_bans, and broadcast_records")
+    except Exception as exc:
+        await message.reply_text(f"❌ Restore validation failed: {escape(str(exc))}", parse_mode="HTML")
+        return
+    context.bot_data.setdefault("restore_pending", {})[str(OWNER_ID)] = state
+    markup = RawMarkup([[
+        _btn("Confirm restore", cb="restore_confirm"),
+        _btn("Cancel", cb="restore_cancel"),
+    ]])
+    await message.reply_text(
+        "⚠️ <b>Restore confirmation required</b>\nThis replaces current durable state. "
+        "A safety backup will be made first.",
+        parse_mode="HTML", reply_markup=markup,
+    )
+
+
+async def restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or query.from_user.id != OWNER_ID:
+        return
+    await query.answer()
+    pending = context.bot_data.setdefault("restore_pending", {}).pop(str(OWNER_ID), None)
+    if query.data == "restore_cancel":
+        await query.message.edit_text("Restore cancelled.")
+        return
+    if not pending:
+        await query.message.edit_text("❌ Restore request expired; reply to the backup again.")
+        return
+    try:
+        safety = os.path.join(BACKUP_DIR, f"pre-restore-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.json")
+        await asyncio.to_thread(_write_json_atomic, safety, _state_payload(context.bot_data))
+        for key in ("user_data", "warnings", "group_bans", "broadcast_records",
+                    "admin_notes", "raid_state"):
+            context.bot_data[key] = pending.get(key, {})
+        context.bot_data["maintenance"] = bool(pending.get("maintenance", False))
+        context.bot_data["bot_off"] = bool(pending.get("bot_off", False))
+        await _save_state(context.bot_data)
+        await query.message.edit_text("✅ Restore completed. A pre-restore safety backup was saved.")
+    except Exception as exc:
+        logger.warning("Restore failed: %s", exc)
+        await query.message.edit_text(f"❌ Restore failed: {escape(str(exc))}", parse_mode="HTML")
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    if isinstance(err, Conflict):
+        # Another session is still alive on Telegram's server.
+        # Wait 30 s and let PTB retry — do NOT kill the process.
+        logger.warning("CONFLICT detected — another session active. Waiting 30 s before retry...")
+        await asyncio.sleep(30)
+        return
+    if isinstance(err, (NetworkError, Forbidden)):
+        logger.warning(f"Network/Forbidden error: {err}")
+        return
+    logger.error(f"Unhandled exception: {err}", exc_info=err)
+
+
+async def maintenance_command_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop public command dispatch during maintenance without blocking admins."""
+    user, chat, message = update.effective_user, update.effective_chat, update.effective_message
+    if context.bot_data.get("bot_off", False):
+        if user and user.id == OWNER_ID:
+            return
+        if message:
+            await message.reply_text(
+                "⛔ <b>Bot access is currently OFF.</b>\nPlease try again later.",
+                parse_mode="HTML",
+            )
+        raise ApplicationHandlerStop
+    if not context.bot_data.get("maintenance"):
+        return
+    if not user or not message:
+        return
+    allowed = _is_admin(user.id)
+    if not allowed and chat and chat.type in ("group", "supergroup"):
+        allowed = await _is_chat_admin(chat.id, user.id, context)
+    if allowed:
+        return
+    await message.reply_text("⚠️ <b>Maintenance notice:</b> this bot is temporarily unavailable. Please try again later.", parse_mode="HTML")
+    raise ApplicationHandlerStop
+
+
+async def bot_off_callback_guard(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Block public inline-button actions while bot access is disabled."""
+    query = update.callback_query
+    if not query or not context.bot_data.get("bot_off", False):
+        return
+    if query.from_user and query.from_user.id == OWNER_ID:
+        return
+    await query.answer(
+        "Bot access is currently OFF. Please try again later.",
+        show_alert=True,
+    )
+    raise ApplicationHandlerStop
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MAIN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def _post_shutdown(app: Application) -> None:
+    """Final save → Postgres, stop prober, close DB pool."""
+    maintenance_task = app.bot_data.pop("_maintenance_jobs_task", None)
+    if maintenance_task:
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
+    await payments.stop_webhook(app)
+    await _save_state(app.bot_data)
+    # ── CRITICAL: save all premium users to Postgres before exit ──────────
+    # Passing app.bot_data ensures no data is lost on Railway redeploy.
+    await db.close_db(app.bot_data)
+    try:
+        await stop_probe_background()
+        logger.info("[PROBE] Background prober stopped on shutdown.")
+    except Exception as exc:
+        logger.warning(f"[PROBE] shutdown cleanup error: {exc}")
+
+
+async def _post_init(app: Application) -> None:
+    """
+    1. Auto-detect the real bot username from Telegram and patch config so
+       referral links always point to the correct bot, regardless of what
+       BOT_USERNAME is set to in config.py.
+    2. Clear any existing webhook / long-poll session before polling starts.
+       Sleep 5 s so Telegram can expire the old getUpdates session.
+    3. Start background site prober so /sh and /msh only use alive sites.
+    """
+    # ── Load premium from JSON backup (always) ─────────────────────────────
+    # Run in thread pool — json.load() on a large file would otherwise block
+    # the event loop during startup.
+    _load_state(app.bot_data)
+    await asyncio.to_thread(_load_premium_file, app.bot_data)
+    try:
+        await asyncio.to_thread(_rotate_restore_points, app.bot_data)
+    except Exception as exc:
+        logger.warning("Startup backup rotation failed: %s", exc)
+        try:
+            await app.bot.send_message(OWNER_ID, f"⚠️ Automatic backup failed: {escape(str(exc))}", parse_mode="HTML")
+        except Exception:
+            pass
+    if app.job_queue:
+        app.job_queue.run_repeating(_automatic_backup, interval=86400, first=86400,
+                                    name="state_backup_rotation")
+        app.job_queue.run_repeating(_expire_raid_modes, interval=60, first=60,
+                                    name="raid_mode_expiry")
+    else:
+        app.bot_data["_maintenance_jobs_task"] = asyncio.create_task(
+            _maintenance_jobs_loop(app),
+            name="maintenance-jobs",
+        )
+    # ── Connect to Postgres & sync — all logic lives in database.py ────────
+    await db.attach(app)
+    await payments.start_webhook(app, _activate_oxapay_plan)
+
+    # ── Startup DM to owner — confirms DB status so data loss is obvious ───
+    try:
+        now          = time.time()
+        user_data    = app.bot_data.get("user_data", {})
+        premium_cnt  = sum(
+            1 for ud in user_data.values()
+            if ud.get("plan", "TRIAL").upper() != "TRIAL"
+            and ud.get("expires", 0) > now
+        )
+        db_status    = db.status_text()
+        db_ok        = db.is_connected()
+        lines = [
+            f"<b>🤖 Bot Restarted</b>",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"<b>Database ➛</b> {db_status}",
+            f"<b>Premium users restored ➛</b> <code>{premium_cnt}</code>",
+        ]
+        if not db_ok:
+            lines += [
+                "",
+                "<b>⚠️ Premium users will be LOST on next restart!</b>",
+                "",
+                "<b>Fix on Railway:</b>",
+                "1. Your project → <b>+ New → Database → PostgreSQL</b>",
+                "2. Click your bot service → Variables",
+                "3. Add Reference → <code>DATABASE_URL</code>",
+                "4. Redeploy the bot",
+                "",
+                f"Then send <code>/dbstatus</code> to confirm.",
+            ]
+        else:
+            lines.append(f"\n<i>Send /dbstatus to force a save &amp; re-check.</i>")
+        await app.bot.send_message(
+            chat_id=OWNER_ID,
+            text="\n".join(lines),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning(f"[STARTUP] Could not DM owner: {exc}")
+
+    # ── Auto-detect real bot username ──────────────────────────────────────
+    try:
+        import config as _cfg
+        me = await app.bot.get_me()
+        if me.username:
+            _cfg.BOT_USERNAME = me.username
+            _cfg.BOT_LINK     = f"https://t.me/{me.username}"
+            logger.info(f"Bot identity confirmed: @{me.username} — referral link updated.")
+    except Exception as exc:
+        logger.warning(f"Could not fetch bot info: {exc}")
+
+    # ── Clear stale webhook / long-poll session ────────────────────────────
+    for attempt in range(1, 6):
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook cleared — waiting 5 s for old session to expire...")
+            await asyncio.sleep(5)
+            break
+        except Exception as exc:
+            logger.warning(f"delete_webhook attempt {attempt}/5 failed: {exc}")
+            if attempt < 5:
+                await asyncio.sleep(attempt * 2)
+    else:
+        logger.warning("Could not clear webhook after 5 attempts — continuing anyway.")
+
+    # ── Fake/demo-only mode ──────────────────────────────────────────────
+    # Do not probe stores or payment sites during startup. Fake demo events
+    # are generated locally by _fl_job and never call checkout APIs.
+    logger.info("[PROBE] Disabled: demo-only fake-log mode is active.")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FAKE LOGS  (owner-only — invisible to all other users)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FAKE LOGS CONTROL SYSTEM  /fakeon  (owner-only, silent to all others)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# bot_data keys used:
+#   "fl_ids"             — list of ID dicts the owner configured
+#   "fl_speed"           — "slow" | "normal" | "fast"
+#   "fakelogs_active"    — bool, is the stream running?
+#   "fl_state"           — None | "awaiting_id"
+#   "fakelogs_channel_id"— numeric chat ID of target logs channel
+#
+# Fake logs are clearly marked as test events and never update real user data.
+# Each message uses a random enabled display ID from fl_ids.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+from sh import LOGS_CHANNEL_LINK as _FL_CH_LINK   # [❆] in fake logs links back to the hits channel
+
+_FL_DEFAULT_CHANNEL_ID = -1004361062205
+_FL_DEFAULT_FAKE_UID = "8283904645"
+
+
+def _fl_read_channel_id() -> int:
+    """Read the Railway target and repair the common missing-minus typo."""
+    raw = os.environ.get("FAKE_LOG_CHANNEL_ID", "").strip()
+    if not raw:
+        return _FL_DEFAULT_CHANNEL_ID
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.error(
+            "[FAKELOGS] FAKE_LOG_CHANNEL_ID must be numeric; using %s.",
+            _FL_DEFAULT_CHANNEL_ID,
+        )
+        return _FL_DEFAULT_CHANNEL_ID
+    # Any positive numeric value is a user-style ID, not a channel/group.
+    # Use the supplied Batlogs target instead of repeatedly attempting a bad send.
+    if value > 0:
+        logger.warning(
+            "[FAKELOGS] Positive FAKE_LOG_CHANNEL_ID=%s is invalid; using %s.",
+            raw, _FL_DEFAULT_CHANNEL_ID,
+        )
+        return _FL_DEFAULT_CHANNEL_ID
+    return value
+
+
+_FL_CHANNEL_ID = _fl_read_channel_id()
+_FL_JOB        = "fake_hit_stream"
+_FL_ACTIVE     = "fakelogs_active"
+_FL_TASK       = "fakelogs_stream_task"
+
+# ── Speed presets: (min_delay, max_delay) in seconds ─────────────────────────
+_FL_SPEEDS = {
+    "slow":   (90,  180),   # 1.5 – 3 min   (very relaxed)
+    "normal": (40,   80),   # 40 s – 1.5 min (moderate)
+    "fast":   (18,   35),   # 18 – 35 s      (active but not spammy)
+}
+_FL_SPEED_LABELS = {
+    "slow":   "🐢 Slow  (1.5–3 min)",
+    "normal": "🚶 Normal (40–80 s)",
+    "fast":   "🏃 Fast  (18–35 s)",
+}
+
+# ── Prices pool (varied so logs don't look uniform) ──────────────────────────
+_FL_PRICES = [
+    # Edit this list to change the generated demo prices. Keep values below 10.
+    "0.99", "1.49", "2.29", "2.99", "3.47",
+    "4.19", "4.99", "5.47", "6.79", "8.99",
+]
+
+
+def _fl_log_msg(id_entry: dict) -> str:
+    """Build a local test event without payment data or external checks."""
+    price = random.choice(_FL_PRICES)
+    ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
+    eid   = get_random_charged_emoji()
+    return (
+        f'<b>HIT ➛ CHARGED '
+        f'<tg-emoji emoji-id="{eid}">💎</tg-emoji></b>\n'
+        f'<b>Gate ➛ Shopify • {price} USD</b>\n'
+        f'<b><tg-emoji emoji-id="{HIT_RESP_EMOJI_ID}">✅</tg-emoji>'
+        f' <code>ORDER_PAID</code></b>\n'
+        f'<b>User ➛ {ulink}'
+        f' <tg-emoji emoji-id="{PRO_EMOJI_ID}">⭐</tg-emoji></b>'
+    )
+
+def _fl_get_ids(bd: dict) -> list:
+    ids = bd.setdefault("fl_ids", [])
+    # IDs live only in bot_data memory. They are not written to a database/file.
+    # Seed the default only on first initialization; removing the last ID must
+    # leave the list empty instead of silently recreating it.
+    if not bd.get("fl_ids_initialized"):
+        bd["fl_ids_initialized"] = True
+        if not ids:
+            bd["fl_ids_seeded"] = True
+            ids.append({
+                "uid": _FL_DEFAULT_FAKE_UID,
+                "display": f"user_{_FL_DEFAULT_FAKE_UID}",
+                "link": f"tg://user?id={_FL_DEFAULT_FAKE_UID}",
+                "enabled": True,
+                "count": 0,
+            })
+    return ids
+
+
+def _fl_get_speed(bd: dict) -> str:
+    return bd.get("fl_speed", "normal")
+
+
+async def _fl_validate_target(bot, target: int) -> str:
+    """Return an actionable error, or an empty string when the target is usable."""
+    if not isinstance(target, int) or target >= 0:
+        return (
+            "Target must be a Telegram channel/group ID beginning with -100. "
+            "A private user/DM ID cannot receive the log stream."
+        )
+    try:
+        chat = await bot.get_chat(target)
+        if chat.type not in ("channel", "group", "supergroup"):
+            return f"Target chat type is {chat.type!r}; choose a channel or group."
+
+        me = await bot.get_me()
+        member = await bot.get_chat_member(target, me.id)
+        status = getattr(member, "status", "")
+        if chat.type == "channel" and status not in ("administrator", "creator"):
+            return "The bot must be an administrator of the target channel."
+        if chat.type != "channel" and status in ("left", "kicked"):
+            return "The bot is not a member of the target group."
+        return ""
+    except Forbidden:
+        return "Telegram denied access. Add the bot as an administrator of the target channel."
+    except BadRequest as exc:
+        return f"Telegram rejected the target: {str(exc)[:300]}"
+    except Exception as exc:
+        return f"Could not verify the target chat: {str(exc)[:300]}"
+
+
+async def _fl_send_with_retry(context, target: int, text: str, reply_markup) -> None:
+    """Send one event with bounded retries for temporary Telegram/network errors."""
+    retry_delays = (1.0, 3.0, 8.0)
+    for attempt, delay in enumerate(retry_delays, start=1):
+        try:
+            await context.bot.send_message(
+                target, text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return
+        except RetryAfter as exc:
+            if attempt == len(retry_delays):
+                raise
+            wait_for = min(float(getattr(exc, "retry_after", delay)), 30.0)
+            logger.warning(
+                "[FAKELOGS] Telegram rate limit; retry %s/%s in %.1fs",
+                attempt, len(retry_delays), wait_for,
+            )
+            await asyncio.sleep(wait_for)
+        except (NetworkError, TimedOut, asyncio.TimeoutError) as exc:
+            if attempt == len(retry_delays):
+                raise
+            logger.warning(
+                "[FAKELOGS] temporary send failure; retry %s/%s in %.1fs: %s",
+                attempt, len(retry_delays), delay, exc,
+            )
+            await asyncio.sleep(delay)
+
+
+# ── One delivery attempt ──────────────────────────────────────────────────────
+
+async def _fl_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    bd     = context.bot_data
+    if not bd.get(_FL_ACTIVE):
+        return
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    if not target:
+        logger.warning("[FAKELOGS] No channel ID configured — stopping.")
+        bd[_FL_ACTIVE] = False
+        return
+    if not isinstance(target, int) or target >= 0:
+        bd["fl_last_error"] = (
+            "Invalid target ID. Set FAKE_LOG_CHANNEL_ID to a negative channel/group ID."
+        )
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        return
+
+    ids = [e for e in _fl_get_ids(bd) if e.get("enabled", True)]
+    speed = _fl_get_speed(bd)
+    lo, hi = _FL_SPEEDS[speed]
+
+    if not ids:
+        bd["fl_last_error"] = "No enabled display IDs are configured."
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        return
+
+    id_entry = random.choice(ids)
+    text     = _fl_log_msg(id_entry)
+    btn_kb = RawMarkup([[
+        _btn("𝘽𝘼𝙏𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
+             icon=CARD_CHK_BTN_EMOJI_ID),
+    ]])
+    try:
+        await _fl_send_with_retry(context, target, text, btn_kb)
+        id_entry["count"] = id_entry.get("count", 0) + 1
+        bd["fl_last_error"] = ""
+    except (Forbidden, BadRequest) as exc:
+        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+        bd["fl_last_error"] = str(exc)[:500]
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        logger.warning(f"[FAKELOGS] send failed (chat={target}); stream stopped: {exc}")
+        return
+    except Exception as exc:
+        # Temporary failures are recorded, but the server-side stream remains
+        # active and the next event is still scheduled below.
+        bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+        bd["fl_last_error"] = str(exc)[:500]
+        logger.warning(f"[FAKELOGS] temporary send failure (chat={target}): {exc}")
+
+def _fl_stop(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop only an explicitly requested stream and any legacy scheduled jobs."""
+    task = context.bot_data.get(_FL_TASK)
+    if task is not None and not task.done():
+        task.cancel()
+    context.bot_data.pop(_FL_TASK, None)
+
+    job_queue = context.job_queue
+    if job_queue is None:
+        return
+    for job in job_queue.get_jobs_by_name(_FL_JOB):
+        job.schedule_removal()
+
+
+async def _fl_stream(application) -> None:
+    """Keep sending from the bot process, independently of the owner's chat."""
+    bd = application.bot_data
+    try:
+        while bd.get(_FL_ACTIVE):
+            lo, hi = _FL_SPEEDS[_fl_get_speed(bd)]
+            await asyncio.sleep(random.uniform(lo, hi))
+            if not bd.get(_FL_ACTIVE):
+                break
+            try:
+                # Application exposes bot and bot_data, which are the only
+                # context attributes used by a single delivery attempt.
+                await _fl_job(application)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+                bd["fl_last_error"] = f"Unexpected stream error: {str(exc)[:400]}"
+                logger.exception("[FAKELOGS] stream iteration failed; continuing")
+    except asyncio.CancelledError:
+        # Cancellation is the normal result of pressing Stop Logs or /fakeoff.
+        raise
+    finally:
+        if bd.get(_FL_TASK) is asyncio.current_task():
+            bd.pop(_FL_TASK, None)
+
+
+# ── Control panel UI builders ─────────────────────────────────────────────────
+
+def _fl_main_text(bd: dict) -> str:
+    active  = bd.get(_FL_ACTIVE, False)
+    speed   = _fl_get_speed(bd)
+    ids     = _fl_get_ids(bd)
+    on_ct   = sum(1 for e in ids if e.get("enabled", True))
+    status  = "🟢 RUNNING" if active else "🔴 STOPPED"
+    target  = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    cid_str = f"<code>{target}</code>" if target else "<i>not set</i>"
+    lines = [
+        f"<b>🎭 Fake Logs Control Panel</b>\n"
+        f"──────────\n"
+        f"<b>Status  ➛</b> {status}\n"
+        f"<b>Channel ➛</b> {cid_str}\n"
+        f"<b>Speed   ➛</b> {_FL_SPEED_LABELS[speed]}\n"
+        f"<b>IDs     ➛</b> {on_ct}/{len(ids)} enabled\n"
+        f"──────────",
+    ]
+    last_error = bd.get("fl_last_error", "")
+    if last_error:
+        lines.append(f"<b>Last delivery error ➛</b> <code>{escape(last_error)}</code>")
+    return "\n".join(lines)
+
+
+def _fl_main_kb(bd: dict) -> RawMarkup:
+    active     = bd.get(_FL_ACTIVE, False)
+    toggle_lbl = "Stop Logs" if active else "Start Logs"
+    toggle_cb  = "fl_stop"      if active else "fl_start"
+    return RawMarkup([
+        [
+            _btn("IDs",   cb="fl_ids"),
+            _btn("Speed", cb="fl_speed"),
+            _btn("Show",  cb="fl_show"),
+        ],
+        [_btn("Channel", cb="fl_channel")],
+        [_btn(toggle_lbl, cb=toggle_cb)],
+    ])
+
+
+def _fl_ids_text(bd: dict) -> str:
+    ids = _fl_get_ids(bd)
+    if not ids:
+        return (
+            "<b>📋 Fake Log IDs</b>\n──────────\n"
+            "No IDs added yet.\n\n"
+            "Press <b>➕ Add ID</b>, then send the ID in chat:\n"
+            "<code>123456789 @username</code>\n"
+            "or just <code>@username</code>\n\n"
+            "<i>Added IDs are memory-only and reset when the bot restarts.</i>"
+        )
+    lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
+    for e in ids:
+        on  = "🟢" if e.get("enabled", True) else "🔴"
+        ct  = e.get("count", 0)
+        lines.append(f"{on} {e['display']} — {ct} fake hit{'s' if ct != 1 else ''}")
+    lines.append("──────────\nUse buttons below to toggle / remove / add IDs.")
+    return "\n".join(lines)
+
+
+def _fl_ids_kb(bd: dict) -> RawMarkup:
+    ids  = _fl_get_ids(bd)
+    rows = []
+    for i, e in enumerate(ids):
+        on     = e.get("enabled", True)
+        toggle = "ON" if on else "OFF"
+        rows.append([
+            _btn(e["display"], cb="fl_noop"),
+            _btn(toggle, cb=f"fltog_{i}"),
+            _btn("Remove", cb=f"flrem_{i}"),
+        ])
+    rows.append([
+        _btn("Add ID", cb="fl_addid"),
+        _btn("Back", cb="fl_panel"),
+    ])
+    return RawMarkup(rows)
+
+
+def _fl_speed_text() -> str:
+    return (
+        "<b>⚡ Fake Log Speed</b>\n──────────\n"
+        "Choose how fast fake CHARGED hits appear in the logs channel.\n"
+        "All speeds use <b>random gaps</b> — no fixed pattern that could reveal the fakes."
+    )
+
+
+def _fl_speed_kb(bd: dict) -> RawMarkup:
+    cur  = _fl_get_speed(bd)
+    rows = []
+    for key, label in _FL_SPEED_LABELS.items():
+        suffix = " — Selected" if key == cur else ""
+        rows.append([_btn(f"{label}{suffix}", cb=f"flspd_{key}")])
+    rows.append([_btn("Back", cb="fl_panel")])
+    return RawMarkup(rows)
+
+
+def _fl_show_text(bd: dict) -> str:
+    ids   = _fl_get_ids(bd)
+    speed = _fl_get_speed(bd)
+    if not ids:
+        return "<b>📊 Fake Log Stats</b>\n──────────\nNo IDs configured yet."
+    lines = ["<b>📊 Fake Log Stats</b>", "──────────"]
+    total = 0
+    for e in ids:
+        on     = "🟢" if e.get("enabled", True) else "🔴"
+        ct     = e.get("count", 0)
+        total += ct
+        tag    = "" if e.get("enabled", True) else " <i>(disabled)</i>"
+        lines.append(f"{on} {e['display']} — <b>{ct}</b> hits{tag}")
+    lines += [
+        "──────────",
+        f"<b>Total fake hits sent ➛ {total}</b>",
+        f"<b>Speed ➛ {_FL_SPEED_LABELS[speed]}</b>",
+    ]
+    failed = bd.get("fl_failed", 0)
+    last_error = bd.get("fl_last_error", "")
+    if failed:
+        lines.append(f"<b>Failed deliveries ➛ {failed}</b>")
+        if last_error:
+            lines.append(f"<b>Last error ➛</b> <code>{escape(last_error)}</code>")
+    return "\n".join(lines)
+
+
+def _fl_show_kb() -> RawMarkup:
+    return RawMarkup([
+        [_btn("Clear All Stats", cb="fl_clrstats")],
+        [_btn("Back", cb="fl_panel")],
+    ])
+
+
+def _fl_channel_text(bd: dict) -> str:
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    cid_str = f"<code>{target}</code>" if target else "<i>not configured</i>"
+    return (
+        "<b>📡 Fake Log Channel</b>\n"
+        "──────────\n"
+        f"<b>Current channel ID ➛</b> {cid_str}\n\n"
+        "Tap <b>Enter Channel ID</b> and send the negative channel/group ID.\n"
+        "Example: <code>-1001234567890</code>\n\n"
+        "<i>The bot must be an administrator of the target channel.</i>"
+    )
+
+
+def _fl_channel_kb() -> RawMarkup:
+    return RawMarkup([
+        [_btn("Enter Channel ID", cb="fl_setchannel")],
+        [_btn("Back", cb="fl_panel")],
+    ])
+
+
+# ── /fakeon command ───────────────────────────────────────────────────────────
+
+async def _fakeon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — /fakeon opens the fake logs control panel.
+    Completely silent (no reply) to any non-owner user."""
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return  # silent — not even a "permission denied" message
+
+    bd     = context.bot_data
+    bd["fl_state"] = None
+    target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+    if not target:
+        await update.message.reply_text(
+            "<b>⚠️ Log channel not configured!</b>\n"
+            "──────────\n"
+            "1. Add your bot as <b>admin</b> to the target logs channel\n"
+            "2. Run <code>/getid</code> <i>inside that channel</i>\n"
+            "3. Set <code>FAKE_LOG_CHANNEL_ID=&lt;id&gt;</code> on Railway → redeploy",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        _fl_main_text(bd),
+        parse_mode="HTML",
+        reply_markup=_fl_main_kb(bd),
+    )
+
+
+async def _fakeoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — /fakeoff stops the stream."""
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    context.bot_data[_FL_ACTIVE] = False
+    _fl_stop(context)
+    await update.message.reply_text("<b>⛔ Fake logs stopped.</b>", parse_mode="HTML")
+
+
+# ── Master callback handler ───────────────────────────────────────────────────
+
+async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles all fl_* / fltog_* / flrem_* / flspd_* callbacks.
+    Owner-only and completely silent to everyone else."""
+    q = update.callback_query
+    if not q.from_user or q.from_user.id != OWNER_ID:
+        await q.answer("⛔ Owner only.", show_alert=True)
+        return
+    await q.answer()
+
+    bd  = context.bot_data
+    dat = q.data
+
+    # ── Main panel ────────────────────────────────────────────────────────────
+    if dat == "fl_panel":
+        await q.edit_message_text(
+            _fl_main_text(bd), parse_mode="HTML",
+            reply_markup=_fl_main_kb(bd),
+        )
+
+    elif dat == "fl_start":
+        enabled = [e for e in _fl_get_ids(bd) if e.get("enabled", True)]
+        if not enabled:
+            await q.answer(
+                "⚠️ Enable at least one ID first (📋 IDs → 🟢 ON).",
+                show_alert=True,
+            )
+            return
+        target = bd.get("fakelogs_channel_id", _FL_CHANNEL_ID)
+        target_error = await _fl_validate_target(context.bot, target)
+        if target_error:
+            bd[_FL_ACTIVE] = False
+            bd["fl_failed"] = bd.get("fl_failed", 0) + 1
+            bd["fl_last_error"] = target_error
+            await q.answer(f"⚠️ {target_error}", show_alert=True)
+            await q.edit_message_text(
+                _fl_main_text(bd), parse_mode="HTML",
+                reply_markup=_fl_main_kb(bd),
+            )
+            return
+        bd[_FL_ACTIVE] = True
+        _fl_stop(context)
+        # Send once immediately, then keep the server-side background task
+        # running even when the owner leaves this Telegram chat.
+        await _fl_job(context)
+        if bd.get(_FL_ACTIVE):
+            bd[_FL_TASK] = asyncio.create_task(
+                _fl_stream(context.application)
+            )
+        if bd.get("fl_last_error"):
+            await q.answer(
+                f"⚠️ Telegram delivery failed: {bd['fl_last_error'][:180]}",
+                show_alert=True,
+            )
+        await q.edit_message_text(
+            _fl_main_text(bd), parse_mode="HTML",
+            reply_markup=_fl_main_kb(bd),
+        )
+
+    elif dat == "fl_stop":
+        bd[_FL_ACTIVE] = False
+        _fl_stop(context)
+        await q.edit_message_text(
+            _fl_main_text(bd), parse_mode="HTML",
+            reply_markup=_fl_main_kb(bd),
+        )
+
+    elif dat == "fl_noop":
+        pass  # label-only button — intentional no-op
+
+    # ── IDs panel ─────────────────────────────────────────────────────────────
+    elif dat == "fl_ids":
+        await q.edit_message_text(
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
+        )
+
+    elif dat == "fl_addid":
+        bd["fl_state"] = "awaiting_id"
+        await q.edit_message_text(
+            "<b>➕ Add Fake Log ID</b>\n──────────\n"
+            "Send the user details in your next message:\n\n"
+            "<b>Format:</b> <code>123456789 @username</code>\n"
+            "or just    <code>@username</code>\n\n"
+            "<i>The ID / username will appear in fake hit logs as the checker.</i>\n"
+            "──────────\nSend /fakeon to cancel.",
+            parse_mode="HTML",
+        )
+
+    elif dat.startswith("fltog_"):
+        try:
+            idx = int(dat.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return
+        ids = _fl_get_ids(bd)
+        if 0 <= idx < len(ids):
+            ids[idx]["enabled"] = not ids[idx].get("enabled", True)
+        await q.edit_message_text(
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
+        )
+
+    elif dat.startswith("flrem_"):
+        try:
+            idx = int(dat.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return
+        ids = _fl_get_ids(bd)
+        if 0 <= idx < len(ids):
+            ids.pop(idx)
+        await q.edit_message_text(
+            _fl_ids_text(bd), parse_mode="HTML",
+            reply_markup=_fl_ids_kb(bd),
+        )
+
+    # ── Speed panel ───────────────────────────────────────────────────────────
+    elif dat == "fl_speed":
+        await q.edit_message_text(
+            _fl_speed_text(), parse_mode="HTML",
+            reply_markup=_fl_speed_kb(bd),
+        )
+
+    elif dat.startswith("flspd_"):
+        spd = dat.split("_", 1)[1]
+        if spd in _FL_SPEEDS:
+            bd["fl_speed"] = spd
+        await q.edit_message_text(
+            _fl_speed_text(), parse_mode="HTML",
+            reply_markup=_fl_speed_kb(bd),
+        )
+
+    # ── Show / stats panel ────────────────────────────────────────────────────
+    elif dat == "fl_show":
+        await q.edit_message_text(
+            _fl_show_text(bd), parse_mode="HTML",
+            reply_markup=_fl_show_kb(),
+        )
+
+    elif dat == "fl_clrstats":
+        for e in _fl_get_ids(bd):
+            e["count"] = 0
+        await q.edit_message_text(
+            _fl_show_text(bd), parse_mode="HTML",
+            reply_markup=_fl_show_kb(),
+        )
+
+    # ── Channel setup ─────────────────────────────────────────────────────────
+    elif dat == "fl_channel":
+        bd["fl_state"] = None
+        await q.edit_message_text(
+            _fl_channel_text(bd), parse_mode="HTML",
+            reply_markup=_fl_channel_kb(),
+        )
+
+    elif dat == "fl_setchannel":
+        bd["fl_state"] = "awaiting_channel"
+        await q.edit_message_text(
+            "<b>📡 Enter Channel ID</b>\n"
+            "──────────\n"
+            "Send the target channel/group ID in your next message.\n\n"
+            "<b>Format:</b> <code>-1001234567890</code>\n\n"
+            "The bot must already be an administrator of that channel.\n"
+            "Send /fakeon to cancel.",
+            parse_mode="HTML",
+        )
+
+
+# ── Add-ID message capture ────────────────────────────────────────────────────
+
+async def _fl_addid_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Captures owner's next message when fl_state == 'awaiting_id'.
+    Only fires for the owner; all other users pass through silently."""
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    bd = context.bot_data
+    state = bd.get("fl_state")
+    if state == "awaiting_channel":
+        raw = (update.message.text or "").strip()
+        if not raw.lstrip("-").isdigit() or int(raw) >= 0:
+            await update.message.reply_text(
+                "<b>❌ Invalid channel ID.</b>\n"
+                "Send a negative channel/group ID, for example "
+                "<code>-1001234567890</code>.",
+                parse_mode="HTML",
+            )
+            return
+        bd["fakelogs_channel_id"] = int(raw)
+        bd["fl_state"] = None
+        bd["fl_last_error"] = ""
+        await update.message.reply_text(
+            f"<b>✅ Channel ID saved:</b> <code>{raw}</code>\n"
+            "Open /fakeon and press Start Logs to verify delivery.",
+            parse_mode="HTML",
+        )
+        return
+
+    if state != "awaiting_id":
+        return  # not in add-ID mode — ignore
+
+    raw    = (update.message.text or "").strip()
+    parts  = raw.split()
+    uid_val   = None
+    uname_val = None
+
+    for p in parts:
+        if p.startswith("@"):
+            uname_val = p
+        elif p.lstrip("-").isdigit():
+            uid_val = p
+
+    if not uid_val and not uname_val:
+        await update.message.reply_text(
+            "<b>❌ Could not parse.</b>\n"
+            "Send: <code>123456789 @username</code>\n"
+            "or just <code>@username</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    display = uname_val or f"user_{uid_val}"
+    link    = (
+        f"https://t.me/{uname_val.lstrip('@')}"
+        if uname_val
+        else f"tg://user?id={uid_val}"
+    )
+    key_val = uid_val or uname_val
+
+    ids = _fl_get_ids(bd)
+    for e in ids:
+        if e["uid"] == key_val:
+            bd["fl_state"] = None
+            await update.message.reply_text(
+                f"<b>⚠️ {display} is already in the list.</b>", parse_mode="HTML"
+            )
+            return
+
+    ids.append({
+        "uid":     key_val,
+        "display": display,
+        "link":    link,
+        "enabled": True,
+        "count":   0,
+    })
+    bd["fl_state"] = None
+    await update.message.reply_text(
+        f"<b>✅ {display} added to fake logs.</b>\n"
+        f"Use /fakeon → 📋 IDs to manage.",
+        parse_mode="HTML",
+    )
+
+
+async def _dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — show live PostgreSQL connection status."""
+    if not _is_admin(update.effective_user.id):
+        return
+    now       = time.time()
+    status    = db.status_text()
+    connected = db.is_connected()
+    user_data = context.bot_data.get("user_data", {})
+    premium   = [(uid, ud) for uid, ud in user_data.items()
+                 if ud.get("plan", "TRIAL").upper() != "TRIAL"
+                 and ud.get("expires", 0) > now]
+    lines = [
+        f"<b>🗄 Database Status</b>",
+        f"<b>──────────</b>",
+        f"<b>DB ➛</b> {status}",
+        f"<b>Premium users in memory ➛</b> <code>{len(premium)}</code>",
+    ]
+    if connected and premium:
+        saved = await db.save_all_now(user_data)
+        lines.append(f"<b>Just saved to Postgres ➛</b> <code>{saved}</code> user(s) ✅")
+    if not connected:
+        lines += [
+            "",
+            "<b>Fix:</b>",
+            "1. Railway → your project → <b>+ New → Database → PostgreSQL</b>",
+            "2. Click your bot service → Variables → Add Reference → DATABASE_URL",
+            "3. Redeploy the bot",
+        ]
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def _getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only — reply with the numeric chat ID of the current chat.
+    Run this inside the target channel to discover its ID, then set
+    FAKE_LOG_CHANNEL_ID=<id> on Railway and restart."""
+    if not update.effective_user or update.effective_user.id != OWNER_ID:
+        return
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text(
+            "<b>⚠️ /getid must be run in the target channel or group.</b>\n"
+            "For a channel, add this bot as an administrator first.\n"
+            "You can also set <code>FAKE_LOG_CHANNEL_ID=-100...</code> on Railway.",
+            parse_mode="HTML",
+        )
+        return
+    if chat.type not in ("channel", "group", "supergroup"):
+        await update.message.reply_text(
+            "<b>⚠️ This chat cannot be used as a log target.</b>",
+            parse_mode="HTML",
+        )
+        return
+    cid  = chat.id
+    # Store it automatically so /fakeon works right away without redeploy
+    context.bot_data["fakelogs_channel_id"] = cid
+    await update.message.reply_text(
+        f"<b>📋 Chat ID: <code>{cid}</code></b>\n"
+        f"<b>Title: {chat.title or 'DM'}</b>\n\n"
+        f"Set <code>FAKE_LOG_CHANNEL_ID={cid}</code> on Railway to make this permanent.",
+        parse_mode="HTML",
+    )
+
+
+async def _myid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Diagnostic helper: show the caller's ID so OWNER_ID can be corrected."""
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    await update.message.reply_text(
+        "<b>Your Telegram user ID</b>\n"
+        f"<code>{user.id}</code>\n\n"
+        "Set this exact number as Railway variable <code>OWNER_ID</code>, "
+        "then redeploy. Only that account can use /fakeon and /getid.",
+        parse_mode="HTML",
+    )
+
+
+async def _restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Primary-owner-only command that replaces the current bot process."""
+    user = update.effective_user
+    message = update.effective_message
+    if not user or user.id != OWNER_ID or not message:
+        return
+
+    await message.reply_text(
+        "<b>Restarting bot...</b>\nThe bot will be available again shortly.",
+        parse_mode="HTML",
+    )
+    logger.warning("Bot restart requested by primary owner %s", user.id)
+    await asyncio.sleep(1)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def main():
+    if not acquire_instance_lock():
+        logger.critical("Another instance is already running. Exiting.")
+        return
+
+    try:
+        # Regular API calls (send_message, edit_message, etc.)
+        # Pool sized for 1000+ concurrent users — each outbound message needs
+        # a connection slot; 512 ensures no queuing under peak load.
+        _request = HTTPXRequest(
+            connection_pool_size=512,
+            connect_timeout=15.0,
+            read_timeout=60.0,
+            write_timeout=60.0,
+            pool_timeout=120.0,
+        )
+        # Long-poll getUpdates — dedicated pool with generous read timeout.
+        # Kept small because only ONE getUpdates call is in flight at a time.
+        _get_updates_request = HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=15.0,
+            read_timeout=65.0,   # PTB polls for 30 s + 35 s buffer
+            write_timeout=60.0,
+            pool_timeout=120.0,
+        )
+        app = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .request(_request)
+            .get_updates_request(_get_updates_request)
+            .concurrent_updates(1024)  # 1000+ users sending commands simultaneously
+            .post_init(_post_init)
+            .post_shutdown(_post_shutdown)
+            .build()
+        )
+
+        # Access-control guards must run before every public/imported handler.
+        app.add_handler(MessageHandler(
+            filters.COMMAND | filters.ChatType.PRIVATE,
+            banned_update_guard,
+        ), group=-3)
+        app.add_handler(CallbackQueryHandler(banned_callback_guard), group=-3)
+        # Generic metadata tracking runs first and never consumes updates.
+        app.add_handler(MessageHandler(filters.ALL, track_activity_and_spam), group=-1)
+        # Must precede public command handlers so maintenance is explicit, not silent.
+        app.add_handler(MessageHandler(filters.COMMAND, maintenance_command_guard), group=-2)
+        app.add_handler(CommandHandler("start",   cmd_start))
+        app.add_handler(CommandHandler("ping",    cmd_ping))
+        app.add_handler(CommandHandler("status",  cmd_status))   # /status — live leaderboard
+        app.add_handler(CommandHandler("hide",    cmd_hide))
+
+        # Splitter callbacks/command stay in the default handler group.
+        # Text capture uses group 2 because broadcast editing already uses 1.
+        for handler in get_splitter_handlers():
+            if isinstance(handler, MessageHandler):
+                app.add_handler(handler, group=2)
+            else:
+                app.add_handler(handler)
+
+        app.add_handler(CommandHandler("buy",     cmd_plan))
+        app.add_handler(CommandHandler("sub",     cmd_sub))
+        app.add_handler(CommandHandler("refer",   cmd_refer))
+        app.add_handler(CommandHandler("rm",      cmd_rm))
+        if get_bin_lookup_handler is not None:
+            app.add_handler(get_bin_lookup_handler())
+        else:
+            logger.warning("mst.py does not export get_bin_handler; /bin registration skipped.")
+        app.add_handler(CommandHandler("fb",      cmd_fb))
+        app.add_handler(CommandHandler("sh",      _cmd_sh_gated))   # force-join gated
+        app.add_handler(CommandHandler("msh",     cmd_msh))
+        app.add_handler(get_me_handler())                           # /me — lifetime charged stats
+
+        app.add_handler(CommandHandler("1day",        cmd_1day))
+        app.add_handler(CommandHandler("gen",         cmd_gen))
+        app.add_handler(CommandHandler("add",         cmd_add))
+        app.add_handler(CommandHandler("rem",         cmd_rem))
+        app.add_handler(CommandHandler("find",        cmd_find))
+        app.add_handler(CommandHandler("resub",       cmd_resub))
+        app.add_handler(CommandHandler("rsub",        cmd_resub))
+        app.add_handler(CommandHandler("ban",         cmd_ban))
+        app.add_handler(CommandHandler("unban",       cmd_unban))
+        app.add_handler(CommandHandler("unmute",      cmd_unmute))
+        app.add_handler(CommandHandler("warn",        cmd_warn))
+        app.add_handler(CommandHandler("warnings",    cmd_warnings))
+        app.add_handler(CommandHandler("clearwarnings", cmd_clearwarnings))
+        app.add_handler(CommandHandler("admin",       cmd_admin))
+        app.add_handler(CommandHandler("raid",        cmd_raid))
+        app.add_handler(CommandHandler("user",        cmd_user))
+        app.add_handler(CommandHandler("note",        cmd_note))
+        app.add_handler(CommandHandler("clearnotes",  cmd_clearnotes))
+        app.add_handler(MessageHandler(
+            filters.Regex(r"(?i)^/mute\d+(?:@\w+)?(?:\s|$)"),
+            cmd_mute_minutes,
+        ))
+        app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
+        app.add_handler(CommandHandler("bstatus",     cmd_bstatus))
+        app.add_handler(CommandHandler("backup",      cmd_backup))
+        app.add_handler(CommandHandler("restore",     cmd_restore))
+        app.add_handler(CommandHandler("botoff",      cmd_botoff))
+        app.add_handler(CommandHandler("boton",       cmd_boton))
+        app.add_handler(CallbackQueryHandler(raid_callback, pattern=r"^raid_off:-?\d+$"))
+        app.add_handler(CommandHandler("info",        cmd_info))
+        app.add_handler(CommandHandler("allcm",       cmd_allcm))
+        app.add_handler(CommandHandler("allsub",      cmd_allsub))
+        app.add_handler(CommandHandler("maintenance", cmd_maintenance))
+        app.add_handler(CommandHandler("updatesites", cmd_updatesites))
+        app.add_handler(CommandHandler("onsh",    cmd_onsh))
+        app.add_handler(CommandHandler("offsh",   cmd_offsh))
+        app.add_handler(CommandHandler("onmsh",   cmd_onmsh))
+        app.add_handler(CommandHandler("offmsh",  cmd_offmsh))
+
+        # Welcome every new member who joins the configured community group.
+        app.add_handler(MessageHandler(
+            filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            welcome_new_members,
+        ))
+
+        # Replace member-posted external links with the official group link.
+        app.add_handler(MessageHandler(
+            filters.Entity(MessageEntity.URL)
+            | filters.Entity(MessageEntity.TEXT_LINK)
+            | filters.CaptionEntity(MessageEntity.URL)
+            | filters.CaptionEntity(MessageEntity.TEXT_LINK),
+            replace_external_group_links,
+        ))
+
+        # ── Hour-based premium key commands (owner-only, silent to others) ──
+        app.add_handler(CommandHandler("hr",  cmd_hr))
+        app.add_handler(CommandHandler("hr1", cmd_hr))
+        app.add_handler(CommandHandler("hr2", cmd_hr))
+        app.add_handler(CommandHandler("hr3", cmd_hr))
+
+        # ── Owner-only secret commands ─────────────────────────────────────
+        app.add_handler(CommandHandler("dbstatus", _dbstatus_cmd))
+        app.add_handler(CommandHandler("restart",  _restart_cmd))
+
+        # ── Fake logs system — registered BEFORE the generic handler ───────
+        app.add_handler(CommandHandler("myid",    _myid_cmd))
+        app.add_handler(CommandHandler("fakeon",  _fakeon_cmd))
+        app.add_handler(CommandHandler("fakeoff", _fakeoff_cmd))
+        app.add_handler(CommandHandler("getid",   _getid_cmd))
+
+        # Fake-logs control panel callbacks
+        app.add_handler(CallbackQueryHandler(
+            _fl_cb,
+            pattern=r"^(fl_panel|fl_start|fl_stop|fl_noop|fl_ids|fl_addid"
+                    r"|fl_speed|fl_show|fl_clrstats|fl_channel|fl_setchannel"
+                    r"|fltog_\d+|flrem_\d+|flspd_\w+)$",
         ))
 
         # Add-ID message capture — owner only, when awaiting_id state is set
