@@ -5459,7 +5459,7 @@ def _fl_ids_text(bd: dict) -> str:
             "or just <code>@username</code>\n\n"
             "<i>Added IDs are memory-only and reset when the bot restarts.</i>"
         )
-       lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
+    lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
     for e in ids:
         on  = "🟢" if e.get("enabled", True) else "🔴"
         hide = " (Hidden Name)" if e.get("hide", False) else ""
