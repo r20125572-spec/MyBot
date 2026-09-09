@@ -5160,7 +5160,7 @@ async def _post_init(app: Application) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 from sh import LOGS_CHANNEL_LINK as _FL_CH_LINK   # [❆] in fake logs links back to the hits channel
 
-_FL_DEFAULT_CHANNEL_ID = -1004361062205
+_FL_DEFAULT_CHANNEL_ID = -1004329967819
 _FL_DEFAULT_FAKE_UID = "8283904645"
 
 
