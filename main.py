@@ -73,15 +73,8 @@ from sh import (
 )
 from splitter import get_splitter_handlers
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LINK REPLACEMENT (Safe override without editing config.py)
-# Replaces old link https://t.me/+BXmeotREVhllODFk with new link
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-import config as _cfg
-_cfg.CHANNEL_LINK = "https://t.me/Batcardchk"
-_cfg.CHANNEL_USERNAME = "Batcardchk"
-CHANNEL_LINK = _cfg.CHANNEL_LINK
-CHANNEL_USERNAME = _cfg.CHANNEL_USERNAME
+if get_mst_live_emoji is None:
+    get_mst_live_emoji = get_random_live_emoji
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # LOGGING
@@ -1026,6 +1019,8 @@ CMD_PAGES = {
         "━━━━━━━━━━━━━━━━━━━━\n"
         "<b>/bin</b>   ➳ BIN Lookup\n"
         "        Usage: <code>/bin 411111</code>\n\n"
+        "<b>/split</b> ➳ Split Text Files\n"
+        "        Usage: reply to a <code>.txt</code> file with <code>/split</code>\n\n"
         "<b>/ping</b>  ➳ Bot Speed Test\n"
         "        Usage: <code>/ping</code>\n\n"
         "<b>/rm</b>    ➳ Redeem Code / Key\n"
@@ -2694,7 +2689,6 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n<b>Primary owner only</b>\n"
         "/boton, /botoff — enable or disable access for all public users\n"
         "/restart — restart service\n/backup — state export\n/restore — confirmed state import\n"
-        "/fakeon, /fakeoff, /getid, /myid — fake-log controls\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{E_PRO} PREMIUM USER COMMANDS:</b>\n"
         "/sh ➳ Shopify Single Checker\n"
@@ -2703,6 +2697,7 @@ async def cmd_allcm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>{E_LIVE} TRIAL / FREE USER COMMANDS:</b>\n"
         "/start ➳ Dashboard\n/buy ➳ Premium plans\n"
         "/sub ➳ My subscription\n/sub @user|ID ➳ [Owner] View & grant plan\n/bin ➳ BIN lookup\n"
+        "/split ➳ Split a replied .txt file into smaller files\n"
         "/refer ➳ Referral link\n/rm ➳ Redeem code or key\n"
         "/ping ➳ Bot speed test\n/fb ➳ Send feedback\n"
         "━━━━━━━━━━━━━━━━━",
@@ -4294,9 +4289,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as exc:
             logger.error("[OXAPAY] Could not load accepted currencies: %s", exc)
             await query.message.edit_text(
-                f"<b>{E_ERRORS} Payment Methods Unavailable</b>\n"
+                f"<b>{E_ERRORS} {B('Payment Methods Unavailable')}</b>\n"
                 "──────────\n"
-                f"{escape(str(exc))}",
+                f"{B('The payment service is temporarily unavailable.')} "
+                f"{B('Please try again.')}",
                 parse_mode="HTML",
                 reply_markup=kb_payment(),
             )
@@ -4306,7 +4302,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>{E_ERRORS} No Payment Methods Enabled</b>\n"
                 "──────────\n"
                 "Enable at least one supported cryptocurrency in your "
-                "OxaPay Merchant Service settings.",
+                "payment service settings.",
                 parse_mode="HTML",
                 reply_markup=kb_payment(),
             )
@@ -4335,7 +4331,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 f"<b>{E_ERRORS} {B('Payment Address Unavailable')}</b>\n"
                 "──────────\n"
-                f"{escape(str(exc))}",
+                f"{B('The payment service is temporarily unavailable after automatic retries.')} "
+                f"{B('Please press Retry Payment.')}",
                 parse_mode="HTML",
                 reply_markup=RawMarkup([
                     [_btn(B("RETRY PAYMENT"), cb=data, style="primary")],
