@@ -5473,15 +5473,21 @@ def _fl_ids_kb(bd: dict) -> RawMarkup:
     rows = []
     for i, e in enumerate(ids):
         on     = e.get("enabled", True)
+        hidden = e.get("hide", False)
         toggle = "ON" if on else "OFF"
+        hide_lbl = "Unhide" if hidden else "Hide"
+        
         rows.append([
             _btn(e["display"], cb="fl_noop"),
             _btn(toggle, cb=f"fltog_{i}"),
-            _btn("Remove", cb=f"flrem_{i}"),
+        ])
+        rows.append([
+            _btn(f"{'🔴' if hidden else '🟢'} {hide_lbl} Name", cb=f"flhide_{i}"),
+            _btn("❌ Remove", cb=f"flrem_{i}"),
         ])
     rows.append([
-        _btn("Add ID", cb="fl_addid"),
-        _btn("Back", cb="fl_panel"),
+        _btn("➕ Add ID", cb="fl_addid"),
+        _btn("🔙 Back", cb="fl_panel"),
     ])
     return RawMarkup(rows)
 
