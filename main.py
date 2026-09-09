@@ -5692,20 +5692,16 @@ async def _fl_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="HTML",
         )
 
-    elif dat.startswith("fltog_"):
-        try:
-            idx = int(dat.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return
-        ids = _fl_get_ids(bd)
-        if 0 <= idx < len(ids):
-            ids[idx]["enabled"] = not ids[idx].get("enabled", True)
+       elif dat.startswith("flspd_"):
+        spd = dat.split("_", 1)[1]
+        if spd in _FL_SPEEDS:
+            bd["fl_speed"] = spd
         await q.edit_message_text(
-            _fl_ids_text(bd), parse_mode="HTML",
-            reply_markup=_fl_ids_kb(bd),
+            _fl_speed_text(), parse_mode="HTML",
+            reply_markup=_fl_speed_kb(bd),
         )
 
-       elif dat.startswith("flrem_"):
+    elif dat.startswith("flrem_"):
         try:
             idx = int(dat.split("_", 1)[1])
         except (ValueError, IndexError):
