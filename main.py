@@ -5216,7 +5216,11 @@ _FL_PRICES = [
 def _fl_log_msg(id_entry: dict) -> str:
     """Build a local test event without payment data or external checks."""
     price = random.choice(_FL_PRICES)
-    ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
+    # If hide is True, send as plain text name. Otherwise, send as a link.
+    if id_entry.get("hide", False):
+        ulink = id_entry["display"]
+    else:
+        ulink = f'<a href="{id_entry["link"]}">{id_entry["display"]}</a>'
     eid   = get_random_charged_emoji()
     return (
         f'<b>HIT ➛ CHARGED '
