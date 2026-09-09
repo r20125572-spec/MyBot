@@ -5459,14 +5459,14 @@ def _fl_ids_text(bd: dict) -> str:
             "or just <code>@username</code>\n\n"
             "<i>Added IDs are memory-only and reset when the bot restarts.</i>"
         )
-    lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
+       lines = ["<b>📋 Fake Log IDs</b>", "──────────"]
     for e in ids:
         on  = "🟢" if e.get("enabled", True) else "🔴"
+        hide = " (Hidden Name)" if e.get("hide", False) else ""
         ct  = e.get("count", 0)
-        lines.append(f"{on} {e['display']} — {ct} fake hit{'s' if ct != 1 else ''}")
-    lines.append("──────────\nUse buttons below to toggle / remove / add IDs.")
+        lines.append(f"{on} {e['display']}{hide} — {ct} fake hit{'s' if ct != 1 else ''}")
+    lines.append("──────────\nUse buttons below to toggle / hide / remove / add IDs.")
     return "\n".join(lines)
-
 
 def _fl_ids_kb(bd: dict) -> RawMarkup:
     ids  = _fl_get_ids(bd)
