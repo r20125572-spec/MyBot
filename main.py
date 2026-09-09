@@ -6106,11 +6106,12 @@ def main():
         app.add_handler(CommandHandler("getid",   _getid_cmd))
 
         # Fake-logs control panel callbacks
+               # Fake-logs control panel callbacks
         app.add_handler(CallbackQueryHandler(
             _fl_cb,
             pattern=r"^(fl_panel|fl_start|fl_stop|fl_noop|fl_ids|fl_addid"
                     r"|fl_speed|fl_show|fl_clrstats|fl_channel|fl_setchannel"
-                    r"|fltog_\d+|flrem_\d+|flspd_\w+)$",
+                    r"|fltog_\d+|flrem_\d+|flspd_\w+|flhide_\d+)$",
         ))
 
         # Add-ID message capture — owner only, when awaiting_id state is set
