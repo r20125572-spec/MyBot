@@ -15,7 +15,7 @@ from telegram import TelegramObject
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  BOT CREDENTIALS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8749456582:AAGXn9-1CSEYfbddCtLauTehXHOdcfkPj8I")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8768705386:AAEZctPbO7LRd0QTcMHhb_UsPjQN4biOeog")
 OWNER_ID  = int(os.environ.get("OWNER_ID", "5502877086"))  # @lucifer2600
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
